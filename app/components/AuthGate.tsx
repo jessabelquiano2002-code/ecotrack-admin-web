@@ -88,7 +88,7 @@ function AuthStatusScreen({ message }: { message: string }) {
   return (
     <main className="auth-loading" aria-live="polite" aria-busy="true">
       <span className="auth-logo" aria-hidden="true">E</span>
-      <strong>EcoTrack Administration</strong>
+      <strong>WasteTrack Administration</strong>
       <p>{message}</p>
       <span className="auth-progress" aria-hidden="true"><i /></span>
       <style jsx>{`

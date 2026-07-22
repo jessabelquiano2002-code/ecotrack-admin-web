@@ -243,7 +243,7 @@ export function DashboardShell({
 
   const [adminProfile, setAdminProfile] = useState<AdminProfile>({
     name: "Admin User",
-    email: "admin@ecotrack.gov.ph",
+    email: "admin@wastetrack.gov.ph",
     role: "System Admin",
     profileImage: "",
   });
@@ -304,7 +304,7 @@ export function DashboardShell({
 
         setAdminProfile({
           name: data.name || "Admin User",
-          email: data.email || user.email || "admin@ecotrack.gov.ph",
+          email: data.email || user.email || "admin@wastetrack.gov.ph",
           role: data.role || "System Admin",
           profileImage: data.profileImage || "",
         });
@@ -358,7 +358,7 @@ export function DashboardShell({
       redirectToLogin({ reason: "signed-out" });
     } catch {
       cancelSignOutRedirect();
-      setLogoutError("EcoTrack could not close the session. Check your connection and try again.");
+      setLogoutError("WasteTrack could not close the session. Check your connection and try again.");
       setIsLoggingOut(false);
     }
   };
@@ -438,7 +438,7 @@ export function DashboardShell({
                   {adminProfile.name || "Admin User"}
                 </span>
                 <span className="admin-user-email">
-                  {adminProfile.email || "admin@ecotrack.gov.ph"}
+                  {adminProfile.email || "admin@wastetrack.gov.ph"}
                 </span>
               </span>
 
@@ -529,7 +529,7 @@ export function DashboardShell({
                           {adminProfile.name || "Admin User"}
                         </div>
                         <div className="admin-dropdown-email">
-                          {adminProfile.email || "admin@ecotrack.gov.ph"}
+                          {adminProfile.email || "admin@wastetrack.gov.ph"}
                         </div>
                       </div>
                     </div>
@@ -610,7 +610,7 @@ export function DashboardShell({
 
             <div className="logout-dialog-copy">
               <span>Secure administrator session</span>
-              <h2 id="logout-title">Sign out of EcoTrack?</h2>
+              <h2 id="logout-title">Sign out of WasteTrack?</h2>
               <p id="logout-description">
                 You will be returned to the secure login page and protected administration pages will no longer be accessible.
               </p>

@@ -559,7 +559,7 @@ export default function AnalyticsPage() {
   return (
     <DashboardShell
       title="Analytics"
-      description="Live waste collection analytics from EcoTrack records"
+      description="Live waste collection analytics from WasteTrack records"
       hidePageHeader
     >
       <div className="analytics-page">

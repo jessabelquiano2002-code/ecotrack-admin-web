@@ -452,7 +452,7 @@ export default function DashboardPage() {
   return (
     <DashboardShell
       title="Dashboard"
-      description="Realtime overview of EcoTrack operations"
+      description="Realtime overview of WasteTrack operations"
       hidePageHeader
     >
       <section className="dashboard-page">

@@ -17,9 +17,9 @@ type AdminSettings = {
 };
 
 const defaultSettings: AdminSettings = {
-  systemName: "EcoTrack",
+  systemName: "Track",
   cityName: "Catbalogan City",
-  contactEmail: "admin@ecotrack.gov.ph",
+  contactEmail: "admin@wastetrack.gov.ph",
   notificationsEnabled: true,
   autoRefreshEnabled: true,
   mapRefreshSeconds: 5,
@@ -47,7 +47,7 @@ export default function SettingsPage() {
         const data = snap.val();
 
         setSettings({
-          systemName: data.systemName || "EcoTrack",
+          systemName: data.systemName || "WasteTrack",
           cityName: data.cityName || "Catbalogan City",
           contactEmail: data.contactEmail || user.email || "",
           notificationsEnabled:
@@ -142,7 +142,7 @@ export default function SettingsPage() {
                           systemName: e.target.value,
                         }))
                       }
-                      placeholder="EcoTrack"
+                      placeholder="WasteTrack"
                     />
                   </div>
 
@@ -170,7 +170,7 @@ export default function SettingsPage() {
                           contactEmail: e.target.value,
                         }))
                       }
-                      placeholder="admin@ecotrack.gov.ph"
+                      placeholder="admin@wastetrack.gov.ph"
                     />
                   </div>
                 </div>

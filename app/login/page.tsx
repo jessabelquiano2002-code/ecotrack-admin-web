@@ -134,7 +134,7 @@ function LoginFormPage() {
 
   return (
     <main className="login-page">
-      <section className="brand-panel" aria-label="EcoTrack administration">
+      <section className="brand-panel" aria-label="WasteTrack administration">
         <div className="brand-shade" aria-hidden="true" />
         <div className="brand-grid" aria-hidden="true" />
 
@@ -143,7 +143,7 @@ function LoginFormPage() {
             <LogoMark />
 
             <div>
-              <p className="product-name">EcoTrack</p>
+              <p className="product-name">WasteTrack</p>
               <p className="product-subtitle">
                 Catbalogan City Waste Management
               </p>
@@ -219,7 +219,7 @@ function LoginFormPage() {
                   autoComplete="username"
                   autoCapitalize="none"
                   spellCheck={false}
-                  placeholder="admin@ecotrack.gov.ph"
+                  placeholder="admin@wastetrack.gov.ph"
                   value={email}
                   onChange={(event) => {
                     setEmail(event.target.value);
@@ -811,9 +811,9 @@ function LoginFormPage() {
 
 function LoginLoading() {
   return (
-    <main aria-label="Loading EcoTrack administration" style={{ minHeight: "100dvh", display: "grid", placeItems: "center", background: "#f8fafc", color: "#0f172a", fontFamily: "Arial, sans-serif" }}>
+    <main aria-label="Loading WasteTrack administration" style={{ minHeight: "100dvh", display: "grid", placeItems: "center", background: "#f8fafc", color: "#0f172a", fontFamily: "Arial, sans-serif" }}>
       <div style={{ textAlign: "center" }}>
-        <strong style={{ display: "block", fontSize: 22 }}>EcoTrack</strong>
+        <strong style={{ display: "block", fontSize: 22 }}>WasteTrack</strong>
         <span style={{ display: "block", marginTop: 8, color: "#64748b" }}>Preparing secure sign-in…</span>
       </div>
     </main>

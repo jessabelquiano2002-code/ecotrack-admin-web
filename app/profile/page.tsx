@@ -218,7 +218,7 @@ export default function ProfilePage() {
 
             <div>
               <h2>{profile.name || "Admin User"}</h2>
-              <p>{profile.email || "admin@ecotrack.gov.ph"}</p>
+              <p>{profile.email || "admin@wastetrack.gov.ph"}</p>
             </div>
           </div>
 
