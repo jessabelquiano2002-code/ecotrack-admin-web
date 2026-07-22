@@ -302,7 +302,7 @@ function LoginFormPage() {
           </div>
 
           <footer className="page-footer">
-            <span>© 2026 EcoTrack</span>
+            <span>© 2026 WasteTrack</span>
             <span aria-hidden="true">•</span>
             <span>Catbalogan City Waste Management</span>
           </footer>
