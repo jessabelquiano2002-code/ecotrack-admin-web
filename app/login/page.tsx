@@ -175,7 +175,7 @@ function LoginFormPage() {
           <div className="mobile-brand">
             <LogoMark compact />
             <div>
-              <strong>EcoTrack</strong>
+              <strong>WasteTrack</strong>
               <span>Administration</span>
             </div>
           </div>
