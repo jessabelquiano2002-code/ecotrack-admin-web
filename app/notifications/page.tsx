@@ -802,6 +802,12 @@ export default function NotificationsPage() {
               <span className="pulse" />
               Firebase live
             </div>
+            <a
+              className="secondaryButton advertisementLink"
+              href="/advertisements"
+            >
+              Photo Advertisements
+            </a>
             <button className="primaryButton" onClick={openComposer}>
               + New Notification
             </button>
@@ -1408,6 +1414,13 @@ function NotificationsStyles() {
           color: #334155;
           border: 1px solid #cbd5e1;
           font-size: 15px;
+        }
+
+        .advertisementLink {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          text-decoration: none;
         }
 
         .modalBackdrop {

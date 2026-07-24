@@ -91,6 +91,16 @@ export default function UsersPage() {
   const [profileDriver, setProfileDriver] = useState<Driver | null>(null);
   const [profileLicenseUrl, setProfileLicenseUrl] = useState("");
   const [isLicenseLoading, setIsLicenseLoading] = useState(false);
+  const [profileError, setProfileError] = useState("");
+  const [profileTab, setProfileTab] = useState<"overview" | "licence">("overview");
+
+  useEffect(() => {
+    return () => {
+      if (profileLicenseUrl) {
+        URL.revokeObjectURL(profileLicenseUrl);
+      }
+    };
+  }, [profileLicenseUrl]);
 
   /* ================= FETCH DRIVERS ================= */
   useEffect(() => {
@@ -420,22 +430,78 @@ export default function UsersPage() {
     setEditDriverId(driver.id);
   };
 
+  const closeDriverProfile = () => {
+    if (profileLicenseUrl) {
+      URL.revokeObjectURL(profileLicenseUrl);
+    }
+
+    setProfileDriver(null);
+    setProfileLicenseUrl("");
+    setProfileError("");
+    setProfileTab("overview");
+    setIsLicenseLoading(false);
+  };
+
   const openDriverProfile = async (driver: Driver) => {
-    if (profileLicenseUrl) URL.revokeObjectURL(profileLicenseUrl);
+    if (profileLicenseUrl) {
+      URL.revokeObjectURL(profileLicenseUrl);
+    }
+
     setProfileDriver(driver);
     setProfileLicenseUrl("");
-    if (!driver.licenseImageRef) return;
+    setProfileError("");
+    setProfileTab("overview");
+    setIsLicenseLoading(true);
 
     try {
-      setIsLicenseLoading(true);
       const token = await getAdminToken();
-      const response = await fetch(`/api/driver-license/${encodeURIComponent(driver.id)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) throw new Error("The licence image could not be loaded.");
-      setProfileLicenseUrl(URL.createObjectURL(await response.blob()));
+
+      /*
+       * app/api/driver-license/route.ts is a non-dynamic route.
+       * The driver ID must therefore be passed as a query parameter.
+       */
+      const response = await fetch(
+        `/api/driver-license?driverId=${encodeURIComponent(driver.id)}`,
+        {
+          method: "GET",
+          headers: {
+            Accept: "image/jpeg,image/png,application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          cache: "no-store",
+        },
+      );
+
+      if (response.status === 404) {
+        setProfileError("No driver licence image is currently stored.");
+        return;
+      }
+
+      if (!response.ok) {
+        const message = await readImageApiError(response);
+        throw new Error(message);
+      }
+
+      const contentType = (response.headers.get("content-type") || "").toLowerCase();
+
+      if (!contentType.startsWith("image/")) {
+        throw new Error("The licence service returned an invalid image response.");
+      }
+
+      const blob = await response.blob();
+
+      if (blob.size === 0) {
+        throw new Error("The stored licence image is empty.");
+      }
+
+      setProfileLicenseUrl(URL.createObjectURL(blob));
     } catch (error) {
-      setFormError(error instanceof Error ? error.message : "The licence image could not be loaded.");
+      console.error("Driver licence loading error:", error);
+      setProfileError(
+        error instanceof Error
+          ? error.message
+          : "The driver licence image could not be loaded.",
+      );
     } finally {
       setIsLicenseLoading(false);
     }
@@ -753,40 +819,188 @@ export default function UsersPage() {
         )}
 
         {profileDriver && (
-          <div className="modal-backdrop">
-            <div className="modal-card profile-modal">
-              <div className="modal-header">
-                <div>
-                  <h3>{profileDriver.name || "Driver Profile"}</h3>
-                  <p>Driver account, vehicle assignment, and licence record.</p>
+          <div
+            className="modal-backdrop"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                closeDriverProfile();
+              }
+            }}
+          >
+            <section
+              className="modal-card profile-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="driver-profile-title"
+            >
+              <div className="profile-hero">
+                <DriverProfileAvatar driver={profileDriver} />
+
+                <div className="profile-hero-copy">
+                  <div className="profile-title-row">
+                    <span className="profile-kicker">Collection driver</span>
+                    <span className={`status-pill ${getStatusClass(profileDriver.status || "offline")}`}>
+                      {profileDriver.status || "offline"}
+                    </span>
+                  </div>
+
+                  <h3 id="driver-profile-title">
+                    {profileDriver.name || "Driver Profile"}
+                  </h3>
+
+                  <p>
+                    Review the driver account, assigned vehicle, profile photo,
+                    and securely stored licence record.
+                  </p>
+
+                  <div className="profile-meta-row">
+                    <span>ID: {shortId(profileDriver.id)}</span>
+                    <span>Joined {formatDate(profileDriver.createdAt)}</span>
+                  </div>
                 </div>
-                <button className="modal-close" onClick={() => { setProfileDriver(null); if (profileLicenseUrl) URL.revokeObjectURL(profileLicenseUrl); setProfileLicenseUrl(""); }}>×</button>
+
+                <button
+                  className="modal-close profile-close"
+                  type="button"
+                  onClick={closeDriverProfile}
+                  aria-label="Close driver profile"
+                >
+                  ×
+                </button>
               </div>
 
-              <div className="profile-grid">
-                <div className="licence-view">
-                  {isLicenseLoading ? (
-                    <div className="licence-placeholder"><span className="mini-spinner" />Loading secure image…</div>
-                  ) : profileLicenseUrl ? (
-                    <img src={profileLicenseUrl} alt={`${profileDriver.name || "Driver"} licence`} />
-                  ) : (
-                    <div className="licence-placeholder"><strong>No image available</strong><span>A licence image has not been uploaded.</span></div>
-                  )}
-                </div>
-                <div className="profile-details">
-                  <ProfileField label="Email" value={profileDriver.email} />
-                  <ProfileField label="Contact number" value={profileDriver.phone} />
-                  <ProfileField label="Assigned vehicle" value={profileDriver.truck} />
-                  <ProfileField label="Licence number" value={profileDriver.licenseNumber} />
-                  <ProfileField label="Licence expiration" value={formatLicenceDate(profileDriver.licenseExpirationDate)} />
-                  <ProfileField label="Status" value={profileDriver.status || "offline"} />
-                </div>
+              <div className="profile-tabs" role="tablist" aria-label="Driver profile sections">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={profileTab === "overview"}
+                  className={profileTab === "overview" ? "active" : ""}
+                  onClick={() => setProfileTab("overview")}
+                >
+                  Profile overview
+                </button>
+
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={profileTab === "licence"}
+                  className={profileTab === "licence" ? "active" : ""}
+                  onClick={() => setProfileTab("licence")}
+                >
+                  Driver&apos;s licence
+                  {profileLicenseUrl ? <span className="available-dot" aria-label="Image available" /> : null}
+                </button>
               </div>
 
-              <div className="modal-actions">
-                <button className="primary-action" onClick={() => { const driver = profileDriver; setProfileDriver(null); openEditDriver(driver); }}>Update Profile</button>
+              {profileTab === "overview" ? (
+                <div className="profile-overview-layout">
+                  <div className="profile-photo-card">
+                    <span className="section-eyebrow">Driver photo</span>
+                    <DriverProfileAvatar driver={profileDriver} large />
+                    <strong>{profileDriver.name || "Unnamed Driver"}</strong>
+                    <span>{profileDriver.email || "No email provided"}</span>
+                  </div>
+
+                  <div className="profile-information-card">
+                    <div className="section-heading">
+                      <div>
+                        <span className="section-eyebrow">Account information</span>
+                        <h4>Driver details</h4>
+                      </div>
+                    </div>
+
+                    <div className="profile-detail-grid">
+                      <ProfileField label="Email address" value={profileDriver.email} />
+                      <ProfileField label="Contact number" value={profileDriver.phone} />
+                      <ProfileField label="Assigned vehicle" value={profileDriver.truck} />
+                      <ProfileField label="Licence number" value={profileDriver.licenseNumber} />
+                      <ProfileField
+                        label="Licence expiration"
+                        value={formatLicenceDate(profileDriver.licenseExpirationDate)}
+                      />
+                      <ProfileField label="Account status" value={profileDriver.status || "offline"} />
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="licence-section">
+                  <div className="section-heading licence-heading">
+                    <div>
+                      <span className="section-eyebrow">Secure document</span>
+                      <h4>Driver&apos;s licence image</h4>
+                      <p>
+                        This image is loaded through the protected administrator API
+                        and is not exposed directly in the public database.
+                      </p>
+                    </div>
+
+                    <div className="licence-number-badge">
+                      <span>Licence number</span>
+                      <strong>{profileDriver.licenseNumber || "Not provided"}</strong>
+                    </div>
+                  </div>
+
+                  <div className="licence-view professional">
+                    {isLicenseLoading ? (
+                      <div className="licence-placeholder">
+                        <span className="mini-spinner" />
+                        <strong>Loading secure image</strong>
+                        <span>Please wait while WasteTrack retrieves the licence.</span>
+                      </div>
+                    ) : profileLicenseUrl ? (
+                      <img
+                        src={profileLicenseUrl}
+                        alt={`${profileDriver.name || "Driver"} licence`}
+                      />
+                    ) : (
+                      <div className="licence-placeholder">
+                        <span className="document-icon" aria-hidden="true">▧</span>
+                        <strong>No licence image available</strong>
+                        <span>
+                          {profileError ||
+                            "Upload or replace the licence image from Update Profile."}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {profileError && profileLicenseUrl ? (
+                    <div className="profile-inline-error" role="alert">
+                      {profileError}
+                    </div>
+                  ) : null}
+
+                  <div className="licence-summary-grid">
+                    <ProfileField label="Driver" value={profileDriver.name} />
+                    <ProfileField label="Expiration date" value={formatLicenceDate(profileDriver.licenseExpirationDate)} />
+                    <ProfileField label="Assigned vehicle" value={profileDriver.truck} />
+                  </div>
+                </div>
+              )}
+
+              <div className="profile-modal-actions">
+                <button
+                  className="cancel-btn"
+                  type="button"
+                  onClick={closeDriverProfile}
+                >
+                  Close
+                </button>
+
+                <button
+                  className="primary-action"
+                  type="button"
+                  onClick={() => {
+                    const driver = profileDriver;
+                    closeDriverProfile();
+                    openEditDriver(driver);
+                  }}
+                >
+                  Update Profile
+                </button>
               </div>
-            </div>
+            </section>
           </div>
         )}
 
@@ -1339,30 +1553,391 @@ export default function UsersPage() {
 
         .file-button input { position: absolute; opacity: 0; pointer-events: none; }
 
-        .profile-grid {
+        .profile-modal {
+          width: min(940px, 100%);
+          padding: 0;
+          overflow: hidden;
+          border: 1px solid rgba(203, 213, 225, 0.9);
+        }
+
+        .profile-hero {
+          position: relative;
           display: grid;
-          grid-template-columns: minmax(280px, 1.2fr) 1fr;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          align-items: center;
           gap: 18px;
+          padding: 24px;
+          background:
+            radial-gradient(circle at 100% 0%, rgba(52, 211, 153, 0.16), transparent 34%),
+            linear-gradient(135deg, #f8fffc, #eef8f3);
+          border-bottom: 1px solid #dfeae4;
+        }
+
+        .profile-hero-copy {
+          min-width: 0;
+        }
+
+        .profile-title-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-bottom: 6px;
+        }
+
+        .profile-kicker,
+        .section-eyebrow {
+          color: #047857;
+          font-size: 11px;
+          font-weight: 900;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+
+        .profile-hero h3 {
+          margin: 0;
+          color: #0f172a;
+          font-size: clamp(24px, 3vw, 32px);
+          letter-spacing: -0.035em;
+        }
+
+        .profile-hero p {
+          max-width: 650px;
+          margin: 7px 0 0;
+          color: #64748b;
+          font-size: 13px;
+          line-height: 1.6;
+        }
+
+        .profile-meta-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px 14px;
+          margin-top: 12px;
+          color: #64748b;
+          font-size: 12px;
+        }
+
+        .profile-close {
+          align-self: start;
+        }
+
+        .driver-profile-avatar {
+          display: grid;
+          place-items: center;
+          flex: 0 0 auto;
+          overflow: hidden;
+          border-radius: 22px;
+          background: linear-gradient(145deg, #059669, #065f46);
+          color: #ffffff;
+          box-shadow: 0 14px 30px rgba(5, 150, 105, 0.2);
+          font-weight: 900;
+          letter-spacing: -0.03em;
+        }
+
+        .driver-profile-avatar.normal {
+          width: 72px;
+          height: 72px;
+          font-size: 22px;
+        }
+
+        .driver-profile-avatar.large {
+          width: 132px;
+          height: 132px;
+          border-radius: 30px;
+          font-size: 38px;
+        }
+
+        .driver-profile-avatar img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+
+        .profile-tabs {
+          display: flex;
+          gap: 6px;
+          padding: 12px 24px 0;
+          background: #ffffff;
+          border-bottom: 1px solid #edf2ef;
+        }
+
+        .profile-tabs button {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          min-height: 44px;
+          padding: 0 15px;
+          border: 0;
+          border-radius: 12px 12px 0 0;
+          background: transparent;
+          color: #64748b;
+          font-weight: 850;
+          cursor: pointer;
+        }
+
+        .profile-tabs button.active {
+          background: #ecfdf5;
+          color: #047857;
+        }
+
+        .profile-tabs button.active::after {
+          content: "";
+          position: absolute;
+          left: 12px;
+          right: 12px;
+          bottom: -1px;
+          height: 3px;
+          border-radius: 999px;
+          background: #10b981;
+        }
+
+        .available-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 999px;
+          background: #10b981;
+        }
+
+        .profile-overview-layout {
+          display: grid;
+          grid-template-columns: 250px minmax(0, 1fr);
+          gap: 18px;
+          padding: 24px;
+        }
+
+        .profile-photo-card,
+        .profile-information-card,
+        .licence-section {
+          border: 1px solid #e2e8f0;
+          border-radius: 20px;
+          background: #ffffff;
+        }
+
+        .profile-photo-card {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          min-height: 300px;
+          padding: 24px;
+          text-align: center;
+          background:
+            radial-gradient(circle at 50% 0%, rgba(16, 185, 129, 0.12), transparent 40%),
+            #fbfefd;
+        }
+
+        .profile-photo-card .section-eyebrow {
+          align-self: flex-start;
+          margin-bottom: 24px;
+        }
+
+        .profile-photo-card > strong {
+          margin-top: 16px;
+          color: #0f172a;
+          font-size: 17px;
+        }
+
+        .profile-photo-card > span:last-child {
+          margin-top: 5px;
+          color: #64748b;
+          font-size: 12px;
+          overflow-wrap: anywhere;
+        }
+
+        .profile-information-card {
+          padding: 20px;
+        }
+
+        .section-heading {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+          margin-bottom: 16px;
+        }
+
+        .section-heading h4 {
+          margin: 5px 0 0;
+          color: #0f172a;
+          font-size: 19px;
+        }
+
+        .section-heading p {
+          max-width: 580px;
+          margin: 6px 0 0;
+          color: #64748b;
+          font-size: 12px;
+          line-height: 1.55;
+        }
+
+        .profile-detail-grid,
+        .licence-summary-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .profile-field {
+          min-height: 68px;
+          padding: 12px 13px;
+          border-radius: 14px;
+          background: #f8fafc;
+          border: 1px solid #edf1f4;
+        }
+
+        .profile-field small,
+        .profile-field strong {
+          display: block;
+        }
+
+        .profile-field small {
+          color: #64748b;
+          font-size: 10px;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+        }
+
+        .profile-field strong {
+          margin-top: 6px;
+          color: #0f172a;
+          font-size: 13px;
+          line-height: 1.35;
+          overflow-wrap: anywhere;
+        }
+
+        .licence-section {
+          margin: 24px;
+          padding: 20px;
+        }
+
+        .licence-heading {
+          align-items: center;
+        }
+
+        .licence-number-badge {
+          min-width: 180px;
+          padding: 10px 12px;
+          border: 1px solid #d9ebe2;
+          border-radius: 14px;
+          background: #f0fdf7;
+        }
+
+        .licence-number-badge span,
+        .licence-number-badge strong {
+          display: block;
+        }
+
+        .licence-number-badge span {
+          color: #64748b;
+          font-size: 10px;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+        }
+
+        .licence-number-badge strong {
+          margin-top: 5px;
+          color: #065f46;
+          font-size: 13px;
+          overflow-wrap: anywhere;
         }
 
         .licence-view {
-          min-height: 260px;
+          min-height: 370px;
+          display: grid;
+          place-items: center;
+          overflow: hidden;
           border: 1px solid #dbe4df;
           border-radius: 18px;
-          overflow: hidden;
-          background: #f8faf9;
+          background:
+            linear-gradient(45deg, #f7faf8 25%, transparent 25%),
+            linear-gradient(-45deg, #f7faf8 25%, transparent 25%),
+            linear-gradient(45deg, transparent 75%, #f7faf8 75%),
+            linear-gradient(-45deg, transparent 75%, #f7faf8 75%),
+            #ffffff;
+          background-size: 22px 22px;
+          background-position: 0 0, 0 11px, 11px -11px, -11px 0;
         }
 
-        .licence-view img { width: 100%; height: 100%; min-height: 260px; object-fit: contain; }
-        .licence-placeholder { min-height: 260px; display: grid; place-content: center; justify-items: center; gap: 7px; padding: 20px; color: #64748b; text-align: center; }
-        .licence-placeholder strong { color: #334155; }
-        .profile-details { display: flex; flex-direction: column; gap: 9px; }
-        .profile-field { padding: 11px 12px; border-radius: 13px; background: #f8fafc; border: 1px solid #edf1f4; }
-        .profile-field small, .profile-field strong { display: block; }
-        .profile-field small { color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
-        .profile-field strong { color: #0f172a; margin-top: 4px; font-size: 13px; overflow-wrap: anywhere; }
-        .mini-spinner { width: 24px; height: 24px; border: 3px solid #d1fae5; border-top-color: #059669; border-radius: 50%; animation: driver-spin .8s linear infinite; }
-        @keyframes driver-spin { to { transform: rotate(360deg); } }
+        .licence-view img {
+          width: 100%;
+          max-height: 520px;
+          object-fit: contain;
+          background: rgba(255, 255, 255, 0.9);
+        }
+
+        .licence-placeholder {
+          min-height: 370px;
+          display: grid;
+          place-content: center;
+          justify-items: center;
+          gap: 8px;
+          padding: 28px;
+          color: #64748b;
+          text-align: center;
+        }
+
+        .licence-placeholder strong {
+          color: #334155;
+          font-size: 16px;
+        }
+
+        .licence-placeholder span:last-child {
+          max-width: 360px;
+          font-size: 12px;
+          line-height: 1.55;
+        }
+
+        .document-icon {
+          width: 52px;
+          height: 52px;
+          display: grid;
+          place-items: center;
+          border-radius: 16px;
+          background: #ecfdf5;
+          color: #047857;
+          font-size: 25px;
+        }
+
+        .licence-summary-grid {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          margin-top: 14px;
+        }
+
+        .profile-inline-error {
+          margin-top: 12px;
+          padding: 11px 13px;
+          border: 1px solid #fecaca;
+          border-radius: 13px;
+          background: #fef2f2;
+          color: #b91c1c;
+          font-size: 12px;
+          font-weight: 700;
+        }
+
+        .profile-modal-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          padding: 0 24px 24px;
+        }
+
+        .mini-spinner {
+          width: 28px;
+          height: 28px;
+          border: 3px solid #d1fae5;
+          border-top-color: #059669;
+          border-radius: 50%;
+          animation: driver-spin 0.8s linear infinite;
+        }
+
+        @keyframes driver-spin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
 
         @media (max-width: 1100px) {
           .users-stats-grid {
@@ -1411,8 +1986,43 @@ export default function UsersPage() {
           }
 
           .license-picker,
-          .profile-grid {
+          .profile-overview-layout,
+          .profile-detail-grid,
+          .licence-summary-grid {
             grid-template-columns: 1fr;
+          }
+
+          .profile-overview-layout {
+            padding: 16px;
+          }
+
+          .profile-hero {
+            grid-template-columns: auto minmax(0, 1fr);
+            padding: 18px;
+          }
+
+          .profile-close {
+            position: absolute;
+            top: 14px;
+            right: 14px;
+          }
+
+          .profile-tabs {
+            overflow-x: auto;
+            padding-inline: 16px;
+          }
+
+          .licence-section {
+            margin: 16px;
+            padding: 16px;
+          }
+
+          .licence-heading {
+            flex-direction: column;
+          }
+
+          .licence-number-badge {
+            width: 100%;
           }
         }
       `}</style>
@@ -1494,6 +2104,71 @@ function LicensePicker({
       </div>
     </div>
   );
+}
+
+function normalizeDriverImageSource(value?: string): string {
+  const source = String(value || "").trim();
+
+  if (!source) return "";
+
+  if (
+    source.startsWith("data:") ||
+    source.startsWith("blob:") ||
+    source.startsWith("http://") ||
+    source.startsWith("https://") ||
+    source.startsWith("/")
+  ) {
+    return source;
+  }
+
+  return `data:image/jpeg;base64,${source}`;
+}
+
+function DriverProfileAvatar({
+  driver,
+  large = false,
+}: {
+  driver: Driver;
+  large?: boolean;
+}) {
+  const source = normalizeDriverImageSource(driver.profileImage);
+
+  return (
+    <div className={`driver-profile-avatar ${large ? "large" : "normal"}`}>
+      {source ? (
+        <img
+          src={source}
+          alt={`${driver.name || "Driver"} profile`}
+        />
+      ) : (
+        <span>{getInitials(driver.name || "Driver")}</span>
+      )}
+    </div>
+  );
+}
+
+async function readImageApiError(response: Response): Promise<string> {
+  const fallback =
+    response.status === 401 || response.status === 403
+      ? "Your administrator session is not authorized to view this licence."
+      : response.status === 404
+        ? "No driver licence image is currently stored."
+        : "The driver licence image could not be loaded.";
+
+  try {
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+
+    if (!contentType.includes("application/json")) {
+      return fallback;
+    }
+
+    const body = (await response.json()) as { error?: unknown };
+    const message = String(body?.error || "").trim();
+
+    return message || fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function ProfileField({ label, value }: { label: string; value?: string }) {

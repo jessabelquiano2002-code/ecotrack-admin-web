@@ -1,14 +1,22 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
 import { onValue, push, ref, remove, set } from "firebase/database";
+import { useEffect, useMemo, useState } from "react";
 import { db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
 
-const BARANGAYS = ["Mercedes", "Canlapwas", "Maulong", "San Andres", "Poblacion 13"];
-const PUROKS = Array.from({ length: 10 }, (_, index) => index + 1);
-const ALL_PUROKS_VALUE = "all";
-const ALL_PUROKS_LABEL = "All Puroks";
+const BARANGAYS = [
+  "Mercedes",
+  "Canlapwas",
+  "Maulong",
+  "San Andres",
+  "Poblacion 13",
+];
+
+const PUROKS = Array.from(
+  { length: 10 },
+  (_, index) => `Purok ${index + 1}`,
+);
 
 const DAYS = [
   "Sunday",
@@ -19,6 +27,8 @@ const DAYS = [
   "Friday",
   "Saturday",
 ];
+
+const ALL_PUROKS_LABEL = "All Puroks";
 
 type Driver = {
   id: string;
@@ -32,13 +42,16 @@ type Driver = {
 type RouteRecord = {
   id: string;
   routeName?: string;
+  barangay?: string;
+  barangayKey?: string;
   barangays?: string[] | Record<string, string | boolean>;
   puroks?: string[] | Record<string, string | boolean>;
-  scheduleDays?: string[] | Record<string, string | boolean>;
   assignedDriverId?: string;
   assignedDriverName?: string;
   assignedVehicle?: string;
-  checkpoints?: unknown[] | Record<string, unknown>;
+  routeType?: string;
+  trackingMode?: string;
+  status?: string;
 };
 
 type Schedule = {
@@ -46,13 +59,8 @@ type Schedule = {
   title?: string;
   barangay?: string;
   barangayKey?: string;
-  purok?: string | number;
-  purokKey?: string;
-  purokNumber?: string | number;
-  targetPurok?: string;
   assignedPuroks?: string[] | Record<string, string | boolean>;
   puroks?: Array<string | number> | Record<string, string | number | boolean>;
-  purokKeys?: string[] | Record<string, string | boolean>;
   scheduleDay?: string;
   scheduleDays?: string[] | string;
   startTime?: string;
@@ -72,8 +80,6 @@ type Schedule = {
   updatedAt?: number;
   completedAt?: number;
   lastCompletedAt?: number;
-  lastCompletedDate?: string;
-  lastCollectionReportId?: string;
 };
 
 type ScheduleForm = {
@@ -85,7 +91,7 @@ type ScheduleForm = {
   routeId: string;
 };
 
-const emptyForm: ScheduleForm = {
+const EMPTY_FORM: ScheduleForm = {
   title: "",
   startTime: "",
   truckId: "",
@@ -94,51 +100,112 @@ const emptyForm: ScheduleForm = {
   routeId: "",
 };
 
-const makeBarangayKey = (value: string) =>
-  String(value || "")
+function normalizeArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(String).map((item) => item.trim()).filter(Boolean);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => {
+        if (item === true) return key;
+        if (typeof item === "string" || typeof item === "number") {
+          return String(item);
+        }
+        return "";
+      })
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return value ? [String(value).trim()].filter(Boolean) : [];
+}
+
+function normalizePurokLabel(value: unknown): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  const number = raw.match(/\d+/)?.[0];
+  return number ? `Purok ${Number(number)}` : raw;
+}
+
+function makeBarangayKey(value: string): string {
+  return String(value || "")
     .toLowerCase()
     .replace(/\s*\(.*?\)/g, "")
     .replace(/barangay/g, "")
     .replace(/[^a-z0-9ñ\s]/g, "")
     .trim()
     .replace(/\s+/g, "_");
+}
 
-const isAllPurokValue = (value: unknown) => {
-  const normalized = String(value || "")
-    .toLowerCase()
-    .replace(/-/g, "_")
-    .replace(/\s+/g, "_")
-    .trim();
+function makePurokKey(value: unknown): string {
+  const normalized = normalizePurokLabel(value);
+  const number = normalized.match(/\d+/)?.[0];
+  return number ? `purok_${Number(number)}` : "";
+}
+
+function getRouteBarangay(route: RouteRecord): string {
+  return route.barangay || normalizeArray(route.barangays)[0] || "";
+}
+
+function getRoutePuroks(route: RouteRecord): string[] {
+  return normalizeArray(route.puroks)
+    .map(normalizePurokLabel)
+    .filter(Boolean);
+}
+
+function routeCoversSelection(
+  route: RouteRecord,
+  barangay: string,
+  selectedPuroks: string[],
+): boolean {
+  const matchesBarangay =
+    makeBarangayKey(getRouteBarangay(route)) === makeBarangayKey(barangay);
+
+  const coveredPuroks = new Set(getRoutePuroks(route));
+  const coversAllSelectedPuroks = selectedPuroks.every((purok) =>
+    coveredPuroks.has(normalizePurokLabel(purok)),
+  );
+
+  const routeStatus = String(route.status || "ready").toLowerCase();
+  const routeIsAvailable = !["disabled", "inactive", "archived"].includes(
+    routeStatus,
+  );
 
   return (
-    normalized === "all" ||
-    normalized === "all_purok" ||
-    normalized === "all_puroks" ||
-    normalized === "barangay_all_purok" ||
-    normalized === "all_barangay_purok"
+    matchesBarangay &&
+    coversAllSelectedPuroks &&
+    routeIsAvailable &&
+    Boolean(route.assignedDriverId)
   );
-};
+}
 
-const makePurokKey = (value: unknown) => {
-  if (isAllPurokValue(value)) return "all";
+function getSchedulePuroks(schedule: Schedule): string[] {
+  const values = normalizeArray(schedule.assignedPuroks || schedule.puroks);
+  return values.map(normalizePurokLabel).filter(Boolean);
+}
 
-  const number = Number(value);
-  return Number.isNaN(number) ? "" : `purok_${number}`;
-};
+function getScheduleDays(schedule: Schedule): string[] {
+  const values = normalizeArray(schedule.scheduleDays);
+  const fallback = schedule.scheduleDay ? [schedule.scheduleDay] : [];
+  const uniqueDays = new Set(values.length > 0 ? values : fallback);
 
-const normalizeArray = (value: unknown): string[] => {
-  if (Array.isArray(value)) return value.filter(Boolean).map(String);
-  if (value && typeof value === "object") {
-    return Object.entries(value as Record<string, unknown>)
-      .map(([key, item]) => item === true ? key : typeof item === "string" || typeof item === "number" ? String(item) : "")
-      .filter(Boolean);
-  }
-  if (!value) return [];
-  return [String(value)];
-};
+  return DAYS.filter((day) => uniqueDays.has(day));
+}
 
-const formatTime = (value?: string) => {
-  if (!value) return "-";
+function formatDayList(days: string[]): string {
+  const orderedDays = DAYS.filter((day) => days.includes(day));
+
+  if (orderedDays.length === 0) return "—";
+  if (orderedDays.length === 1) return orderedDays[0];
+  if (orderedDays.length === 2) return `${orderedDays[0]} and ${orderedDays[1]}`;
+
+  return `${orderedDays.slice(0, -1).join(", ")}, and ${orderedDays.at(-1)}`;
+}
+
+function formatTime(value?: string): string {
+  if (!value) return "—";
 
   const [hourRaw, minuteRaw] = value.split(":");
   const hour = Number(hourRaw);
@@ -148,87 +215,23 @@ const formatTime = (value?: string) => {
 
   const period = hour >= 12 ? "PM" : "AM";
   const normalizedHour = hour % 12 || 12;
-
   return `${normalizedHour}:${minute} ${period}`;
-};
+}
 
-const getPurokDisplay = (value: unknown) => {
-  if (isAllPurokValue(value)) return ALL_PUROKS_LABEL;
-  return value ? `Purok ${value}` : "-";
-};
+function formatDate(value?: number): string {
+  if (!value) return "—";
 
-const getSchedulePurokDisplay = (schedule: Schedule) => {
-  const assigned = normalizeArray(schedule.assignedPuroks || schedule.puroks);
-  if (assigned.length > 0) return assigned.join(", ");
-  if (
-    isAllPurokValue(schedule.purok) ||
-    isAllPurokValue(schedule.purokKey) ||
-    isAllPurokValue(schedule.targetPurok) ||
-    isAllPurokValue(schedule.purokNumber)
-  ) {
-    return ALL_PUROKS_LABEL;
-  }
-
-  return getPurokDisplay(schedule.purok || schedule.purokNumber);
-};
-
-const getSchedulePuroks = (schedule: Schedule): string[] => {
-  const assigned = normalizeArray(schedule.assignedPuroks || schedule.puroks);
-  if (assigned.length > 0) return assigned.map((value) => value.toLowerCase().startsWith("purok") ? value : `Purok ${value}`);
-  if (isAllPurokValue(schedule.purok) || isAllPurokValue(schedule.purokKey) || isAllPurokValue(schedule.targetPurok)) {
-    return PUROKS.map((value) => `Purok ${value}`);
-  }
-  const single = schedule.purok || schedule.purokNumber;
-  return single ? [String(single).toLowerCase().startsWith("purok") ? String(single) : `Purok ${single}`] : [];
-};
-
-const isScheduleForSpecificPurok = (schedule: Schedule, purok: string) => {
-  if (!purok) return true;
-
-  if (isAllPurokValue(purok)) {
-    return getSchedulePuroks(schedule).length === PUROKS.length;
-  }
-
-  const scheduleIsAll =
-    isAllPurokValue(schedule.purok) ||
-    isAllPurokValue(schedule.purokKey) ||
-    isAllPurokValue(schedule.targetPurok) ||
-    isAllPurokValue(schedule.purokNumber);
-
-  if (scheduleIsAll) return true;
-
-  return scheduleIsAll || getSchedulePuroks(schedule).some((value) => value === `Purok ${purok}` || value === purok);
-};
-
-const formatDate = (value?: number) => {
-  if (!value) return "-";
-
-  try {
-    return new Date(value).toLocaleDateString("en-PH", {
-      month: "short",
-      day: "2-digit",
-      year: "numeric",
-    });
-  } catch {
-    return "-";
-  }
-};
-
-
-const getDateKey = (timestamp = Date.now()) => {
-  const date = new Date(timestamp);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-};
+  return new Date(value).toLocaleDateString("en-PH", {
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+  });
+}
 
 export default function SchedulesPage() {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [routes, setRoutes] = useState<RouteRecord[]>([]);
-  const [locations, setLocations] = useState<Record<string, unknown>>({});
 
   const [showForm, setShowForm] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -236,186 +239,154 @@ export default function SchedulesPage() {
   const [search, setSearch] = useState("");
 
   const [selectedBarangay, setSelectedBarangay] = useState("");
-  const [selectedPurok, setSelectedPurok] = useState("");
   const [selectedPuroks, setSelectedPuroks] = useState<string[]>([]);
-  const [selectedDay, setSelectedDay] = useState("");
-
-  const [form, setForm] = useState<ScheduleForm>(emptyForm);
+  const [selectedDays, setSelectedDays] = useState<string[]>([]);
+  const [form, setForm] = useState<ScheduleForm>(EMPTY_FORM);
 
   useEffect(() => {
-    const allowedKeys = BARANGAYS.map(makeBarangayKey);
-
-    const unsubSchedules = onValue(ref(db, "schedules"), (snap) => {
-      const value = snap.val() || {};
-
-      const list: Schedule[] = Object.entries(value)
-        .map(([id, data]: any) => ({
+    const unsubscribeSchedules = onValue(ref(db, "schedules"), (snapshot) => {
+      const value = snapshot.val() || {};
+      const list = Object.entries(value)
+        .map(([id, raw]) => ({
           id,
-          ...data,
+          ...(raw as Omit<Schedule, "id">),
         }))
-        .filter((schedule: Schedule) => {
-          const barangay = schedule.barangay || "";
-          const barangayKey = schedule.barangayKey || makeBarangayKey(barangay);
-          return allowedKeys.includes(barangayKey);
-        })
-        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-
+        .sort(
+          (left, right) =>
+            Number(right.createdAt || 0) - Number(left.createdAt || 0),
+        );
       setSchedules(list);
     });
 
-    const unsubDrivers = onValue(ref(db, "drivers"), (snap) => {
-      const value = snap.val() || {};
-      const list: Driver[] = Object.entries(value).map(([id, data]: any) => ({
+    const unsubscribeDrivers = onValue(ref(db, "drivers"), (snapshot) => {
+      const value = snapshot.val() || {};
+      const list = Object.entries(value).map(([id, raw]) => ({
         id,
-        ...data,
+        ...(raw as Omit<Driver, "id">),
       }));
-
       setDrivers(list);
     });
 
-    const unsubLocations = onValue(ref(db, "driver_locations"), (snap) => {
-      setLocations(snap.val() || {});
-    });
-
-    const unsubRoutes = onValue(ref(db, "routes"), (snap) => {
-      const value = snap.val() || {};
-      setRoutes(Object.entries(value).map(([id, data]) => ({ id, ...(data as Omit<RouteRecord, "id">) })));
+    const unsubscribeRoutes = onValue(ref(db, "routes"), (snapshot) => {
+      const value = snapshot.val() || {};
+      const list = Object.entries(value).map(([id, raw]) => ({
+        id,
+        ...(raw as Omit<RouteRecord, "id">),
+      }));
+      setRoutes(list);
     });
 
     return () => {
-      unsubSchedules();
-      unsubDrivers();
-      unsubLocations();
-      unsubRoutes();
+      unsubscribeSchedules();
+      unsubscribeDrivers();
+      unsubscribeRoutes();
     };
   }, []);
 
-  const filteredSchedules = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
-
-    return schedules.filter((schedule) => {
-      if (selectedBarangay) {
-        const scheduleKey = schedule.barangayKey || makeBarangayKey(schedule.barangay || "");
-        if (scheduleKey !== makeBarangayKey(selectedBarangay)) return false;
-      }
-
-      if (!isScheduleForSpecificPurok(schedule, selectedPurok)) return false;
-
-      if (selectedDay) {
-        const days = normalizeArray(schedule.scheduleDays);
-        if (!days.includes(selectedDay) && schedule.scheduleDay !== selectedDay) return false;
-      }
-
-      if (!keyword) return true;
-
-      const searchable = `
-        ${schedule.title || ""}
-        ${schedule.barangay || ""}
-        ${getSchedulePurokDisplay(schedule)}
-        ${schedule.scheduleDay || ""}
-        ${normalizeArray(schedule.scheduleDays).join(" ")}
-        ${schedule.driverName || ""}
-        ${schedule.truckId || ""}
-        ${schedule.status || ""}
-      `.toLowerCase();
-
-      return searchable.includes(keyword);
-    });
-  }, [schedules, search, selectedBarangay, selectedPurok, selectedDay]);
-
-  const stats = useMemo(() => {
-    const todayKey = getDateKey();
-    const active = schedules.filter((schedule) => String(schedule.status || "active").toLowerCase() === "active");
-    const completedToday = schedules.filter((schedule) => schedule.lastCompletedDate === todayKey);
-    const withDrivers = schedules.filter((schedule) => schedule.driverId || schedule.assignedDriverId);
-
-    return {
-      total: schedules.length,
-      active: active.length,
-      weekly: schedules.filter((schedule) => schedule.isRecurring || schedule.repeat === "weekly" || schedule.scheduleDay).length,
-      completedToday: completedToday.length,
-      withDrivers: withDrivers.length,
-    };
-  }, [schedules]);
-
-  const bestDriver = useMemo(() => {
-    if (drivers.length === 0) return null;
-
-    const onlineDrivers = drivers.filter(
-      (driver) => String(driver.status || "").toLowerCase() === "online"
-    );
-
-    const candidates = onlineDrivers.length > 0 ? onlineDrivers : drivers;
-
-    const ranked = candidates.map((driver) => {
-      const assignedSchedules = schedules.filter(
-        (schedule) => schedule.driverId === driver.id || schedule.assignedDriverId === driver.id
-      );
-
-      const dayConflict = assignedSchedules.filter((schedule) =>
-        normalizeArray(schedule.scheduleDays).includes(selectedDay)
-      ).length;
-
-      const barangayConflict = assignedSchedules.filter(
-        (schedule) => makeBarangayKey(schedule.barangay || "") === makeBarangayKey(selectedBarangay)
-      ).length;
-
-      const score = assignedSchedules.length * 10 + dayConflict * 50 + barangayConflict * 30;
-
-      return {
-        ...driver,
-        score,
-      };
-    });
-
-    ranked.sort((a, b) => a.score - b.score);
-
-    return ranked[0] || null;
-  }, [drivers, schedules, selectedBarangay, selectedDay]);
-
   const compatibleRoutes = useMemo(() => {
-    const requestedPuroks = new Set(selectedPuroks);
-    return routes.filter((route) => {
-      const barangays = normalizeArray(route.barangays);
-      const routePuroks = new Set(normalizeArray(route.puroks));
-      const matchesBarangay = !selectedBarangay || barangays.some((barangay) => makeBarangayKey(barangay) === makeBarangayKey(selectedBarangay));
-      const coversPuroks = requestedPuroks.size === 0 || Array.from(requestedPuroks).every((purok) => routePuroks.has(purok));
-      const checkpointCount = Array.isArray(route.checkpoints)
-        ? route.checkpoints.length
-        : route.checkpoints && typeof route.checkpoints === "object"
-          ? Object.keys(route.checkpoints).length
-          : 0;
-      return matchesBarangay && coversPuroks && checkpointCount >= 2;
-    });
+    if (!selectedBarangay || selectedPuroks.length === 0) return [];
+
+    return routes.filter((route) =>
+      routeCoversSelection(route, selectedBarangay, selectedPuroks),
+    );
   }, [routes, selectedBarangay, selectedPuroks]);
 
-  useEffect(() => {
-    if (showForm && !form.assignedDriverId && bestDriver) {
-      setForm((prev) => ({
-        ...prev,
-        assignedDriverId: bestDriver.id,
-      }));
-    }
-  }, [bestDriver, form.assignedDriverId, showForm]);
+  const selectedRoute = useMemo(
+    () => routes.find((route) => route.id === form.routeId),
+    [routes, form.routeId],
+  );
 
-  useEffect(() => {
-    if (!form.routeId) return;
-    const route = routes.find((item) => item.id === form.routeId);
-    if (!route) return;
-    const routeDriver = drivers.find((driver) => driver.id === route.assignedDriverId);
-    setForm((current) => ({
-      ...current,
-      assignedDriverId: route.assignedDriverId || current.assignedDriverId,
-      truckId: route.assignedVehicle || routeDriver?.truck || current.truckId,
-    }));
-  }, [form.routeId, routes, drivers]);
+  const filteredSchedules = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return schedules;
+
+    return schedules.filter((schedule) => {
+      const text = [
+        schedule.title,
+        schedule.barangay,
+        getSchedulePuroks(schedule).join(" "),
+        schedule.routeName,
+        schedule.driverName,
+        schedule.truckId,
+        getScheduleDays(schedule).join(" "),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return text.includes(query);
+    });
+  }, [schedules, search]);
 
   const resetForm = () => {
     setSelectedBarangay("");
-    setSelectedPurok("");
     setSelectedPuroks([]);
-    setSelectedDay("");
-    setForm(emptyForm);
+    setSelectedDays([]);
+    setForm(EMPTY_FORM);
+    setIsSaving(false);
+  };
+
+  const closeForm = () => {
+    setShowForm(false);
+    resetForm();
+  };
+
+  const togglePurok = (purok: string) => {
+    setSelectedPuroks((current) =>
+      current.includes(purok)
+        ? current.filter((item) => item !== purok)
+        : [...current, purok],
+    );
+
+    setForm((current) => ({
+      ...current,
+      routeId: "",
+      assignedDriverId: "",
+      truckId: "",
+    }));
+  };
+
+  const selectAllPuroks = () => {
+    setSelectedPuroks((current) =>
+      current.length === PUROKS.length ? [] : [...PUROKS],
+    );
+    setForm((current) => ({
+      ...current,
+      routeId: "",
+      assignedDriverId: "",
+      truckId: "",
+    }));
+  };
+
+  const toggleDay = (day: string) => {
+    setSelectedDays((current) =>
+      current.includes(day)
+        ? current.filter((item) => item !== day)
+        : DAYS.filter((item) => [...current, day].includes(item)),
+    );
+  };
+
+  const selectWeekdays = () => {
+    const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+    const allWeekdaysSelected = weekdays.every((day) =>
+      selectedDays.includes(day),
+    );
+
+    setSelectedDays(allWeekdaysSelected ? [] : weekdays);
+  };
+
+  const selectRoute = (routeId: string) => {
+    const route = routes.find((item) => item.id === routeId);
+    const driver = drivers.find(
+      (item) => item.id === route?.assignedDriverId,
+    );
+
+    setForm((current) => ({
+      ...current,
+      routeId,
+      assignedDriverId: route?.assignedDriverId || "",
+      truckId: route?.assignedVehicle || driver?.truck || "",
+    }));
   };
 
   const createScheduleNotification = async ({
@@ -423,7 +394,7 @@ export default function SchedulesPage() {
     title,
     barangay,
     puroks,
-    day,
+    days,
     startTime,
     status,
     notes,
@@ -432,15 +403,17 @@ export default function SchedulesPage() {
     title: string;
     barangay: string;
     puroks: string[];
-    day: string;
+    days: string[];
     startTime: string;
     status: "created" | "cancelled";
     notes?: string;
   }) => {
     const barangayKey = makeBarangayKey(barangay);
     const timestamp = Date.now();
-    const isAllPurok = puroks.length === PUROKS.length;
-    const purokLabel = isAllPurok ? ALL_PUROKS_LABEL : puroks.join(", ");
+    const allPuroks = puroks.length === PUROKS.length;
+    const purokLabel = allPuroks ? ALL_PUROKS_LABEL : puroks.join(", ");
+    const orderedDays = DAYS.filter((day) => days.includes(day));
+    const dayLabel = formatDayList(orderedDays);
 
     const notificationTitle =
       status === "created"
@@ -449,9 +422,7 @@ export default function SchedulesPage() {
 
     const message =
       status === "created"
-        ? `Garbage collection for ${barangay}, ${purokLabel}, is set every week on ${day} at ${formatTime(
-            startTime
-          )}.`
+        ? `Garbage collection for ${barangay}, ${purokLabel}, is scheduled every ${dayLabel} at ${formatTime(startTime)}.`
         : `The garbage collection schedule for ${barangay}, ${purokLabel}, has been cancelled.`;
 
     const notificationData = {
@@ -468,181 +439,184 @@ export default function SchedulesPage() {
       purok: purokLabel,
       puroks,
       assignedPuroks: puroks,
-      purokKeys: puroks.map((purok) => makePurokKey(purok.replace(/purok\s*/i, ""))),
-      purokKey: isAllPurok ? "all" : puroks.length === 1 ? makePurokKey(puroks[0].replace(/purok\s*/i, "")) : "multiple",
-      purokNumber: isAllPurok ? "all" : puroks.map((purok) => Number(purok.replace(/\D/g, ""))),
-      targetPurok: purokLabel,
-      scheduleDay: day,
-      scheduleDays: [day],
+      purokKeys: puroks.map(makePurokKey),
+      scheduleDay: orderedDays[0] || "",
+      scheduleDays: orderedDays,
       startTime,
       scheduleType: "weekly",
       repeat: "weekly",
       isRecurring: true,
-      targetType: isAllPurok ? "barangay_all_purok" : puroks.length > 1 ? "barangay_multiple_puroks" : "barangay_purok",
-      targetMode: isAllPurok ? "all_purok" : puroks.length > 1 ? "multiple_puroks" : "specific_purok",
-      notifyAllPurok: isAllPurok,
+      targetType: allPuroks
+        ? "barangay_all_purok"
+        : puroks.length > 1
+          ? "barangay_multiple_puroks"
+          : "barangay_purok",
+      notifyAllPurok: allPuroks,
       seen: false,
       createdAt: timestamp,
       timestamp,
     };
 
-    await Promise.all([
-      set(push(ref(db, "notifications")), notificationData),
-      ...puroks.map((purok) => set(
-        push(ref(db, `notificationsByArea/${barangayKey}/${makePurokKey(purok.replace(/purok\s*/i, ""))}`)),
-        { ...notificationData, purok, purokKey: makePurokKey(purok.replace(/purok\s*/i, "")) },
-      )),
-    ]);
+    const writes = [set(push(ref(db, "notifications")), notificationData)];
+
+    for (const purok of puroks) {
+      const purokKey = makePurokKey(purok);
+      writes.push(
+        set(
+          push(ref(db, `notificationsByArea/${barangayKey}/${purokKey}`)),
+          {
+            ...notificationData,
+            purok,
+            purokKey,
+          },
+        ),
+      );
+    }
+
+    await Promise.all(writes);
   };
 
-  const hasPotentialConflict = () => {
-    return schedules.some((schedule) => {
-      const sameBarangay = makeBarangayKey(schedule.barangay || "") === makeBarangayKey(selectedBarangay);
-      const sameDay = normalizeArray(schedule.scheduleDays).includes(selectedDay) || schedule.scheduleDay === selectedDay;
+  const hasPotentialConflict = (): boolean =>
+    schedules.some((schedule) => {
+      const sameBarangay =
+        makeBarangayKey(schedule.barangay || "") ===
+        makeBarangayKey(selectedBarangay);
+      const existingDays = getScheduleDays(schedule);
+      const sameDay = selectedDays.some((day) => existingDays.includes(day));
       const sameTime = schedule.startTime === form.startTime;
       const existingPuroks = getSchedulePuroks(schedule);
-      const sameTarget = selectedPuroks.some((purok) => existingPuroks.includes(purok));
-      const active = String(schedule.status || "active").toLowerCase() === "active";
+      const overlaps = selectedPuroks.some((purok) =>
+        existingPuroks.includes(purok),
+      );
+      const active =
+        String(schedule.status || "active").toLowerCase() === "active";
 
-      return sameBarangay && sameDay && sameTime && sameTarget && active;
+      return sameBarangay && sameDay && sameTime && overlaps && active;
     });
-  };
 
   const saveSchedule = async () => {
     setSuccessMessage("");
 
-    if (!form.title.trim()) {
-      alert("Please enter schedule title.");
-      return;
-    }
-
-    if (!selectedBarangay) {
-      alert("Please select barangay.");
-      return;
-    }
-
+    if (!form.title.trim()) return alert("Enter a schedule title.");
+    if (!selectedBarangay) return alert("Select a Barangay.");
     if (selectedPuroks.length === 0) {
-      alert("Please select at least one purok.");
-      return;
+      return alert("Select at least one Purok.");
+    }
+    if (selectedDays.length === 0) return alert("Select at least one weekly collection day.");
+    if (!form.startTime) return alert("Select a collection time.");
+    if (!form.routeId) return alert("Select a route assignment.");
+
+    const route = routes.find((item) => item.id === form.routeId);
+    if (!route || !routeCoversSelection(route, selectedBarangay, selectedPuroks)) {
+      return alert(
+        "The selected route must match the Barangay, cover every selected Purok, and have an assigned driver.",
+      );
     }
 
-    if (!selectedDay) {
-      alert("Please select weekly collection day.");
-      return;
-    }
-
-    if (!form.startTime) {
-      alert("Please select collection time.");
-      return;
-    }
-
-    if (!form.routeId) {
-      alert("Please select an assigned GPS route.");
-      return;
-    }
-
-    const selectedRoute = routes.find((route) => route.id === form.routeId);
-    if (!selectedRoute || !compatibleRoutes.some((route) => route.id === form.routeId)) {
-      alert("The selected route does not cover every selected purok or has insufficient GPS checkpoints.");
-      return;
-    }
+    const driverId = form.assignedDriverId || route.assignedDriverId || "";
+    const driver = drivers.find((item) => item.id === driverId);
+    if (!driver) return alert("The selected route has no valid assigned driver.");
 
     if (hasPotentialConflict()) {
-      const proceed = confirm(
-        "A similar active weekly schedule already exists for this barangay, purok, day, and time. Continue anyway?"
+      const proceed = window.confirm(
+        "A similar active schedule already exists for the same Barangay, Purok, at least one selected day, and time. Continue anyway?",
       );
-
       if (!proceed) return;
     }
 
-    const isAllPurok = selectedPuroks.length === PUROKS.length;
-    const purokValue = isAllPurok ? ALL_PUROKS_LABEL : selectedPuroks.join(", ");
-    const purokNumbers = selectedPuroks.map((purok) => Number(purok.replace(/\D/g, "")));
-    const driver = drivers.find((d) => d.id === form.assignedDriverId);
+    const allPuroks = selectedPuroks.length === PUROKS.length;
+    const purokNumbers = selectedPuroks.map((purok) =>
+      Number(purok.replace(/\D/g, "")),
+    );
+    const purokLabel = allPuroks
+      ? ALL_PUROKS_LABEL
+      : selectedPuroks.join(", ");
 
     try {
       setIsSaving(true);
 
-      const newScheduleRef = push(ref(db, "schedules"));
-      const scheduleId = newScheduleRef.key;
-
-      if (!scheduleId) {
-        alert("Failed to create schedule ID.");
-        return;
-      }
+      const scheduleReference = push(ref(db, "schedules"));
+      const scheduleId = scheduleReference.key;
+      if (!scheduleId) throw new Error("Unable to create schedule ID.");
 
       const timestamp = Date.now();
+      const truck = form.truckId.trim() || route.assignedVehicle || driver.truck || "";
 
       const payload = {
         title: form.title.trim(),
         barangay: selectedBarangay,
         barangayKey: makeBarangayKey(selectedBarangay),
-        purok: purokValue,
+        purok: purokLabel,
         assignedPuroks: selectedPuroks,
         puroks: purokNumbers,
-        purokKeys: selectedPuroks.map((purok) => makePurokKey(purok.replace(/\D/g, ""))),
-        purokKey: isAllPurok ? "all" : selectedPuroks.length === 1 ? makePurokKey(purokNumbers[0]) : "multiple",
-        purokNumber: isAllPurok ? "all" : purokNumbers,
-        targetPurok: purokValue,
-        scheduleDay: selectedDay,
-        scheduleDays: [selectedDay],
+        purokKeys: selectedPuroks.map(makePurokKey),
+        purokKey: allPuroks
+          ? "all"
+          : selectedPuroks.length === 1
+            ? makePurokKey(selectedPuroks[0])
+            : "multiple",
+        targetPurok: purokLabel,
+        scheduleDay: selectedDays[0],
+        scheduleDays: selectedDays,
         startTime: form.startTime,
-        truckId: form.truckId.trim() || selectedRoute.assignedVehicle || driver?.truck || "",
-        assignedDriverId: driver?.id || "",
-        driverId: driver?.id || "",
-        driverName: driver?.name || "",
-        routeId: selectedRoute.id,
-        assignedRouteId: selectedRoute.id,
-        routeName: selectedRoute.routeName || "",
+        truckId: truck,
+        assignedDriverId: driver.id,
+        driverId: driver.id,
+        driverName: driver.name || "",
+        routeId: route.id,
+        assignedRouteId: route.id,
+        routeName: route.routeName || "",
+        routeType: "service-area",
+        trackingMode: "barangay-purok",
         notes: form.notes.trim(),
         status: "active",
         scheduleType: "weekly",
         repeat: "weekly",
         recurrence: {
           frequency: "weekly",
-          dayOfWeek: selectedDay,
+          dayOfWeek: selectedDays[0],
+          daysOfWeek: selectedDays,
           time: form.startTime,
         },
         isRecurring: true,
-        targetType: isAllPurok ? "barangay_all_purok" : selectedPuroks.length > 1 ? "barangay_multiple_puroks" : "barangay_purok",
-        targetMode: isAllPurok ? "all_purok" : selectedPuroks.length > 1 ? "multiple_puroks" : "specific_purok",
-        notifyAllPurok: isAllPurok,
+        targetType: allPuroks
+          ? "barangay_all_purok"
+          : selectedPuroks.length > 1
+            ? "barangay_multiple_puroks"
+            : "barangay_purok",
+        notifyAllPurok: allPuroks,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
 
-      await set(newScheduleRef, payload);
+      await set(scheduleReference, payload);
 
       await createScheduleNotification({
         scheduleId,
         title: form.title.trim(),
         barangay: selectedBarangay,
         puroks: selectedPuroks,
-        day: selectedDay,
+        days: selectedDays,
         startTime: form.startTime,
         status: "created",
         notes: form.notes.trim(),
       });
 
       setSuccessMessage(
-        `Weekly schedule saved successfully for ${selectedBarangay}, ${purokValue}, every ${selectedDay} at ${formatTime(form.startTime)}. Residents were notified.`
+        `Weekly schedule saved for ${selectedBarangay}, ${purokLabel}, every ${formatDayList(selectedDays)} at ${formatTime(form.startTime)}.`,
       );
-
-      setShowForm(false);
-      resetForm();
+      closeForm();
     } catch (error) {
-      console.error(error);
-      alert("Failed to create schedule.");
-    } finally {
+      console.error("Unable to save schedule", error);
+      alert("Unable to create the schedule.");
       setIsSaving(false);
     }
   };
 
   const deleteSchedule = async (schedule: Schedule) => {
-    const confirmDelete = confirm("Delete this schedule and notify affected residents?");
-    if (!confirmDelete) return;
-
-    const scheduleDay = normalizeArray(schedule.scheduleDays)[0] || schedule.scheduleDay || "-";
+    if (!window.confirm("Delete this schedule and notify affected residents?")) {
+      return;
+    }
 
     try {
       await remove(ref(db, `schedules/${schedule.id}`));
@@ -652,1059 +626,938 @@ export default function SchedulesPage() {
         title: schedule.title || "Schedule",
         barangay: schedule.barangay || "",
         puroks: getSchedulePuroks(schedule),
-        day: scheduleDay,
-        startTime: schedule.startTime || "-",
+        days: getScheduleDays(schedule),
+        startTime: schedule.startTime || "—",
         status: "cancelled",
         notes: schedule.notes || "",
       });
 
-      setSuccessMessage("Schedule deleted and resident cancellation notification sent.");
+      setSuccessMessage("Schedule deleted and cancellation notification sent.");
     } catch (error) {
-      console.error(error);
-      alert("Failed to delete schedule.");
+      console.error("Unable to delete schedule", error);
+      alert("Unable to delete the schedule.");
     }
   };
-
-  const selectedDriver = drivers.find((driver) => driver.id === form.assignedDriverId);
 
   return (
     <DashboardShell
       title="Schedule Management"
-      description="Create weekly collection schedules for multiple puroks and verified GPS routes."
-      hidePageHeader
+      description="Create weekly collection schedules using Barangay and Purok route assignments. No map or drawn route is required."
     >
       <div className="schedule-page">
-        <section className="schedule-hero">
+        <section className="hero">
           <div>
-            <span className="eyebrow">Collection Planning</span>
+            <span>COLLECTION PLANNING</span>
             <h1>Weekly Schedule Manager</h1>
             <p>
-              Build recurring schedules, assign several puroks to one GPS route, and notify all affected residents.
+              Choose the service area route, collection day, time, and assigned
+              driver. Residents in the selected Puroks receive the schedule notice.
             </p>
           </div>
-
-          <button className="hero-action" onClick={() => setShowForm(true)}>
-            + Create Weekly Schedule
+          <button type="button" onClick={() => setShowForm(true)}>
+            + Create Schedule
           </button>
         </section>
 
-        {successMessage && (
+        {successMessage ? (
           <div className="success-banner">
-            <strong>Success</strong>
             <span>{successMessage}</span>
-            <button onClick={() => setSuccessMessage("")}>×</button>
+            <button type="button" onClick={() => setSuccessMessage("")}>
+              ×
+            </button>
           </div>
-        )}
+        ) : null}
 
-        <section className="schedule-stats">
-          <div className="stat-card">
-            <span>Total Schedules</span>
-            <strong>{stats.total}</strong>
-            <small>Saved in Firebase</small>
-          </div>
-
-          <div className="stat-card green">
-            <span>Active Weekly</span>
-            <strong>{stats.weekly}</strong>
-            <small>Runs every week</small>
-          </div>
-
-          <div className="stat-card blue">
-            <span>Completed Today</span>
-            <strong>{stats.completedToday}</strong>
-            <small>Sent to Analytics</small>
-          </div>
-
-          <div className="stat-card dark">
-            <span>With Assigned Driver</span>
-            <strong>{stats.withDrivers}</strong>
-            <small>Ready for operations</small>
-          </div>
+        <section className="metrics">
+          <Metric label="Total schedules" value={schedules.length} />
+          <Metric
+            label="Active"
+            value={
+              schedules.filter(
+                (schedule) =>
+                  String(schedule.status || "active").toLowerCase() === "active",
+              ).length
+            }
+          />
+          <Metric label="Routes available" value={routes.length} />
+          <Metric label="Drivers" value={drivers.length} />
         </section>
 
-        <section className="planner-flow">
-          <div className="flow-step">
-            <span>1</span>
+        <section className="schedule-card">
+          <div className="toolbar">
             <div>
-              <strong>Choose area</strong>
-              <small>Barangay + one or more puroks</small>
+              <h2>Weekly schedules</h2>
+              <p>Schedules are matched using Barangay and Purok coverage.</p>
             </div>
-          </div>
-
-          <div className="flow-line" />
-
-          <div className="flow-step">
-            <span>2</span>
-            <div>
-              <strong>Set weekly time</strong>
-              <small>Every week on selected day and time</small>
-            </div>
-          </div>
-
-          <div className="flow-line" />
-
-          <div className="flow-step">
-            <span>3</span>
-            <div>
-              <strong>Notify residents</strong>
-              <small>Notification is sent after saving</small>
-            </div>
-          </div>
-        </section>
-
-        <section className="toolbar-card">
-          <div className="search-box">
-            <span>⌕</span>
             <input
-              placeholder="Search schedule, barangay, driver, truck..."
+              type="search"
+              placeholder="Search schedules…"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(event) => setSearch(event.target.value)}
             />
           </div>
 
-          <select value={selectedBarangay} onChange={(e) => setSelectedBarangay(e.target.value)}>
-            <option value="">All Barangays</option>
-            {BARANGAYS.map((barangay) => (
-              <option key={barangay} value={barangay}>
-                {barangay}
-              </option>
-            ))}
-          </select>
-
-          <select value={selectedPurok} onChange={(e) => setSelectedPurok(e.target.value)}>
-            <option value="">All Puroks + Specific</option>
-            <option value={ALL_PUROKS_VALUE}>All Puroks only</option>
-            {PUROKS.map((purok) => (
-              <option key={purok} value={String(purok)}>
-                Purok {purok}
-              </option>
-            ))}
-          </select>
-
-          <select value={selectedDay} onChange={(e) => setSelectedDay(e.target.value)}>
-            <option value="">All Days</option>
-            {DAYS.map((day) => (
-              <option key={day} value={day}>
-                {day}
-              </option>
-            ))}
-          </select>
-
-          <button
-            className="clear-btn"
-            onClick={() => {
-              setSearch("");
-              setSelectedBarangay("");
-              setSelectedPurok("");
-              setSelectedDay("");
-            }}
-          >
-            Clear
-          </button>
-        </section>
-
-        <section className="schedule-table-card">
-          <div className="table-header">
-            <div>
-              <h2>Schedules</h2>
-              <p>{filteredSchedules.length} result(s) shown</p>
-            </div>
-          </div>
-
-          <div className="table-scroll">
-            <table className="schedule-table">
+          <div className="table-wrap">
+            <table>
               <thead>
                 <tr>
                   <th>Schedule</th>
-                  <th>Target Area</th>
-                  <th>Assigned Route</th>
-                  <th>Weekly Run</th>
-                  <th>Driver</th>
-                  <th>Truck</th>
+                  <th>Service area</th>
+                  <th>Day / Time</th>
+                  <th>Route</th>
+                  <th>Driver / Truck</th>
                   <th>Status</th>
-                  <th>Updated</th>
-                  <th className="right">Actions</th>
+                  <th>Created</th>
+                  <th aria-label="Actions" />
                 </tr>
               </thead>
-
               <tbody>
                 {filteredSchedules.length === 0 ? (
                   <tr>
-                    <td colSpan={9}>
-                      <div className="empty-state">
-                        <strong>No schedules found</strong>
-                        <span>Create a weekly schedule or change your filters.</span>
-                      </div>
+                    <td colSpan={8} className="empty-state">
+                      No schedules found.
                     </td>
                   </tr>
                 ) : (
-                  filteredSchedules.map((schedule) => {
-                    const scheduleDays = normalizeArray(schedule.scheduleDays);
-                    const day = scheduleDays.length > 0 ? scheduleDays.join(", ") : schedule.scheduleDay || "-";
-                    return (
-                      <tr key={schedule.id}>
-                        <td>
-                          <div className="schedule-title">
-                            <strong>{schedule.title || "Untitled Schedule"}</strong>
-                            <span>{schedule.notes || "Weekly collection schedule"}</span>
-                          </div>
-                        </td>
-
-                        <td><div className="target-cell"><strong>{schedule.routeName || "No route"}</strong><span>{schedule.routeId || schedule.assignedRouteId ? "GPS verification enabled" : "Route required"}</span></div></td>
-
-                        <td>
-                          <div className="target-cell">
-                            <strong>{schedule.barangay || "-"}</strong>
-                            <span>{getSchedulePurokDisplay(schedule)}</span>
-                          </div>
-                        </td>
-
-                        <td>
-                          <div className="weekly-cell">
-                            <span className="weekly-pill">Every {day}</span>
-                            <small>{formatTime(schedule.startTime)}</small>
-                          </div>
-                        </td>
-
-                        <td>{schedule.driverName || "No driver"}</td>
-                        <td>{schedule.truckId || "-"}</td>
-                        <td>
-                          <span className={`status-pill ${String(schedule.status || "active").toLowerCase()}`}>
-                            {schedule.status || "active"}
-                          </span>
-                        </td>
-                        <td>{formatDate(schedule.updatedAt || schedule.createdAt)}</td>
-                        <td>
-                          <div className="row-actions">
-                            <button className="complete-btn" onClick={() => { window.location.href = `/analytics?schedule=${encodeURIComponent(schedule.id)}`; }}>
-                              Track / Verify
-                            </button>
-
-                            <button className="danger-btn" onClick={() => deleteSchedule(schedule)}>
-                              Delete
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
+                  filteredSchedules.map((schedule) => (
+                    <tr key={schedule.id}>
+                      <td>
+                        <strong>{schedule.title || "Untitled schedule"}</strong>
+                        <small>{schedule.id}</small>
+                      </td>
+                      <td>
+                        <strong>{schedule.barangay || "—"}</strong>
+                        <small>{getSchedulePuroks(schedule).join(", ") || "—"}</small>
+                      </td>
+                      <td>
+                        <strong>
+                          {formatDayList(getScheduleDays(schedule))}
+                        </strong>
+                        <small>{formatTime(schedule.startTime)}</small>
+                      </td>
+                      <td>{schedule.routeName || "—"}</td>
+                      <td>
+                        <strong>{schedule.driverName || "—"}</strong>
+                        <small>{schedule.truckId || "No truck"}</small>
+                      </td>
+                      <td>
+                        <span className="status-pill">
+                          {String(schedule.status || "active")}
+                        </span>
+                      </td>
+                      <td>{formatDate(schedule.createdAt)}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="delete-btn"
+                          onClick={() => deleteSchedule(schedule)}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))
                 )}
               </tbody>
             </table>
           </div>
         </section>
 
-        {showForm && (
-          <div className="modal-backdrop">
-            <div className="schedule-modal">
-              <div className="modal-header">
+        {showForm ? (
+          <div className="modal-backdrop" role="presentation">
+            <section
+              className="modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="schedule-form-title"
+            >
+              <header>
                 <div>
-                  <span className="eyebrow">New Weekly Schedule</span>
-                  <h3>Create Garbage Collection Schedule</h3>
-                  <p>Set a recurring weekly collection schedule and notify affected residents.</p>
+                  <span>NEW WEEKLY SCHEDULE</span>
+                  <h2 id="schedule-form-title">Create garbage collection schedule</h2>
+                  <p>Select one or more recurring collection days for the same service area.</p>
                 </div>
-
-                <button
-                  className="modal-close"
-                  onClick={() => {
-                    setShowForm(false);
-                    resetForm();
-                  }}
-                >
+                <button type="button" onClick={closeForm} aria-label="Close">
                   ×
                 </button>
-              </div>
+              </header>
 
-              <div className="modal-grid">
-                <label>
-                  Schedule Title
-                  <input
-                    placeholder="Example: Maulong Sunday Collection"
-                    value={form.title}
-                    onChange={(e) => setForm({ ...form, title: e.target.value })}
-                  />
-                </label>
+              <div className="modal-body">
+                <div className="form-grid">
+                  <label>
+                    <span>Schedule title</span>
+                    <input
+                      value={form.title}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          title: event.target.value,
+                        }))
+                      }
+                      placeholder="Example: Canlapwas Mon-Wed-Fri Collection"
+                    />
+                  </label>
 
-                <label>
-                  Barangay
-                  <select value={selectedBarangay} onChange={(e) => { setSelectedBarangay(e.target.value); setForm((current) => ({ ...current, routeId: "" })); }}>
-                    <option value="">Select Barangay</option>
-                    {BARANGAYS.map((barangay) => (
-                      <option key={barangay} value={barangay}>
-                        {barangay}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                  <label>
+                    <span>Barangay</span>
+                    <select
+                      value={selectedBarangay}
+                      onChange={(event) => {
+                        setSelectedBarangay(event.target.value);
+                        setSelectedPuroks([]);
+                        setForm((current) => ({
+                          ...current,
+                          routeId: "",
+                          assignedDriverId: "",
+                          truckId: "",
+                        }));
+                      }}
+                    >
+                      <option value="">Select Barangay</option>
+                      {BARANGAYS.map((barangay) => (
+                        <option key={barangay} value={barangay}>
+                          {barangay}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
 
-                <div className="multi-purok full">
-                  <div className="multi-heading"><div><strong>Purok Coverage</strong><span>Select one or several puroks under this schedule.</span></div><button type="button" onClick={() => { setSelectedPuroks(selectedPuroks.length === PUROKS.length ? [] : PUROKS.map((value) => `Purok ${value}`)); setForm((current) => ({ ...current, routeId: "" })); }}>{selectedPuroks.length === PUROKS.length ? "Clear all" : "Select all"}</button></div>
-                  <div className="purok-chips">
+                <div className="purok-panel">
+                  <div className="panel-heading">
+                    <div>
+                      <h3>Purok coverage</h3>
+                      <p>Select the Puroks included in this schedule.</p>
+                    </div>
+                    <button type="button" onClick={selectAllPuroks}>
+                      {selectedPuroks.length === PUROKS.length
+                        ? "Clear all"
+                        : "Select all"}
+                    </button>
+                  </div>
+
+                  <div className="purok-grid">
                     {PUROKS.map((purok) => {
-                      const label = `Purok ${purok}`;
-                      const selected = selectedPuroks.includes(label);
-                      return <button key={purok} type="button" className={selected ? "selected" : ""} onClick={() => { setSelectedPuroks((current) => current.includes(label) ? current.filter((item) => item !== label) : [...current, label]); setForm((current) => ({ ...current, routeId: "" })); }}>{selected ? "✓ " : "+ "}{label}</button>;
+                      const selected = selectedPuroks.includes(purok);
+                      return (
+                        <button
+                          key={purok}
+                          type="button"
+                          className={selected ? "selected" : ""}
+                          aria-pressed={selected}
+                          onClick={() => togglePurok(purok)}
+                        >
+                          <span>{selected ? "✓" : "+"}</span>
+                          {purok}
+                        </button>
+                      );
                     })}
                   </div>
                 </div>
 
-                <label>
-                  Weekly Collection Day
-                  <select value={selectedDay} onChange={(e) => setSelectedDay(e.target.value)}>
-                    <option value="">Select Day</option>
-                    {DAYS.map((day) => (
-                      <option key={day} value={day}>
-                        {day}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <div className="day-time-grid">
+                  <div className="day-panel">
+                    <div className="panel-heading">
+                      <div>
+                        <h3>Weekly collection days</h3>
+                        <p>Select every day this schedule should repeat.</p>
+                      </div>
+                      <div className="day-actions">
+                        <button type="button" onClick={selectWeekdays}>
+                          {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].every(
+                            (day) => selectedDays.includes(day),
+                          )
+                            ? "Clear weekdays"
+                            : "Select weekdays"}
+                        </button>
+                        {selectedDays.length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedDays([])}
+                          >
+                            Clear
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
 
-                <label>
-                  Collection Time
-                  <input
-                    type="time"
-                    value={form.startTime}
-                    onChange={(e) => setForm({ ...form, startTime: e.target.value })}
-                  />
-                </label>
+                    <div className="day-grid" role="group" aria-label="Weekly collection days">
+                      {DAYS.map((day) => {
+                        const selected = selectedDays.includes(day);
 
-                <label>
-                  Truck / Plate Number
-                  <input
-                    placeholder="Optional"
-                    value={form.truckId}
-                    onChange={(e) => setForm({ ...form, truckId: e.target.value })}
-                  />
-                </label>
+                        return (
+                          <button
+                            key={day}
+                            type="button"
+                            className={selected ? "selected" : ""}
+                            aria-pressed={selected}
+                            onClick={() => toggleDay(day)}
+                          >
+                            <span>{selected ? "✓" : "+"}</span>
+                            {day.slice(0, 3)}
+                          </button>
+                        );
+                      })}
+                    </div>
 
-                <label className="full">
-                  Assigned GPS Route
-                  <select value={form.routeId} onChange={(e) => setForm({ ...form, routeId: e.target.value })}>
-                    <option value="">Select a route covering all selected puroks</option>
-                    {compatibleRoutes.map((route) => <option key={route.id} value={route.id}>{route.routeName || "Unnamed Route"} • {normalizeArray(route.puroks).join(", ")}</option>)}
-                  </select>
-                  {selectedBarangay && selectedPuroks.length > 0 && compatibleRoutes.length === 0 && <span className="field-warning">No mapped route covers this exact area. Create it in Route Management first.</span>}
-                </label>
+                    <p className="selection-summary">
+                      {selectedDays.length > 0
+                        ? `Repeats every ${formatDayList(selectedDays)}`
+                        : "No collection day selected yet."}
+                    </p>
+                  </div>
 
-                <label className="full">
-                  Assigned Driver
-                  <select
-                    value={form.assignedDriverId}
-                    onChange={(e) => setForm({ ...form, assignedDriverId: e.target.value })}
-                  >
-                    <option value="">No driver / Auto suggest</option>
-                    {drivers.map((driver) => (
-                      <option key={driver.id} value={driver.id}>
-                        {driver.name || "Driver"} {locations[driver.id] ? "• GPS active" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="full">
-                  Notes
-                  <textarea
-                    placeholder="Optional notes for admin records and resident notification"
-                    value={form.notes}
-                    onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                  />
-                </label>
-              </div>
-
-              <div className="suggestion-card">
-                <div>
-                  <strong>GPS route verification</strong>
-                  <span>
-                    {form.routeId
-                      ? `${selectedDriver?.name || "Assigned driver"} must pass the saved route checkpoints and every assigned purok before completion.`
-                      : "Choose a mapped route to enable live progress and verified completion."}
-                  </span>
+                  <label className="time-field">
+                    <span>Collection time</span>
+                    <input
+                      type="time"
+                      value={form.startTime}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          startTime: event.target.value,
+                        }))
+                      }
+                    />
+                    <small>The same time applies to all selected days.</small>
+                  </label>
                 </div>
-                <span className="weekly-pill">Weekly recurring</span>
+
+                <label>
+                  <span>Assigned route</span>
+                  <select
+                    value={form.routeId}
+                    onChange={(event) => selectRoute(event.target.value)}
+                    disabled={!selectedBarangay || selectedPuroks.length === 0}
+                  >
+                    <option value="">
+                      {!selectedBarangay
+                        ? "Select Barangay first"
+                        : selectedPuroks.length === 0
+                          ? "Select at least one Purok first"
+                          : compatibleRoutes.length === 0
+                            ? "No compatible route available"
+                            : "Select route assignment"}
+                    </option>
+                    {compatibleRoutes.map((route) => (
+                      <option key={route.id} value={route.id}>
+                        {route.routeName || "Unnamed route"} — {getRoutePuroks(route).join(", ")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {selectedBarangay && selectedPuroks.length > 0 && compatibleRoutes.length === 0 ? (
+                  <div className="warning-card">
+                    No saved route matches this Barangay and every selected Purok.
+                    Create or update the route assignment first.
+                  </div>
+                ) : null}
+
+                <div className="form-grid">
+                  <label>
+                    <span>Assigned driver</span>
+                    <input
+                      value={
+                        drivers.find((driver) => driver.id === form.assignedDriverId)
+                          ?.name || selectedRoute?.assignedDriverName || ""
+                      }
+                      readOnly
+                      placeholder="Automatically loaded from route"
+                    />
+                  </label>
+
+                  <label>
+                    <span>Truck / plate number</span>
+                    <input
+                      value={form.truckId}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          truckId: event.target.value,
+                        }))
+                      }
+                      placeholder="Optional"
+                    />
+                  </label>
+                </div>
+
+                <label>
+                  <span>Notes</span>
+                  <textarea
+                    value={form.notes}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        notes: event.target.value,
+                      }))
+                    }
+                    placeholder="Optional notes for admin records and resident notification"
+                    rows={4}
+                  />
+                </label>
+
+                <div className="info-card">
+                  <strong>Area-based route assignment</strong>
+                  <p>
+                    The selected route confirms the Barangay, covered Puroks,
+                    driver, and truck. This schedule repeats on every selected day
+                    at the same collection time.
+                  </p>
+                </div>
               </div>
 
-              <div className="modal-actions">
-                <button
-                  className="cancel-btn"
-                  onClick={() => {
-                    setShowForm(false);
-                    resetForm();
-                  }}
-                  disabled={isSaving}
-                >
+              <footer>
+                <button type="button" className="secondary" onClick={closeForm}>
                   Cancel
                 </button>
-
-                <button className="save-btn" onClick={saveSchedule} disabled={isSaving}>
-                  {isSaving ? "Saving..." : "Save Weekly Schedule + Notify"}
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={isSaving}
+                  onClick={saveSchedule}
+                >
+                  {isSaving ? "Saving…" : "Save Multi-Day Schedule + Notify"}
                 </button>
-              </div>
-            </div>
+              </footer>
+            </section>
           </div>
-        )}
-      </div>
-
-      <style jsx>{`
-        .schedule-page {
-          display: flex;
-          flex-direction: column;
-          gap: 18px;
-        }
-
-        .schedule-hero {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 20px;
-          padding: 24px;
-          border-radius: 28px;
-          background: linear-gradient(135deg, #064e3b, #059669);
-          color: #ffffff;
-          box-shadow: 0 24px 60px rgba(5, 150, 105, 0.18);
-        }
-
-        .eyebrow {
-          display: inline-flex;
-          color: #bbf7d0;
-          font-size: 12px;
-          font-weight: 900;
-          letter-spacing: 0.08em;
-          text-transform: uppercase;
-        }
-
-        .schedule-hero h1 {
-          margin: 8px 0 0;
-          font-size: 30px;
-          letter-spacing: -0.04em;
-        }
-
-        .schedule-hero p {
-          max-width: 680px;
-          margin: 8px 0 0;
-          color: #d1fae5;
-          font-size: 14px;
-          line-height: 1.55;
-        }
-
-        .hero-action,
-        .save-btn {
-          border: 0;
-          border-radius: 16px;
-          background: #22c55e;
-          color: #ffffff;
-          height: 46px;
-          padding: 0 18px;
-          font-weight: 900;
-          cursor: pointer;
-          box-shadow: 0 16px 30px rgba(34, 197, 94, 0.26);
-          white-space: nowrap;
-        }
-
-        .hero-action:hover,
-        .save-btn:hover:not(:disabled) {
-          background: #16a34a;
-        }
-
-        .success-banner {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          border: 1px solid #bbf7d0;
-          background: #f0fdf4;
-          color: #166534;
-          border-radius: 18px;
-          padding: 14px 16px;
-        }
-
-        .success-banner strong {
-          font-size: 14px;
-        }
-
-        .success-banner span {
-          flex: 1;
-          font-size: 13px;
-        }
-
-        .success-banner button {
-          width: 28px;
-          height: 28px;
-          border: 0;
-          border-radius: 50%;
-          background: #dcfce7;
-          color: #166534;
-          cursor: pointer;
-          font-size: 18px;
-        }
-
-        .schedule-stats {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 14px;
-        }
-
-        .stat-card {
-          background: #ffffff;
-          border: 1px solid #e5e7eb;
-          border-radius: 22px;
-          padding: 18px;
-          box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
-        }
-
-        .stat-card.green {
-          background: linear-gradient(135deg, #ecfdf5, #ffffff);
-        }
-
-        .stat-card.blue {
-          background: linear-gradient(135deg, #eff6ff, #ffffff);
-        }
-
-        .stat-card.dark {
-          background: linear-gradient(135deg, #0f172a, #064e3b);
-          color: #ffffff;
-        }
-
-        .stat-card span {
-          display: block;
-          color: #64748b;
-          font-size: 12px;
-          font-weight: 900;
-          margin-bottom: 8px;
-        }
-
-        .stat-card.dark span,
-        .stat-card.dark small {
-          color: #d1fae5;
-        }
-
-        .stat-card strong {
-          display: block;
-          color: inherit;
-          font-size: 34px;
-          line-height: 1;
-        }
-
-        .stat-card small {
-          display: block;
-          margin-top: 8px;
-          color: #64748b;
-          font-size: 12px;
-        }
-
-        .planner-flow {
-          display: grid;
-          grid-template-columns: 1fr 48px 1fr 48px 1fr;
-          align-items: center;
-          padding: 16px;
-          background: #ffffff;
-          border: 1px solid #e5e7eb;
-          border-radius: 22px;
-          box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
-        }
-
-        .flow-step {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-        }
-
-        .flow-step > span {
-          width: 34px;
-          height: 34px;
-          border-radius: 50%;
-          background: #ecfdf5;
-          color: #047857;
-          display: grid;
-          place-items: center;
-          font-weight: 900;
-        }
-
-        .flow-step strong {
-          display: block;
-          color: #0f172a;
-          font-size: 14px;
-        }
-
-        .flow-step small {
-          color: #64748b;
-          font-size: 12px;
-        }
-
-        .flow-line {
-          height: 1px;
-          background: #dbeafe;
-        }
-
-        .toolbar-card {
-          display: grid;
-          grid-template-columns: minmax(280px, 1.6fr) repeat(3, minmax(150px, 1fr)) auto;
-          gap: 10px;
-          background: #ffffff;
-          border: 1px solid #e5e7eb;
-          border-radius: 22px;
-          padding: 14px;
-          box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
-        }
-
-        .search-box {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          height: 44px;
-          background: #f8fafc;
-          border: 1px solid #e5e7eb;
-          border-radius: 14px;
-          padding: 0 12px;
-        }
-
-        .search-box span {
-          color: #64748b;
-          font-size: 18px;
-        }
-
-        .search-box input,
-        .toolbar-card select,
-        .modal-grid input,
-        .modal-grid select,
-        .modal-grid textarea {
-          width: 100%;
-          border: 1px solid #e5e7eb;
-          border-radius: 14px;
-          background: #f8fafc;
-          color: #0f172a;
-          outline: none;
-          font-size: 14px;
-        }
-
-        .search-box input {
-          border: 0;
-          background: transparent;
-        }
-
-        .toolbar-card select,
-        .clear-btn {
-          height: 44px;
-          padding: 0 12px;
-        }
-
-        .clear-btn,
-        .cancel-btn,
-        .complete-btn,
-        .danger-btn {
-          border: 0;
-          border-radius: 14px;
-          font-weight: 900;
-          cursor: pointer;
-        }
-
-        .clear-btn,
-        .cancel-btn {
-          background: #f1f5f9;
-          color: #334155;
-        }
-
-        .schedule-table-card {
-          background: #ffffff;
-          border: 1px solid #e5e7eb;
-          border-radius: 24px;
-          overflow: hidden;
-          box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
-        }
-
-        .table-header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 18px 20px;
-          border-bottom: 1px solid #e5e7eb;
-        }
-
-        .table-header h2 {
-          margin: 0;
-          color: #0f172a;
-          font-size: 18px;
-        }
-
-        .table-header p {
-          margin: 3px 0 0;
-          color: #64748b;
-          font-size: 13px;
-        }
-
-        .table-scroll {
-          overflow-x: auto;
-        }
-
-        .schedule-table {
-          width: 100%;
-          border-collapse: collapse;
-          min-width: 980px;
-        }
-
-        .schedule-table thead {
-          background: #f8fafc;
-        }
-
-        .schedule-table th {
-          text-align: left;
-          color: #64748b;
-          font-size: 12px;
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-          padding: 14px 16px;
-          border-bottom: 1px solid #e5e7eb;
-        }
-
-        .schedule-table th.right {
-          text-align: right;
-        }
-
-        .schedule-table td {
-          padding: 16px;
-          border-bottom: 1px solid #f1f5f9;
-          color: #334155;
-          font-size: 14px;
-          vertical-align: middle;
-        }
-
-        .schedule-table tr:last-child td {
-          border-bottom: 0;
-        }
-
-        .schedule-title strong,
-        .target-cell strong {
-          display: block;
-          color: #0f172a;
-          font-weight: 900;
-        }
-
-        .schedule-title span,
-        .target-cell span,
-        .weekly-cell small {
-          display: block;
-          margin-top: 4px;
-          color: #64748b;
-          font-size: 12px;
-        }
-
-        .weekly-pill,
-        .status-pill {
-          display: inline-flex;
-          align-items: center;
-          border-radius: 999px;
-          padding: 6px 10px;
-          font-size: 12px;
-          font-weight: 900;
-          white-space: nowrap;
-        }
-
-        .weekly-pill {
-          background: #eff6ff;
-          color: #1d4ed8;
-        }
-
-        .status-pill.active,
-        .status-pill.completed {
-          background: #dcfce7;
-          color: #166534;
-        }
-
-        .status-pill.cancelled,
-        .status-pill.inactive {
-          background: #fee2e2;
-          color: #991b1b;
-        }
-
-        .row-actions {
-          display: flex;
-          justify-content: flex-end;
-          gap: 8px;
-          flex-wrap: wrap;
-        }
-
-        .complete-btn {
-          height: 36px;
-          padding: 0 12px;
-          background: #dcfce7;
-          color: #166534;
-        }
-
-        .complete-btn:hover:not(:disabled) {
-          background: #bbf7d0;
-        }
-
-        .complete-btn:disabled {
-          background: #f1f5f9;
-          color: #64748b;
-          cursor: not-allowed;
-        }
-
-        .danger-btn {
-          height: 36px;
-          padding: 0 12px;
-          background: #fee2e2;
-          color: #b91c1c;
-        }
-
-        .danger-btn:hover {
-          background: #fecaca;
-        }
-
-        .empty-state {
-          padding: 44px 20px;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 6px;
-          color: #64748b;
-        }
-
-        .empty-state strong {
-          color: #0f172a;
-          font-size: 16px;
-        }
-
-        .modal-backdrop {
-          position: fixed;
-          inset: 0;
-          z-index: 9999;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          background: rgba(15, 23, 42, 0.55);
-          backdrop-filter: blur(6px);
-          padding: 20px;
-        }
-
-        .schedule-modal {
-          width: min(760px, 100%);
-          max-height: calc(100dvh - 40px);
-          overflow-y: auto;
-          background: #ffffff;
-          border-radius: 28px;
-          padding: 24px;
-          box-shadow: 0 30px 90px rgba(15, 23, 42, 0.35);
-        }
-
-        .modal-header {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 16px;
-          margin-bottom: 20px;
-        }
-
-        .modal-header h3 {
-          margin: 6px 0 0;
-          color: #0f172a;
-          font-size: 24px;
-          letter-spacing: -0.035em;
-        }
-
-        .modal-header p {
-          margin: 6px 0 0;
-          color: #64748b;
-          font-size: 13px;
-        }
-
-        .modal-close {
-          width: 36px;
-          height: 36px;
-          border: 0;
-          border-radius: 50%;
-          background: #f1f5f9;
-          color: #334155;
-          font-size: 24px;
-          cursor: pointer;
-        }
-
-        .modal-grid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 14px;
-        }
-
-        .modal-grid label {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-          color: #334155;
-          font-size: 13px;
-          font-weight: 900;
-        }
-
-        .modal-grid label.full {
-          grid-column: 1 / -1;
-        }
-
-        .multi-purok.full {
-          grid-column: 1 / -1;
-          padding: 14px;
-          border: 1px solid #dbe4df;
-          border-radius: 17px;
-          background: #f8faf9;
-        }
-
-        .multi-heading {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-        }
-
-        .multi-heading strong,
-        .multi-heading span {
-          display: block;
-        }
-
-        .multi-heading strong { color: #334155; font-size: 13px; }
-        .multi-heading span { margin-top: 3px; color: #64748b; font-size: 12px; }
-        .multi-heading button { border: 0; border-radius: 10px; background: #dcfce7; color: #166534; padding: 8px 10px; font-weight: 900; cursor: pointer; }
-
-        .purok-chips {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-          margin-top: 12px;
-        }
-
-        .purok-chips button {
-          border: 1px solid #dbe4df;
-          border-radius: 999px;
-          background: #ffffff;
-          color: #475569;
-          padding: 8px 11px;
-          font-size: 12px;
-          font-weight: 850;
-          cursor: pointer;
-        }
-
-        .purok-chips button.selected {
-          border-color: #10b981;
-          background: #dcfce7;
-          color: #166534;
-        }
-
-        .field-warning {
-          color: #b45309;
-          font-size: 11px;
-          font-weight: 700;
-          line-height: 1.4;
-        }
-
-        .modal-grid input,
-        .modal-grid select {
-          height: 46px;
-          padding: 0 12px;
-        }
-
-        .modal-grid textarea {
-          min-height: 92px;
-          resize: vertical;
-          padding: 12px;
-        }
-
-        .modal-grid input:focus,
-        .modal-grid select:focus,
-        .modal-grid textarea:focus {
-          border-color: #10b981;
-          background: #ffffff;
-          box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.12);
-        }
-
-        .suggestion-card {
-          margin-top: 16px;
-          display: flex;
-          justify-content: space-between;
-          gap: 14px;
-          align-items: center;
-          border: 1px solid #dcfce7;
-          background: #f0fdf4;
-          border-radius: 18px;
-          padding: 14px;
-        }
-
-        .suggestion-card strong {
-          display: block;
-          color: #166534;
-          font-size: 13px;
-        }
-
-        .suggestion-card span {
-          display: inline-flex;
-          margin-top: 4px;
-          color: #166534;
-          font-size: 12px;
-        }
-
-        .modal-actions {
-          display: flex;
-          justify-content: flex-end;
-          gap: 10px;
-          margin-top: 20px;
-        }
-
-        .cancel-btn,
-        .save-btn {
-          height: 44px;
-          padding: 0 16px;
-        }
-
-        .save-btn:disabled,
-        .cancel-btn:disabled {
-          opacity: 0.65;
-          cursor: not-allowed;
-        }
-
-        @media (max-width: 1180px) {
-          .schedule-stats {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+        ) : null}
+
+        <style jsx>{`
+          .schedule-page {
+            display: grid;
+            gap: 18px;
           }
 
-          .toolbar-card {
-            grid-template-columns: 1fr 1fr;
+          .hero {
+            display: flex;
+            justify-content: space-between;
+            gap: 24px;
+            padding: 28px;
+            border-radius: 22px;
+            color: #fff;
+            background: linear-gradient(135deg, #064e3b, #047857);
+            box-shadow: 0 20px 50px rgba(6, 78, 59, 0.18);
           }
 
-          .search-box {
-            grid-column: 1 / -1;
-          }
-        }
-
-        @media (max-width: 760px) {
-          .schedule-hero {
-            flex-direction: column;
-            align-items: flex-start;
+          .hero span,
+          .modal header span {
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
           }
 
-          .hero-action {
-            width: 100%;
+          .hero h1 {
+            margin: 8px 0;
+            font-size: 30px;
           }
 
-          .planner-flow {
-            grid-template-columns: 1fr;
+          .hero p {
+            max-width: 720px;
+            margin: 0;
+            color: rgba(255, 255, 255, 0.82);
+            line-height: 1.6;
+          }
+
+          .hero > button,
+          .primary {
+            align-self: center;
+            border: 0;
+            border-radius: 12px;
+            padding: 13px 18px;
+            background: #22c55e;
+            color: #052e16;
+            font-weight: 800;
+            cursor: pointer;
+          }
+
+          .success-banner {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 14px 16px;
+            border: 1px solid #86efac;
+            border-radius: 14px;
+            background: #f0fdf4;
+            color: #166534;
+          }
+
+          .success-banner button {
+            border: 0;
+            background: transparent;
+            color: inherit;
+            font-size: 20px;
+            cursor: pointer;
+          }
+
+          .metrics {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 12px;
           }
 
-          .flow-line {
-            display: none;
+          .schedule-card {
+            overflow: hidden;
+            border: 1px solid #dfe7e2;
+            border-radius: 18px;
+            background: #fff;
           }
 
-          .schedule-stats,
-          .toolbar-card,
-          .modal-grid {
-            grid-template-columns: 1fr;
+          .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            padding: 18px;
+            border-bottom: 1px solid #e5ebe7;
           }
 
-          .modal-actions {
-            flex-direction: column;
+          .toolbar h2,
+          .toolbar p {
+            margin: 0;
           }
 
-          .cancel-btn,
-          .save-btn {
+          .toolbar p {
+            margin-top: 4px;
+            color: #6b7b72;
+            font-size: 13px;
+          }
+
+          .toolbar input {
+            width: min(320px, 100%);
+          }
+
+          .table-wrap {
+            overflow-x: auto;
+          }
+
+          table {
             width: 100%;
+            min-width: 1100px;
+            border-collapse: collapse;
           }
+
+          th,
+          td {
+            padding: 14px 16px;
+            border-bottom: 1px solid #edf1ee;
+            text-align: left;
+            vertical-align: top;
+            font-size: 13px;
+          }
+
+          th {
+            color: #6b7b72;
+            background: #f8faf9;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+          }
+
+          td strong,
+          td small {
+            display: block;
+          }
+
+          td small {
+            margin-top: 4px;
+            color: #7b8a82;
+          }
+
+          .status-pill {
+            display: inline-flex;
+            border-radius: 999px;
+            padding: 5px 8px;
+            background: #ecfdf5;
+            color: #047857;
+            font-size: 11px;
+            font-weight: 700;
+          }
+
+          .delete-btn {
+            border: 1px solid #fecaca;
+            border-radius: 9px;
+            padding: 8px 10px;
+            background: #fff;
+            color: #b91c1c;
+            font-weight: 700;
+            cursor: pointer;
+          }
+
+          .empty-state {
+            padding: 48px;
+            text-align: center;
+            color: #77867e;
+          }
+
+          .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background: rgba(15, 23, 42, 0.55);
+            backdrop-filter: blur(5px);
+          }
+
+          .modal {
+            width: min(760px, 100%);
+            max-height: calc(100dvh - 48px);
+            overflow: auto;
+            border-radius: 20px;
+            background: #fff;
+            box-shadow: 0 28px 90px rgba(15, 23, 42, 0.28);
+          }
+
+          .modal header,
+          .modal footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            padding: 20px 22px;
+          }
+
+          .modal header {
+            border-bottom: 1px solid #e8eeea;
+          }
+
+          .modal footer {
+            justify-content: flex-end;
+            border-top: 1px solid #e8eeea;
+          }
+
+          .modal header h2,
+          .modal header p {
+            margin: 0;
+          }
+
+          .modal header h2 {
+            margin-top: 5px;
+          }
+
+          .modal header p {
+            margin-top: 5px;
+            color: #6b7b72;
+          }
+
+          .modal header > button {
+            width: 38px;
+            height: 38px;
+            border: 0;
+            border-radius: 50%;
+            background: #f1f5f3;
+            font-size: 22px;
+            cursor: pointer;
+          }
+
+          .modal-body {
+            display: grid;
+            gap: 18px;
+            padding: 22px;
+          }
+
+          .form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+          }
+
+          label {
+            display: grid;
+            gap: 7px;
+          }
+
+          label > span {
+            color: #34463c;
+            font-size: 12px;
+            font-weight: 800;
+          }
+
+          input,
+          select,
+          textarea {
+            width: 100%;
+            border: 1px solid #d5dfd9;
+            border-radius: 11px;
+            padding: 11px 12px;
+            background: #fff;
+            color: #17231d;
+            outline: 0;
+          }
+
+          textarea {
+            resize: vertical;
+          }
+
+          input:focus,
+          select:focus,
+          textarea:focus {
+            border-color: #10b981;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
+          }
+
+          .purok-panel {
+            border: 1px solid #dce6e0;
+            border-radius: 15px;
+            padding: 16px;
+            background: #fbfdfc;
+          }
+
+          .panel-heading {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 16px;
+          }
+
+          .panel-heading h3,
+          .panel-heading p {
+            margin: 0;
+          }
+
+          .panel-heading p {
+            margin-top: 4px;
+            color: #718078;
+            font-size: 13px;
+          }
+
+          .panel-heading button,
+          .secondary {
+            border: 1px solid #d7e1db;
+            border-radius: 9px;
+            padding: 8px 10px;
+            background: #fff;
+            color: #33443b;
+            font-weight: 700;
+            cursor: pointer;
+          }
+
+          .purok-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 8px;
+            margin-top: 14px;
+          }
+
+          .purok-grid button {
+            display: inline-flex;
+            justify-content: center;
+            gap: 6px;
+            border: 1px solid #d7e1db;
+            border-radius: 10px;
+            padding: 10px 8px;
+            background: #fff;
+            color: #34463c;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+          }
+
+          .purok-grid button.selected {
+            border-color: #10b981;
+            background: #ecfdf5;
+            color: #047857;
+          }
+
+          .day-time-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.55fr) minmax(220px, 0.45fr);
+            gap: 14px;
+            align-items: stretch;
+          }
+
+          .day-panel {
+            border: 1px solid #dce6e0;
+            border-radius: 15px;
+            padding: 16px;
+            background: linear-gradient(180deg, #fbfdfc, #f7fbf9);
+          }
+
+          .day-actions {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 7px;
+          }
+
+          .day-actions button {
+            border: 1px solid #d7e1db;
+            border-radius: 9px;
+            padding: 7px 9px;
+            background: #ffffff;
+            color: #33443b;
+            font-size: 11px;
+            font-weight: 800;
+            cursor: pointer;
+          }
+
+          .day-grid {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            gap: 8px;
+            margin-top: 14px;
+          }
+
+          .day-grid button {
+            min-height: 46px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            border: 1px solid #d6e1da;
+            border-radius: 11px;
+            background: #ffffff;
+            color: #43564b;
+            font-size: 12px;
+            font-weight: 800;
+            cursor: pointer;
+            transition:
+              transform 140ms ease,
+              border-color 140ms ease,
+              background 140ms ease,
+              color 140ms ease;
+          }
+
+          .day-grid button:hover {
+            transform: translateY(-1px);
+            border-color: #86efac;
+          }
+
+          .day-grid button.selected {
+            border-color: #16a34a;
+            background: #dcfce7;
+            color: #166534;
+            box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.09);
+          }
+
+          .selection-summary {
+            margin: 12px 0 0;
+            color: #52655a;
+            font-size: 12px;
+            font-weight: 700;
+          }
+
+          .time-field {
+            align-content: start;
+            border: 1px solid #dce6e0;
+            border-radius: 15px;
+            padding: 16px;
+            background: #fbfdfc;
+          }
+
+          .time-field small {
+            color: #718078;
+            font-size: 11px;
+            line-height: 1.5;
+          }
+
+          .warning-card {
+            border: 1px solid #fdba74;
+            border-radius: 12px;
+            padding: 12px 14px;
+            background: #fff7ed;
+            color: #9a3412;
+            font-size: 13px;
+          }
+
+          .info-card {
+            border: 1px solid #a7f3d0;
+            border-radius: 14px;
+            padding: 14px;
+            background: #ecfdf5;
+            color: #065f46;
+          }
+
+          .info-card strong,
+          .info-card p {
+            display: block;
+            margin: 0;
+          }
+
+          .info-card p {
+            margin-top: 5px;
+            line-height: 1.55;
+            font-size: 13px;
+          }
+
+          @media (max-width: 1000px) {
+            .metrics {
+              grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+          }
+
+          @media (max-width: 900px) {
+            .day-time-grid {
+              grid-template-columns: 1fr;
+            }
+
+            .day-grid {
+              grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
+          }
+
+          @media (max-width: 700px) {
+            .hero,
+            .toolbar,
+            .panel-heading {
+              flex-direction: column;
+              align-items: stretch;
+            }
+
+            .form-grid {
+              grid-template-columns: 1fr;
+            }
+
+            .purok-grid {
+              grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .day-grid {
+              grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .day-actions {
+              justify-content: flex-start;
+            }
+
+            .metrics {
+              grid-template-columns: 1fr;
+            }
+          }
+        `}</style>
+      </div>
+    </DashboardShell>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <article className="metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <style jsx>{`
+        .metric {
+          display: grid;
+          gap: 5px;
+          padding: 17px;
+          border: 1px solid #dfe7e2;
+          border-radius: 15px;
+          background: #fff;
+        }
+
+        span {
+          color: #728078;
+          font-size: 12px;
+        }
+
+        strong {
+          color: #153026;
+          font-size: 24px;
         }
       `}</style>
-    </DashboardShell>
+    </article>
   );
 }

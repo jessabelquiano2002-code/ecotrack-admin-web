@@ -149,12 +149,6 @@ const IconBook = () => (
   </svg>
 );
 
-const IconCompliance = () => (
-  <svg viewBox="0 0 24 24" className="admin-svg-icon">
-    <path d="M12 2 20 5v6c0 5.2-3.4 9.7-8 11-4.6-1.3-8-5.8-8-11V5l8-3Zm-1.1 13.7 5.7-5.7-1.4-1.4-4.3 4.3-2.1-2.1-1.4 1.4 3.5 3.5Z" />
-  </svg>
-);
-
 const links: SidebarLink[] = [
   {
     href: "/dashboard",
@@ -191,12 +185,6 @@ const links: SidebarLink[] = [
     label: "Onboarding & Content",
     group: "MANAGEMENT",
     icon: <IconBook />,
-  },
-  {
-    href: "/resident-compliance",
-    label: "Resident Compliance",
-    group: "MANAGEMENT",
-    icon: <IconCompliance />,
   },
   {
     href: "/issues",
