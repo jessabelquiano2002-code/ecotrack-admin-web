@@ -22,3 +22,4 @@ service-account*.json
 
 .vercel
 .env*
+*.zip
