@@ -19,3 +19,6 @@ service-account*.json
 .env.local
 *firebase-adminsdk*.json
 **/serviceAccountKey.json
+
+.vercel
+.env*

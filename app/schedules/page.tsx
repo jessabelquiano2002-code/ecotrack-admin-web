@@ -2,7 +2,7 @@
 
 import { onValue, push, ref, remove, set } from "firebase/database";
 import { useEffect, useMemo, useState } from "react";
-import { db } from "../../lib/firebase";
+import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
 
 const BARANGAYS = [
@@ -283,6 +283,36 @@ export default function SchedulesPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("source") !== "agency-report") return;
+
+    const requestedBarangay = params.get("barangay") || "";
+    const requestedPurok = params.get("purok") || "";
+    const recommendedSlots = Math.max(1, Number(params.get("recommendedSlots") || 1));
+
+    const barangay = BARANGAYS.find(
+      (item) => item.toLowerCase() === requestedBarangay.toLowerCase(),
+    ) || requestedBarangay;
+
+    const normalizedRequestedPurok = normalizePurokLabel(requestedPurok);
+    const purok = PUROKS.find(
+      (item) => item.toLowerCase() === normalizedRequestedPurok.toLowerCase(),
+    );
+
+    if (!barangay) return;
+
+    setSelectedBarangay(barangay);
+    setSelectedPuroks(purok ? [purok] : []);
+    setSelectedDays([]);
+    setForm({
+      ...EMPTY_FORM,
+      title: `${barangay}${purok ? ` ${purok}` : ""} — Additional Collection`,
+      notes: `Recommended by Metro Waste Agency Report: consider ${recommendedSlots} additional weekly collection slot${recommendedSlots === 1 ? "" : "s"}. Review route, driver, truck, day, and time before saving.`,
+    });
+    setShowForm(true);
+  }, []);
+
   const compatibleRoutes = useMemo(() => {
     if (!selectedBarangay || selectedPuroks.length === 0) return [];
 
@@ -474,6 +504,50 @@ export default function SchedulesPage() {
     }
 
     await Promise.all(writes);
+
+    /*
+     * Realtime Database writes populate the in-app Alerts/Schedule history,
+     * but they do NOT wake a closed Android app. Send a real FCM push too.
+     */
+    try {
+      const currentAdmin = auth.currentUser;
+
+      if (!currentAdmin) {
+        console.warn("Schedule saved, but FCM was skipped because the admin session is unavailable.");
+        return;
+      }
+
+      const idToken = await currentAdmin.getIdToken();
+
+      const pushResponse = await fetch("/api/send-alert", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          title: notificationTitle,
+          message,
+          type: "schedule",
+          target: "resident",
+          barangay,
+          puroks,
+          scheduleId,
+          scheduleTitle: title,
+          status,
+        }),
+      });
+
+      if (!pushResponse.ok) {
+        const result = await pushResponse.json().catch(() => ({}));
+        console.warn(
+          "Schedule was saved but phone push failed:",
+          result?.error || pushResponse.statusText,
+        );
+      }
+    } catch (error) {
+      console.warn("Schedule was saved but FCM push could not be sent:", error);
+    }
   };
 
   const hasPotentialConflict = (): boolean =>

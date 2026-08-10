@@ -119,6 +119,12 @@ const IconAnalytics = () => (
   </svg>
 );
 
+const IconAgencyReport = () => (
+  <svg viewBox="0 0 24 24" className="admin-svg-icon">
+    <path d="M5 2h10l4 4v16H5V2Zm9 2v3h3l-3-3ZM8 10h8v2H8v-2Zm0 4h8v2H8v-2Zm0 4h5v2H8v-2Z" />
+  </svg>
+);
+
 const IconBell = () => (
   <svg viewBox="0 0 24 24" className="admin-svg-icon">
     <path d="M12 22a2.8 2.8 0 0 0 2.7-2h-5.4A2.8 2.8 0 0 0 12 22Zm7-6-1.5-1.8V10a5.5 5.5 0 0 0-4.3-5.4V3a1.2 1.2 0 0 0-2.4 0v1.6A5.5 5.5 0 0 0 6.5 10v4.2L5 16v1h14v-1Z" />
@@ -191,6 +197,12 @@ const links: SidebarLink[] = [
     label: "Driver & Resident Issues",
     group: "MANAGEMENT",
     icon: <IconWarning />,
+  },
+  {
+    href: "/agency-report",
+    label: "Agency Report",
+    group: "REPORTS",
+    icon: <IconAgencyReport />,
   },
   {
     href: "/analytics",

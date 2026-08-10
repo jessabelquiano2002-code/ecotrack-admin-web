@@ -154,6 +154,7 @@ export async function POST(request: NextRequest) {
     const active = activeSnapshot.val() as {
       sessionId?: string;
       scheduleId?: string;
+      startedAt?: number;
     } | null;
 
     let sessionId =
@@ -195,6 +196,17 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    const refreshedActiveSnapshot = await activeReference.get();
+    const refreshedActive = refreshedActiveSnapshot.val() as {
+      sessionId?: string;
+      scheduleId?: string;
+      startedAt?: number;
+    } | null;
+
+    const activeSessionStartedAt = Number(
+      refreshedActive?.startedAt || timestamp,
+    );
+
     const sessionReference = adminDb.ref(
       `route_sessions/${scheduleId}/${sessionId}`,
     );
@@ -224,6 +236,13 @@ export async function POST(request: NextRequest) {
 
     const latestLocation = {
       driverId: driver.uid,
+      driverName: String(
+        schedule.driverName || route.assignedDriverName || "Assigned Driver",
+      ),
+      truckId: String(schedule.truckId || route.assignedVehicle || ""),
+      routeName: String(
+        route.routeName || schedule.routeName || "Collection route",
+      ),
       latitude: lat,
       longitude: lng,
       lat,
@@ -236,8 +255,16 @@ export async function POST(request: NextRequest) {
       scheduleId,
       routeId,
       sessionId,
+      startedAt: activeSessionStartedAt,
       barangay: routeBarangay,
       puroks: assignedPuroks,
+
+      // Resident apps use this as the authoritative switch:
+      // true from Start Collection until the driver presses Finish & Verify.
+      trackingActive: !finishRequested,
+      routeStatus: finishRequested ? "Completed" : "Ongoing",
+      finishedAt: finishRequested ? timestamp : null,
+
       locationQuality: accurateEnough ? "accepted" : "inaccurate",
     };
 
