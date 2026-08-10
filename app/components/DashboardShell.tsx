@@ -199,6 +199,12 @@ const links: SidebarLink[] = [
     icon: <IconWarning />,
   },
   {
+    href: "/activity-requests",
+    label: "Driver Activity Requests",
+    group: "REPORTS",
+    icon: <IconBook />,
+  },
+  {
     href: "/agency-report",
     label: "Agency Report",
     group: "REPORTS",
