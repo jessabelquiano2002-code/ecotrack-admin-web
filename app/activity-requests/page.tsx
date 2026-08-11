@@ -13,6 +13,8 @@ import { DashboardShell } from "../components/DashboardShell";
   truck?: string;
   period?: string;
   periodLabel?: string;
+  requestedDateKey?: string;
+  requestedDateDisplay?: string;
   fromTimestamp?: number;
   toTimestamp?: number;
   requestedAt?: number;
@@ -164,7 +166,7 @@ export default function DriverActivityRequestsPage() {
       if (filter === "sent" && status !== "sent" && status !== "delivered") return false;
 
       if (!keyword) return true;
-      return `${request.driverName || ""} ${request.truck || ""} ${request.periodLabel || ""} ${status}`
+      return `${request.driverName || ""} ${request.truck || ""} ${request.periodLabel || ""} ${request.requestedDateDisplay || ""} ${status}`
         .toLowerCase()
         .includes(keyword);
     });
@@ -244,8 +246,10 @@ export default function DriverActivityRequestsPage() {
         driverId: request.driverId,
         driverName: request.driverName || "Driver",
         truck: request.truck || "-",
-        period: request.period || "today",
-        periodLabel: request.periodLabel || "Requested activity period",
+        period: request.period || "specific_date",
+        periodLabel: request.periodLabel || request.requestedDateDisplay || "Requested activity date",
+        requestedDateKey: request.requestedDateKey || "",
+        requestedDateDisplay: request.requestedDateDisplay || formatDate(request.fromTimestamp),
         fromTimestamp: num(request.fromTimestamp),
         toTimestamp: num(request.toTimestamp),
         requestedAt: num(request.requestedAt),
@@ -322,7 +326,7 @@ export default function DriverActivityRequestsPage() {
   return (
     <DashboardShell
       title="Driver Activity Requests"
-      description="Review driver requests for today's or the last 7 days' activity and send printable reports back to the requesting driver."
+      description="Review activity-report requests for exact driver-selected calendar dates and send printable reports back to the requesting driver."
     >
       <div className="activity-page">
         <div className="toolbar">
@@ -340,7 +344,7 @@ export default function DriverActivityRequestsPage() {
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search driver, truck, period..."
+            placeholder="Search driver, truck, selected date..."
           />
         </div>
 
@@ -364,7 +368,7 @@ export default function DriverActivityRequestsPage() {
                 <div className="period-box">
                   <strong>{request.periodLabel || "Requested activity"}</strong>
                   <span>
-                    {formatDate(request.fromTimestamp)} - {formatDate(request.toTimestamp)}
+                    Selected date: {request.requestedDateDisplay || formatDate(request.fromTimestamp)}
                   </span>
                 </div>
 
