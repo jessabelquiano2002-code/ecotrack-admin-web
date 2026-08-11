@@ -364,8 +364,54 @@ export async function POST(request: NextRequest) {
         String(schedule.scheduleType || "").toLowerCase() === "weekly" ||
         String(schedule.repeat || "").toLowerCase() === "weekly";
 
+      /*
+       * DriverMapActivity saves the driver's finish form here BEFORE it asks
+       * RouteTrackingService to finish the GPS session. Persist that form into
+       * collection_reports so historical reports do not depend on a temporary
+       * pending summary. This uses Realtime Database only.
+       */
+      const pendingSummaryReference = adminDb.ref(
+        `pending_collection_summaries/${driver.uid}/${scheduleId}`,
+      );
+      const pendingSummarySnapshot = await pendingSummaryReference.get();
+      const pendingSummary = (pendingSummarySnapshot.val() || {}) as Record<
+        string,
+        unknown
+      >;
+
+      const reportedAssignedPuroks = normalizeStringArray(
+        pendingSummary.assignedPuroks || pendingSummary.puroks || assignedPuroks,
+      );
+      const claimedPuroks = normalizeStringArray(
+        pendingSummary.claimedPuroks ||
+          pendingSummary.visitedPuroks ||
+          assignedPuroks,
+      );
+      const unclaimedPuroks = normalizeStringArray(
+        pendingSummary.unclaimedPuroks,
+      );
+      const pendingLoadValue = Number(pendingSummary.truckLoadPercent);
+      const reportedTruckLoadPercent =
+        Number.isFinite(pendingLoadValue) && pendingLoadValue >= 0
+          ? Math.min(100, pendingLoadValue)
+          : null;
+      const completionReason = String(
+        pendingSummary.completionReason ||
+          (unclaimedPuroks.length > 0 ? "partial_collection" : "completed"),
+      );
+      const collectionCondition = String(
+        pendingSummary.collectionCondition || "Normal collection",
+      );
+      const collectionStatus =
+        unclaimedPuroks.length > 0 ||
+        completionReason.toLowerCase().includes("partial") ||
+        completionReason.toLowerCase().includes("truck_full")
+          ? "partially_completed"
+          : "completed";
+
       const report = {
         reportId: sessionId,
+        sessionId,
         scheduleId,
         routeId,
         routeName:
@@ -374,16 +420,35 @@ export async function POST(request: NextRequest) {
         routeType: "service-area",
         trackingMode: "barangay-purok",
         driverId: driver.uid,
-        driverName: schedule.driverName || route.assignedDriverName || "",
-        truckId: schedule.truckId || route.assignedVehicle || "",
-        barangay: routeBarangay,
-        puroks: assignedPuroks,
-        status: "completed",
-        collectionStatus: "completed",
+        driverName:
+          String(pendingSummary.driverName || "") ||
+          schedule.driverName ||
+          route.assignedDriverName ||
+          "",
+        truckId:
+          String(pendingSummary.truckId || pendingSummary.truck || "") ||
+          schedule.truckId ||
+          route.assignedVehicle ||
+          "",
+        barangay: String(pendingSummary.barangay || routeBarangay),
+        assignedPuroks: reportedAssignedPuroks,
+        puroks: reportedAssignedPuroks,
+        claimedPuroks,
+        visitedPuroks: claimedPuroks,
+        unclaimedPuroks,
+        status: collectionStatus,
+        collectionStatus,
         source: "driver_gps_session",
         routeProgress: 100,
         routePassed: true,
-        visitedPuroks: assignedPuroks,
+        allPuroksVisited: unclaimedPuroks.length === 0,
+        wasteType: String(pendingSummary.wasteType || ""),
+        truckLoadFraction: String(pendingSummary.truckLoadFraction || ""),
+        truckLoadLabel: String(pendingSummary.truckLoadLabel || ""),
+        truckLoadPercent: reportedTruckLoadPercent,
+        completionReason,
+        collectionCondition,
+        driverNotes: String(pendingSummary.driverNotes || ""),
         startTime,
         completedAt: timestamp,
         distanceTravelledMeters: Math.round(travelledDistance),
@@ -391,6 +456,8 @@ export async function POST(request: NextRequest) {
           0,
           Math.round((timestamp - startTime) / 1000),
         ),
+        gpsHistoryPath: `gps_route_history/${scheduleId}/${sessionId}/points`,
+        gpsPointCount: historyPoints.length,
         timestamp,
       };
 
@@ -398,15 +465,23 @@ export async function POST(request: NextRequest) {
         adminDb.ref(`collection_reports/${sessionId}`).set(report),
         adminDb.ref(`schedules/${scheduleId}`).update({
           status: recurringSchedule ? "active" : "completed",
-          lastRunStatus: "completed",
+          lastRunStatus: collectionStatus,
           lastCompletedAt: timestamp,
           lastCompletedDate: dateKey,
           lastCollectionReportId: sessionId,
           routeProgress: 100,
-          routeStatus: "Completed",
+          routeStatus:
+            collectionStatus === "partially_completed"
+              ? "Partially Completed"
+              : "Completed",
           updatedAt: now,
         }),
       ]);
+
+      // The operational summary is now safely persisted in collection_reports.
+      // Remove the temporary per-schedule summary so a future recurring run
+      // cannot accidentally reuse stale truck-load or Purok data.
+      await pendingSummaryReference.remove();
     }
 
     return NextResponse.json({
