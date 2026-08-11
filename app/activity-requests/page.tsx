@@ -5,7 +5,7 @@ import { onValue, push, ref, set, update } from "firebase/database";
 import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
 
- type ActivityRequest = {
+type ActivityRequest = {
   id: string;
   requestId?: string;
   driverId?: string;
@@ -21,10 +21,14 @@ import { DashboardShell } from "../components/DashboardShell";
   sentAt?: number;
   status?: string;
   adminNote?: string;
+  pushStatus?: string;
+  pushSentAt?: number;
 };
 
 type CollectionReport = {
   reportId: string;
+  scheduleId?: string;
+  routeId?: string;
   driverId?: string;
   driverName?: string;
   truckId?: string;
@@ -191,16 +195,20 @@ export default function DriverActivityRequestsPage() {
     if (busyRequestId) return;
 
     setBusyRequestId(request.id);
+
     try {
       const matched = matchingReports(request);
+
       const completedCount = matched.filter((item) => {
         const status = str(item.collectionStatus || item.status).toLowerCase();
         return status === "completed" || status === "complete";
       }).length;
+
       const partialCount = matched.filter((item) => {
         const status = str(item.collectionStatus || item.status).toLowerCase();
         return status.includes("partial");
       }).length;
+
       const fullTruckCount = matched.filter(isFullTruck).length;
       const totalDistanceMeters = matched.reduce(
         (sum, item) => sum + num(item.distanceTravelledMeters),
@@ -211,55 +219,84 @@ export default function DriverActivityRequestsPage() {
         0,
       );
 
+      /*
+       * IMPORTANT: No Firebase Storage is used.
+       * We do not copy screenshots or map images.
+       * Every activity only stores the Realtime Database path of its real GPS
+       * session. The Driver app can render the map from this path:
+       * gps_route_history/{scheduleId}/{sessionId}/points
+       */
       const activities = Object.fromEntries(
-        matched.map((item) => [
-          item.reportId,
-          {
-            reportId: item.reportId,
-            routeName: item.routeName || item.scheduleName || "Collection route",
-            scheduleName: item.scheduleName || "",
-            barangay: item.barangay || "",
-            assignedPuroks: stringList(item.assignedPuroks || item.puroks),
-            claimedPuroks: stringList(item.claimedPuroks || item.visitedPuroks),
-            unclaimedPuroks: stringList(item.unclaimedPuroks),
-            collectionStatus: item.collectionStatus || item.status || "",
-            truckLoadFraction: item.truckLoadFraction || "",
-            truckLoadLabel: item.truckLoadLabel || "",
-            truckLoadPercent: num(item.truckLoadPercent),
-            completionReason: item.completionReason || "",
-            collectionCondition: item.collectionCondition || "",
-            driverNotes: item.driverNotes || "",
-            routeProgress: num(item.routeProgress),
-            startTime: num(item.startTime),
-            completedAt: num(item.completedAt),
-            timestamp: collectionTimestamp(item),
-            distanceTravelledMeters: num(item.distanceTravelledMeters),
-            durationSeconds: num(item.durationSeconds),
-          },
-        ]),
+        matched.map((item) => {
+          const scheduleId = str(item.scheduleId);
+          const sessionId = item.reportId;
+
+          return [
+            item.reportId,
+            {
+              reportId: item.reportId,
+              sessionId,
+              scheduleId,
+              routeId: item.routeId || "",
+              mapSource: "realtime_database",
+              mapPath:
+                scheduleId && sessionId
+                  ? `gps_route_history/${scheduleId}/${sessionId}/points`
+                  : "",
+              routeName: item.routeName || item.scheduleName || "Collection route",
+              scheduleName: item.scheduleName || "",
+              barangay: item.barangay || "",
+              assignedPuroks: stringList(item.assignedPuroks || item.puroks),
+              claimedPuroks: stringList(item.claimedPuroks || item.visitedPuroks),
+              unclaimedPuroks: stringList(item.unclaimedPuroks),
+              collectionStatus: item.collectionStatus || item.status || "",
+              truckLoadFraction: item.truckLoadFraction || "",
+              truckLoadLabel: item.truckLoadLabel || "",
+              truckLoadPercent: num(item.truckLoadPercent),
+              completionReason: item.completionReason || "",
+              collectionCondition: item.collectionCondition || "",
+              driverNotes: item.driverNotes || "",
+              routeProgress: num(item.routeProgress),
+              startTime: num(item.startTime),
+              completedAt: num(item.completedAt),
+              timestamp: collectionTimestamp(item),
+              distanceTravelledMeters: num(item.distanceTravelledMeters),
+              durationSeconds: num(item.durationSeconds),
+            },
+          ];
+        }),
       );
 
       const now = Date.now();
       const sentBy = auth.currentUser?.email || auth.currentUser?.uid || "Administrator";
+      const periodLabel =
+        request.requestedDateDisplay ||
+        request.periodLabel ||
+        "Requested activity period";
+
       const reportPayload = {
         requestId: request.id,
         driverId: request.driverId,
         driverName: request.driverName || "Driver",
         truck: request.truck || "-",
         period: request.period || "specific_date",
-        periodLabel: request.periodLabel || request.requestedDateDisplay || "Requested activity date",
+        periodLabel,
         requestedDateKey: request.requestedDateKey || "",
-        requestedDateDisplay: request.requestedDateDisplay || formatDate(request.fromTimestamp),
+        requestedDateDisplay: request.requestedDateDisplay || periodLabel,
         fromTimestamp: num(request.fromTimestamp),
         toTimestamp: num(request.toTimestamp),
         requestedAt: num(request.requestedAt),
         generatedAt: now,
         generatedBy: sentBy,
+        mapStorage: "realtime_database_only",
         summary: {
           tripCount: matched.length,
           completedCount,
           partialCount,
           fullTruckCount,
+          mappedTripCount: matched.filter(
+            (item) => Boolean(str(item.scheduleId) && item.reportId),
+          ).length,
           totalDistanceMeters: Math.round(totalDistanceMeters),
           totalDurationSeconds: Math.round(totalDurationSeconds),
         },
@@ -267,16 +304,21 @@ export default function DriverActivityRequestsPage() {
       };
 
       const driverNotification = {
-        title: "Activity report ready",
-        message: `Your ${request.periodLabel || "requested"} activity report is ready to view and print.`,
+        title: "Activity Report Ready",
+        message: `Your ${periodLabel} activity report with GPS activity map is ready to view and print.`,
         type: "driver_activity_report_ready",
         driverId: request.driverId,
         requestId: request.id,
+        periodLabel,
+        requestedDateKey: request.requestedDateKey || "",
+        requestedDateDisplay: request.requestedDateDisplay || periodLabel,
         timestamp: now,
         seen: false,
       };
 
-      const notificationId = push(ref(db, `driver_notifications/${request.driverId}`)).key;
+      const notificationId = push(
+        ref(db, `driver_notifications/${request.driverId}`),
+      ).key;
 
       await Promise.all([
         set(ref(db, `driver_activity_reports/${request.id}`), reportPayload),
@@ -286,6 +328,9 @@ export default function DriverActivityRequestsPage() {
           updatedAt: now,
           sentBy,
           reportActivityCount: matched.length,
+          reportMappedTripCount: matched.filter(
+            (item) => Boolean(str(item.scheduleId) && item.reportId),
+          ).length,
         }),
         notificationId
           ? set(
@@ -294,6 +339,60 @@ export default function DriverActivityRequestsPage() {
             )
           : Promise.resolve(),
       ]);
+
+      /*
+       * Send the real Android phone notification.
+       * The report is already safely saved in Realtime Database, so a push
+       * failure will never erase or cancel the report.
+       */
+      try {
+        const currentUser = auth.currentUser;
+        if (!currentUser) throw new Error("Administrator session unavailable.");
+
+        const idToken = await currentUser.getIdToken();
+        const response = await fetch("/api/driver-activity-notify", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            driverId: request.driverId,
+            requestId: request.id,
+            periodLabel,
+            requestedDateDisplay: request.requestedDateDisplay || periodLabel,
+          }),
+        });
+
+        const result = await response.json().catch(() => null);
+
+        if (!response.ok) {
+          await update(ref(db, `driver_activity_requests/${request.id}`), {
+            pushStatus: "failed",
+            pushError: result?.message || "Unable to send phone notification.",
+            updatedAt: Date.now(),
+          });
+
+          console.warn("Activity report saved, but push notification failed:", result);
+          return;
+        }
+
+        await update(ref(db, `driver_activity_requests/${request.id}`), {
+          pushStatus: "sent",
+          pushSentAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      } catch (pushError) {
+        console.error("Activity report saved, but phone notification failed:", pushError);
+        await update(ref(db, `driver_activity_requests/${request.id}`), {
+          pushStatus: "failed",
+          pushError:
+            pushError instanceof Error
+              ? pushError.message
+              : "Unknown notification error",
+          updatedAt: Date.now(),
+        });
+      }
     } catch (error) {
       console.error("Unable to send driver activity report", error);
       window.alert("Unable to send the activity report. Please try again.");
@@ -326,7 +425,7 @@ export default function DriverActivityRequestsPage() {
   return (
     <DashboardShell
       title="Driver Activity Requests"
-      description="Review activity-report requests for exact driver-selected calendar dates and send printable reports back to the requesting driver."
+      description="Review exact-date driver requests, generate printable reports with linked GPS activity maps, and notify the requesting driver."
     >
       <div className="activity-page">
         <div className="toolbar">
@@ -344,7 +443,7 @@ export default function DriverActivityRequestsPage() {
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search driver, truck, selected date..."
+            placeholder="Search driver, truck, date..."
           />
         </div>
 
@@ -366,15 +465,21 @@ export default function DriverActivityRequestsPage() {
                 </div>
 
                 <div className="period-box">
-                  <strong>{request.periodLabel || "Requested activity"}</strong>
+                  <strong>{request.requestedDateDisplay || request.periodLabel || "Requested activity"}</strong>
                   <span>
-                    Selected date: {request.requestedDateDisplay || formatDate(request.fromTimestamp)}
+                    {formatDate(request.fromTimestamp)} - {formatDate(request.toTimestamp)}
                   </span>
                 </div>
 
                 <div className="facts">
                   <div><span>Requested</span><strong>{formatDateTime(request.requestedAt)}</strong></div>
                   <div><span>Matching trips</span><strong>{matchedCount}</strong></div>
+                  <div>
+                    <span>GPS maps</span>
+                    <strong>
+                      {matchingReports(request).filter((item) => Boolean(str(item.scheduleId) && item.reportId)).length}
+                    </strong>
+                  </div>
                   <div><span>Status</span><strong>{isSent ? `Sent ${formatDateTime(request.sentAt)}` : status}</strong></div>
                 </div>
 
@@ -433,7 +538,7 @@ export default function DriverActivityRequestsPage() {
         .period-box { display: grid; gap: 4px; margin-top: 15px; padding: 12px; border-radius: 12px; background: #f8fafc; border: 1px solid #e9eef3; }
         .period-box strong { color: #0f172a; }
         .period-box span { color: #64748b; font-size: 12px; }
-        .facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+        .facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
         .facts div { display: grid; gap: 4px; }
         .facts span { color: #94a3b8; font-size: 10px; text-transform: uppercase; font-weight: 800; }
         .facts strong { color: #334155; font-size: 12px; }
