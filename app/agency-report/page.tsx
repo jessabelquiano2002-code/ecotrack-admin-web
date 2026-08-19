@@ -5,10 +5,7 @@ import { MetroWastePlanningReport } from "../components/MetroWastePlanningReport
 
 export default function AgencyReportPage() {
   return (
-    <DashboardShell
-      title="Operations Report"
-      description="Generate professional whole-system WasteTrack operational reports from realtime collection, GPS, driver, truck, issue, and schedule records."
-    >
+    <DashboardShell title="" description="">
       <MetroWastePlanningReport />
     </DashboardShell>
   );

@@ -30,45 +30,54 @@ export default function ProfilePage() {
   const [profile, setProfile] = useState<AdminProfile>(emptyProfile);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [photoSaving, setPhotoSaving] = useState(false);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) {
+        setUid("");
+        setProfile(emptyProfile);
         setLoading(false);
         return;
       }
 
+      setLoading(true);
       setUid(user.uid);
 
-      const profileRef = ref(db, `adminProfile/${user.uid}`);
-      const snap = await get(profileRef);
+      try {
+        const profileRef = ref(db, `adminProfile/${user.uid}`);
+        const snap = await get(profileRef);
 
-      if (snap.exists()) {
-        const data = snap.val();
+        if (snap.exists()) {
+          const data = snap.val() || {};
 
-        setProfile({
-          name: data.name || "Admin User",
-          email: data.email || user.email || "",
-          phone: data.phone || "",
-          role: data.role || "System Admin",
-          profileImage: data.profileImage || "",
-          updatedAt: data.updatedAt,
-        });
-      } else {
-        const starterProfile: AdminProfile = {
-          name: "Admin User",
-          email: user.email || "",
-          phone: "",
-          role: "System Admin",
-          profileImage: "",
-          updatedAt: Date.now(),
-        };
+          setProfile({
+            name: data.name || "Admin User",
+            email: data.email || user.email || "",
+            phone: data.phone || "",
+            role: data.role || "System Admin",
+            profileImage: data.profileImage || "",
+            updatedAt: data.updatedAt,
+          });
+        } else {
+          const starterProfile: AdminProfile = {
+            name: "Admin User",
+            email: user.email || "",
+            phone: "",
+            role: "System Admin",
+            profileImage: "",
+            updatedAt: Date.now(),
+          };
 
-        await set(profileRef, starterProfile);
-        setProfile(starterProfile);
+          await set(profileRef, starterProfile);
+          setProfile(starterProfile);
+        }
+      } catch (error) {
+        console.error("Failed to load admin profile:", error);
+        alert("Failed to load profile.");
+      } finally {
+        setLoading(false);
       }
-
-      setLoading(false);
     });
 
     return () => unsub();
@@ -77,13 +86,20 @@ export default function ProfilePage() {
   const resizeImageToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       if (!file.type.startsWith("image/")) {
-        reject(new Error("Please upload an image file."));
+        reject(new Error("Please upload a valid image file."));
         return;
       }
 
       const reader = new FileReader();
 
       reader.onload = () => {
+        const result = reader.result;
+
+        if (typeof result !== "string") {
+          reject(new Error("Failed to read image."));
+          return;
+        }
+
         const img = new Image();
 
         img.onload = () => {
@@ -93,16 +109,19 @@ export default function ProfilePage() {
           let width = img.width;
           let height = img.height;
 
+          if (width <= 0 || height <= 0) {
+            reject(new Error("Invalid image dimensions."));
+            return;
+          }
+
           if (width > height) {
             if (width > maxSize) {
               height = Math.round((height * maxSize) / width);
               width = maxSize;
             }
-          } else {
-            if (height > maxSize) {
-              width = Math.round((width * maxSize) / height);
-              height = maxSize;
-            }
+          } else if (height > maxSize) {
+            width = Math.round((width * maxSize) / height);
+            height = maxSize;
           }
 
           canvas.width = width;
@@ -115,14 +134,23 @@ export default function ProfilePage() {
             return;
           }
 
+          // White background avoids black/transparent background when converting PNG/WebP to JPEG.
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, width, height);
           ctx.drawImage(img, 0, 0, width, height);
 
-          const base64 = canvas.toDataURL("image/jpeg", 0.75);
+          const base64 = canvas.toDataURL("image/jpeg", 0.78);
+
+          if (!base64 || !base64.startsWith("data:image/")) {
+            reject(new Error("Failed to prepare image."));
+            return;
+          }
+
           resolve(base64);
         };
 
-        img.onerror = () => reject(new Error("Invalid image file."));
-        img.src = reader.result as string;
+        img.onerror = () => reject(new Error("Invalid or unsupported image file."));
+        img.src = result;
       };
 
       reader.onerror = () => reject(new Error("Failed to read file."));
@@ -131,16 +159,62 @@ export default function ProfilePage() {
   };
 
   const handleImageUpload = async (file: File) => {
+    if (!uid) {
+      alert("No logged-in admin found.");
+      return;
+    }
+
+    setPhotoSaving(true);
+
     try {
       const base64Image = await resizeImageToBase64(file);
+      const updatedAt = Date.now();
 
+      // Update this page immediately.
       setProfile((prev) => ({
         ...prev,
         profileImage: base64Image,
+        updatedAt,
       }));
-    } catch (error: any) {
-      alert(error.message || "Failed to upload image.");
+
+      // Save immediately to Firebase so DashboardShell's realtime onValue()
+      // listener receives the new image and updates the sidebar/header.
+      await update(ref(db, `adminProfile/${uid}`), {
+        profileImage: base64Image,
+        updatedAt,
+      });
+    } catch (error) {
+      console.error("Profile image upload failed:", error);
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to upload image.";
+
+      alert(message);
+    } finally {
+      setPhotoSaving(false);
     }
+  };
+
+  const handleFileChange = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    /*
+     * IMPORTANT:
+     * Store the input element before any await.
+     * React's event.currentTarget should not be accessed after an async await,
+     * because it may become null in the event lifecycle.
+     */
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+
+    // Reset immediately. This also lets the user select the same file again.
+    input.value = "";
+
+    if (!file) return;
+
+    await handleImageUpload(file);
   };
 
   const saveProfile = async () => {
@@ -149,7 +223,12 @@ export default function ProfilePage() {
       return;
     }
 
-    if (!profile.name.trim()) {
+    const name = profile.name.trim();
+    const email = profile.email.trim();
+    const phone = profile.phone.trim();
+    const role = profile.role.trim() || "System Admin";
+
+    if (!name) {
       alert("Name is required.");
       return;
     }
@@ -157,18 +236,29 @@ export default function ProfilePage() {
     setSaving(true);
 
     try {
+      const updatedAt = Date.now();
+
       await update(ref(db, `adminProfile/${uid}`), {
-        name: profile.name.trim(),
-        email: profile.email.trim(),
-        phone: profile.phone.trim(),
-        role: profile.role.trim() || "System Admin",
+        name,
+        email,
+        phone,
+        role,
         profileImage: profile.profileImage,
-        updatedAt: Date.now(),
+        updatedAt,
       });
+
+      setProfile((prev) => ({
+        ...prev,
+        name,
+        email,
+        phone,
+        role,
+        updatedAt,
+      }));
 
       alert("Profile updated successfully.");
     } catch (error) {
-      console.error(error);
+      console.error("Failed to save profile:", error);
       alert("Failed to save profile.");
     } finally {
       setSaving(false);
@@ -187,12 +277,14 @@ export default function ProfilePage() {
               {profile.profileImage ? (
                 <img
                   src={profile.profileImage}
-                  alt="Profile"
+                  alt={profile.name || "Admin profile"}
                   className="profile-photo"
                 />
               ) : (
-                <div className="profile-photo-placeholder">
-                  {profile.name ? profile.name.charAt(0).toUpperCase() : "A"}
+                <div className="profile-photo-placeholder" aria-hidden="true">
+                  {profile.name
+                    ? profile.name.charAt(0).toUpperCase()
+                    : "A"}
                 </div>
               )}
 
@@ -200,25 +292,29 @@ export default function ProfilePage() {
                 type="button"
                 className="change-photo-btn"
                 onClick={() => fileInputRef.current?.click()}
+                disabled={photoSaving || loading}
               >
-                Change Photo
+                {photoSaving ? "Saving Photo..." : "Change Photo"}
               </button>
 
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept="image/jpeg,image/png,image/webp"
                 hidden
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handleImageUpload(file);
-                }}
+                onChange={handleFileChange}
               />
             </div>
 
-            <div>
+            <div className="profile-summary">
               <h2>{profile.name || "Admin User"}</h2>
               <p>{profile.email || "admin@wastetrack.gov.ph"}</p>
+
+              {photoSaving && (
+                <span className="profile-save-status">
+                  Updating profile picture…
+                </span>
+              )}
             </div>
           </div>
 
@@ -227,8 +323,9 @@ export default function ProfilePage() {
           ) : (
             <div className="profile-form">
               <div className="form-group">
-                <label>Full Name</label>
+                <label htmlFor="profile-name">Full Name</label>
                 <input
+                  id="profile-name"
                   value={profile.name}
                   onChange={(e) =>
                     setProfile((prev) => ({
@@ -237,12 +334,15 @@ export default function ProfilePage() {
                     }))
                   }
                   placeholder="Enter full name"
+                  autoComplete="name"
                 />
               </div>
 
               <div className="form-group">
-                <label>Email Address</label>
+                <label htmlFor="profile-email">Email Address</label>
                 <input
+                  id="profile-email"
+                  type="email"
                   value={profile.email}
                   onChange={(e) =>
                     setProfile((prev) => ({
@@ -251,12 +351,15 @@ export default function ProfilePage() {
                     }))
                   }
                   placeholder="Enter email address"
+                  autoComplete="email"
                 />
               </div>
 
               <div className="form-group">
-                <label>Phone Number</label>
+                <label htmlFor="profile-phone">Phone Number</label>
                 <input
+                  id="profile-phone"
+                  type="tel"
                   value={profile.phone}
                   onChange={(e) =>
                     setProfile((prev) => ({
@@ -265,12 +368,14 @@ export default function ProfilePage() {
                     }))
                   }
                   placeholder="Enter phone number"
+                  autoComplete="tel"
                 />
               </div>
 
               <div className="form-group">
-                <label>Role</label>
+                <label htmlFor="profile-role">Role</label>
                 <input
+                  id="profile-role"
                   value={profile.role}
                   onChange={(e) =>
                     setProfile((prev) => ({
@@ -287,7 +392,7 @@ export default function ProfilePage() {
                   type="button"
                   className="save-btn"
                   onClick={saveProfile}
-                  disabled={saving}
+                  disabled={saving || loading || photoSaving}
                 >
                   {saving ? "Saving..." : "Save Profile"}
                 </button>
@@ -324,6 +429,7 @@ export default function ProfilePage() {
           flex-direction: column;
           align-items: center;
           gap: 10px;
+          flex-shrink: 0;
         }
 
         .profile-photo,
@@ -333,13 +439,14 @@ export default function ProfilePage() {
           border-radius: 50%;
           object-fit: cover;
           border: 4px solid #dcfce7;
+          box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
         }
 
         .profile-photo-placeholder {
           display: flex;
           align-items: center;
           justify-content: center;
-          background: #22c55e;
+          background: linear-gradient(135deg, #16a34a, #22c55e);
           color: #ffffff;
           font-size: 42px;
           font-weight: 800;
@@ -348,12 +455,29 @@ export default function ProfilePage() {
         .change-photo-btn {
           border: 0;
           background: #ecfdf5;
-          color: #16a34a;
+          color: #15803d;
           padding: 8px 13px;
           border-radius: 999px;
           font-size: 12px;
           font-weight: 800;
           cursor: pointer;
+          transition:
+            background 0.18s ease,
+            transform 0.18s ease;
+        }
+
+        .change-photo-btn:hover:not(:disabled) {
+          background: #dcfce7;
+          transform: translateY(-1px);
+        }
+
+        .change-photo-btn:disabled {
+          opacity: 0.65;
+          cursor: not-allowed;
+        }
+
+        .profile-summary {
+          min-width: 0;
         }
 
         .profile-header h2 {
@@ -367,6 +491,17 @@ export default function ProfilePage() {
           margin: 6px 0 0;
           font-size: 13px;
           color: #64748b;
+        }
+
+        .profile-save-status {
+          display: inline-block;
+          margin-top: 9px;
+          padding: 5px 9px;
+          border-radius: 999px;
+          background: #ecfdf5;
+          color: #15803d;
+          font-size: 11px;
+          font-weight: 800;
         }
 
         .profile-loading {
@@ -393,12 +528,18 @@ export default function ProfilePage() {
         }
 
         .form-group input {
+          width: 100%;
           height: 42px;
           border: 1px solid #dbe3ef;
           border-radius: 12px;
           padding: 0 13px;
+          background: #ffffff;
+          color: #0f172a;
           font-size: 13px;
           outline: none;
+          transition:
+            border-color 0.18s ease,
+            box-shadow 0.18s ease;
         }
 
         .form-group input:focus {
@@ -414,14 +555,24 @@ export default function ProfilePage() {
         }
 
         .save-btn {
+          min-width: 130px;
           border: 0;
-          background: #22c55e;
+          background: linear-gradient(135deg, #16a34a, #22c55e);
           color: #ffffff;
           padding: 12px 18px;
           border-radius: 12px;
           font-size: 13px;
           font-weight: 850;
           cursor: pointer;
+          box-shadow: 0 10px 22px rgba(22, 163, 74, 0.18);
+          transition:
+            transform 0.18s ease,
+            box-shadow 0.18s ease;
+        }
+
+        .save-btn:hover:not(:disabled) {
+          transform: translateY(-1px);
+          box-shadow: 0 14px 26px rgba(22, 163, 74, 0.24);
         }
 
         .save-btn:disabled {
@@ -437,6 +588,14 @@ export default function ProfilePage() {
 
           .profile-form {
             grid-template-columns: 1fr;
+          }
+
+          .profile-actions {
+            justify-content: stretch;
+          }
+
+          .save-btn {
+            width: 100%;
           }
         }
       `}</style>

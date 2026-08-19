@@ -1,7 +1,7 @@
 "use client";
 
 import { onValue, push, ref, remove, set } from "firebase/database";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
 
@@ -719,22 +719,8 @@ export default function SchedulesPage() {
       description="Create weekly collection schedules using Barangay and Purok route assignments. No map or drawn route is required."
     >
       <div className="schedule-page">
-        <section className="hero">
-          <div>
-            <span>COLLECTION PLANNING</span>
-            <h1>Weekly Schedule Manager</h1>
-            <p>
-              Choose the service area route, collection day, time, and assigned
-              driver. Residents in the selected Puroks receive the schedule notice.
-            </p>
-          </div>
-          <button type="button" onClick={() => setShowForm(true)}>
-            + Create Schedule
-          </button>
-        </section>
-
         {successMessage ? (
-          <div className="success-banner">
+          <div className="success-banner page-reveal reveal-1">
             <span>{successMessage}</span>
             <button type="button" onClick={() => setSuccessMessage("")}>
               ×
@@ -742,9 +728,18 @@ export default function SchedulesPage() {
           </div>
         ) : null}
 
-        <section className="metrics">
-          <Metric label="Total schedules" value={schedules.length} />
+        <section className="metrics page-reveal reveal-1">
           <Metric
+            icon={<CalendarMetricIcon />}
+            tone="green"
+            label="Total schedules"
+            value={schedules.length}
+            hint="All saved schedules"
+          />
+
+          <Metric
+            icon={<ActiveMetricIcon />}
+            tone="blue"
             label="Active"
             value={
               schedules.filter(
@@ -752,23 +747,55 @@ export default function SchedulesPage() {
                   String(schedule.status || "active").toLowerCase() === "active",
               ).length
             }
+            hint="Currently active schedules"
           />
-          <Metric label="Routes available" value={routes.length} />
-          <Metric label="Drivers" value={drivers.length} />
+
+          <Metric
+            icon={<RouteMetricIcon />}
+            tone="amber"
+            label="Routes available"
+            value={routes.length}
+            hint="With assigned areas"
+          />
+
+          <Metric
+            icon={<DriversMetricIcon />}
+            tone="purple"
+            label="Drivers"
+            value={drivers.length}
+            hint="Available drivers"
+          />
         </section>
 
-        <section className="schedule-card">
+        <section className="schedule-card page-reveal reveal-2">
           <div className="toolbar">
-            <div>
+            <div className="toolbar-title">
               <h2>Weekly schedules</h2>
               <p>Schedules are matched using Barangay and Purok coverage.</p>
             </div>
-            <input
-              type="search"
-              placeholder="Search schedules…"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
+
+            <div className="toolbar-actions">
+              <label className="schedule-search" aria-label="Search schedules">
+                <span className="search-icon" aria-hidden="true">
+                  <SearchIcon />
+                </span>
+                <input
+                  type="search"
+                  placeholder="Search schedules..."
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </label>
+
+              <button
+                type="button"
+                className="create-schedule-btn"
+                onClick={() => setShowForm(true)}
+              >
+                <span aria-hidden="true">＋</span>
+                Create Schedule
+              </button>
+            </div>
           </div>
 
           <div className="table-wrap">
@@ -782,9 +809,10 @@ export default function SchedulesPage() {
                   <th>Driver / Truck</th>
                   <th>Status</th>
                   <th>Created</th>
-                  <th aria-label="Actions" />
+                  <th>Actions</th>
                 </tr>
               </thead>
+
               <tbody>
                 {filteredSchedules.length === 0 ? (
                   <tr>
@@ -793,39 +821,52 @@ export default function SchedulesPage() {
                     </td>
                   </tr>
                 ) : (
-                  filteredSchedules.map((schedule) => (
-                    <tr key={schedule.id}>
+                  filteredSchedules.map((schedule, index) => (
+                    <tr
+                      key={schedule.id}
+                      className="schedule-row"
+                      style={{ animationDelay: `${index * 45}ms` }}
+                    >
                       <td>
                         <strong>{schedule.title || "Untitled schedule"}</strong>
                         <small>{schedule.id}</small>
                       </td>
+
                       <td>
                         <strong>{schedule.barangay || "—"}</strong>
                         <small>{getSchedulePuroks(schedule).join(", ") || "—"}</small>
                       </td>
+
                       <td>
-                        <strong>
-                          {formatDayList(getScheduleDays(schedule))}
-                        </strong>
+                        <strong>{formatDayList(getScheduleDays(schedule))}</strong>
                         <small>{formatTime(schedule.startTime)}</small>
                       </td>
+
                       <td>{schedule.routeName || "—"}</td>
+
                       <td>
                         <strong>{schedule.driverName || "—"}</strong>
                         <small>{schedule.truckId || "No truck"}</small>
                       </td>
+
                       <td>
                         <span className="status-pill">
+                          <i aria-hidden="true" />
                           {String(schedule.status || "active")}
                         </span>
                       </td>
+
                       <td>{formatDate(schedule.createdAt)}</td>
+
                       <td>
                         <button
                           type="button"
                           className="delete-btn"
                           onClick={() => deleteSchedule(schedule)}
                         >
+                          <span className="delete-icon" aria-hidden="true">
+                            <TrashIcon />
+                          </span>
                           Delete
                         </button>
                       </td>
@@ -834,6 +875,25 @@ export default function SchedulesPage() {
                 )}
               </tbody>
             </table>
+          </div>
+
+          <div className="table-footer">
+            <p>
+              Showing {filteredSchedules.length === 0 ? 0 : 1} to{" "}
+              {filteredSchedules.length} of {filteredSchedules.length} schedules
+            </p>
+
+            <div className="pagination" aria-label="Schedule table pagination">
+              <button type="button" disabled aria-label="Previous page">
+                <PrevIcon />
+              </button>
+              <button type="button" className="current" aria-current="page">
+                1
+              </button>
+              <button type="button" disabled aria-label="Next page">
+                <NextIcon />
+              </button>
+            </div>
           </div>
         </section>
 
@@ -1100,65 +1160,54 @@ export default function SchedulesPage() {
 
         <style jsx>{`
           .schedule-page {
+            width: 100%;
+            max-width: 1680px;
+            margin: 0 auto;
             display: grid;
             gap: 18px;
+            color: #14251d;
           }
 
-          .hero {
-            display: flex;
-            justify-content: space-between;
-            gap: 24px;
-            padding: 28px;
-            border-radius: 22px;
-            color: #fff;
-            background: linear-gradient(135deg, #064e3b, #047857);
-            box-shadow: 0 20px 50px rgba(6, 78, 59, 0.18);
+          .page-reveal {
+            opacity: 0;
+            transform: translateY(9px);
+            animation: scheduleReveal 380ms cubic-bezier(.2, .75, .25, 1) forwards;
           }
 
-          .hero span,
-          .modal header span {
-            font-size: 11px;
-            font-weight: 800;
-            letter-spacing: 0.12em;
+          .reveal-1 {
+            animation-delay: 40ms;
           }
 
-          .hero h1 {
-            margin: 8px 0;
-            font-size: 30px;
+          .reveal-2 {
+            animation-delay: 100ms;
           }
 
-          .hero p {
-            max-width: 720px;
-            margin: 0;
-            color: rgba(255, 255, 255, 0.82);
-            line-height: 1.6;
-          }
-
-          .hero > button,
-          .primary {
-            align-self: center;
-            border: 0;
-            border-radius: 12px;
-            padding: 13px 18px;
-            background: #22c55e;
-            color: #052e16;
-            font-weight: 800;
-            cursor: pointer;
+          @keyframes scheduleReveal {
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
           }
 
           .success-banner {
             display: flex;
             justify-content: space-between;
+            align-items: center;
             gap: 16px;
-            padding: 14px 16px;
-            border: 1px solid #86efac;
-            border-radius: 14px;
+            padding: 13px 15px;
+            border: 1px solid #b8e7c4;
+            border-radius: 13px;
             background: #f0fdf4;
             color: #166534;
+            font-size: 13px;
+            box-shadow: 0 6px 18px rgba(16, 35, 27, 0.04);
           }
 
           .success-banner button {
+            width: 32px;
+            height: 32px;
             border: 0;
+            border-radius: 50%;
             background: transparent;
             color: inherit;
             font-size: 20px;
@@ -1168,38 +1217,126 @@ export default function SchedulesPage() {
           .metrics {
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 12px;
+            gap: 14px;
           }
 
           .schedule-card {
             overflow: hidden;
             border: 1px solid #dfe7e2;
-            border-radius: 18px;
-            background: #fff;
+            border-radius: 19px;
+            background: #ffffff;
+            box-shadow: 0 10px 28px rgba(16, 35, 27, 0.05);
           }
 
           .toolbar {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            gap: 16px;
-            padding: 18px;
-            border-bottom: 1px solid #e5ebe7;
+            gap: 20px;
+            padding: 20px 22px;
+            border-bottom: 1px solid #e6ece8;
           }
 
-          .toolbar h2,
-          .toolbar p {
+          .toolbar-title h2,
+          .toolbar-title p {
             margin: 0;
           }
 
-          .toolbar p {
-            margin-top: 4px;
-            color: #6b7b72;
-            font-size: 13px;
+          .toolbar-title h2 {
+            color: #10231b;
+            font-size: 23px;
+            line-height: 1.2;
+            letter-spacing: -0.025em;
           }
 
-          .toolbar input {
-            width: min(320px, 100%);
+          .toolbar-title p {
+            margin-top: 6px;
+            color: #61736a;
+            font-size: 13px;
+            line-height: 1.5;
+          }
+
+          .toolbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+          }
+
+          .schedule-search {
+            width: 300px;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 12px;
+            border: 1px solid #d8e2dc;
+            border-radius: 12px;
+            background: #ffffff;
+            transition:
+              border-color 150ms ease,
+              box-shadow 150ms ease;
+          }
+
+          .schedule-search:focus-within {
+            border-color: #62b881;
+            box-shadow: 0 0 0 3px rgba(22, 138, 74, 0.10);
+          }
+
+          .search-icon {
+            width: 18px;
+            height: 18px;
+            flex: 0 0 18px;
+            color: #73867b;
+          }
+
+          .search-icon :global(svg) {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+          }
+
+          .schedule-search input {
+            width: 100%;
+            padding: 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            color: #21362b;
+            font-size: 13px;
+            outline: 0;
+            box-shadow: none;
+          }
+
+          .schedule-search input::placeholder {
+            color: #7d8d84;
+          }
+
+          .create-schedule-btn {
+            min-height: 44px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            padding: 0 17px;
+            border: 1px solid #168a4a;
+            border-radius: 11px;
+            background: linear-gradient(135deg, #19a454, #138543);
+            color: #ffffff;
+            font-size: 13px;
+            font-weight: 900;
+            white-space: nowrap;
+            cursor: pointer;
+            box-shadow: 0 7px 16px rgba(22, 138, 74, 0.16);
+            transition:
+              transform 150ms ease,
+              background 150ms ease,
+              box-shadow 150ms ease;
+          }
+
+          .create-schedule-btn:hover {
+            transform: translateY(-1px);
+            background: linear-gradient(135deg, #168f49, #11773c);
+            box-shadow: 0 10px 20px rgba(22, 138, 74, 0.21);
           }
 
           .table-wrap {
@@ -1214,19 +1351,24 @@ export default function SchedulesPage() {
 
           th,
           td {
-            padding: 14px 16px;
-            border-bottom: 1px solid #edf1ee;
+            padding: 16px 18px;
+            border-bottom: 1px solid #e7ece9;
             text-align: left;
-            vertical-align: top;
+            vertical-align: middle;
             font-size: 13px;
           }
 
           th {
-            color: #6b7b72;
+            color: #4e6258;
             background: #f8faf9;
             font-size: 11px;
+            font-weight: 900;
             text-transform: uppercase;
-            letter-spacing: 0.06em;
+            letter-spacing: 0.055em;
+          }
+
+          td {
+            color: #203329;
           }
 
           td strong,
@@ -1234,35 +1376,151 @@ export default function SchedulesPage() {
             display: block;
           }
 
+          td strong {
+            color: #15281e;
+            font-size: 13px;
+          }
+
           td small {
             margin-top: 4px;
-            color: #7b8a82;
+            max-width: 230px;
+            overflow: hidden;
+            color: #6e8077;
+            font-size: 11px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .schedule-row {
+            opacity: 0;
+            transform: translateY(5px);
+            animation: scheduleRowIn 300ms ease forwards;
+            transition: background 140ms ease;
+          }
+
+          .schedule-row:hover {
+            background: #fbfdfc;
+          }
+
+          @keyframes scheduleRowIn {
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
           }
 
           .status-pill {
             display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
             border-radius: 999px;
-            padding: 5px 8px;
-            background: #ecfdf5;
-            color: #047857;
+            background: #eaf7ee;
+            color: #148447;
             font-size: 11px;
-            font-weight: 700;
+            font-weight: 850;
+            text-transform: lowercase;
+          }
+
+          .status-pill i {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: currentColor;
           }
 
           .delete-btn {
-            border: 1px solid #fecaca;
+            min-height: 36px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            padding: 0 11px;
+            border: 1px solid #ffb9b9;
             border-radius: 9px;
-            padding: 8px 10px;
-            background: #fff;
-            color: #b91c1c;
-            font-weight: 700;
+            background: #ffffff;
+            color: #e32929;
+            font-size: 12px;
+            font-weight: 850;
             cursor: pointer;
+            transition:
+              background 140ms ease,
+              border-color 140ms ease,
+              transform 140ms ease;
+          }
+
+          .delete-btn:hover {
+            transform: translateY(-1px);
+            border-color: #f58c8c;
+            background: #fff7f7;
+          }
+
+          .delete-icon {
+            width: 15px;
+            height: 15px;
+          }
+
+          .delete-icon :global(svg) {
+            width: 15px;
+            height: 15px;
+            fill: currentColor;
           }
 
           .empty-state {
-            padding: 48px;
+            padding: 52px;
             text-align: center;
             color: #77867e;
+          }
+
+          .table-footer {
+            min-height: 72px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 18px;
+            padding: 12px 22px;
+          }
+
+          .table-footer p {
+            margin: 0;
+            color: #5f7267;
+            font-size: 12px;
+          }
+
+          .pagination {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+
+          .pagination button {
+            width: 38px;
+            height: 38px;
+            display: grid;
+            place-items: center;
+            border: 1px solid #dce5df;
+            border-radius: 10px;
+            background: #ffffff;
+            color: #7b8b83;
+          }
+
+          .pagination button:disabled {
+            cursor: default;
+            opacity: 0.72;
+          }
+
+          .pagination button.current {
+            border-color: #168a4a;
+            background: #168a4a;
+            color: #ffffff;
+            font-weight: 900;
+            box-shadow: 0 6px 14px rgba(22, 138, 74, .14);
+          }
+
+          .pagination button :global(svg) {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
           }
 
           .modal-backdrop {
@@ -1283,6 +1541,18 @@ export default function SchedulesPage() {
             border-radius: 20px;
             background: #fff;
             box-shadow: 0 28px 90px rgba(15, 23, 42, 0.28);
+            animation: modalIn 260ms ease;
+          }
+
+          @keyframes modalIn {
+            from {
+              opacity: 0;
+              transform: translateY(8px) scale(.988);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0) scale(1);
+            }
           }
 
           .modal header,
@@ -1303,6 +1573,13 @@ export default function SchedulesPage() {
             border-top: 1px solid #e8eeea;
           }
 
+          .modal header span {
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            color: #168a4a;
+          }
+
           .modal header h2,
           .modal header p {
             margin: 0;
@@ -1310,6 +1587,7 @@ export default function SchedulesPage() {
 
           .modal header h2 {
             margin-top: 5px;
+            color: #172c22;
           }
 
           .modal header p {
@@ -1557,9 +1835,33 @@ export default function SchedulesPage() {
             font-size: 13px;
           }
 
-          @media (max-width: 1000px) {
+          .primary {
+            border: 0;
+            border-radius: 12px;
+            padding: 12px 18px;
+            background: #22c55e;
+            color: #052e16;
+            font-weight: 800;
+            cursor: pointer;
+          }
+
+          @media (max-width: 1100px) {
             .metrics {
               grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .toolbar {
+              align-items: stretch;
+              flex-direction: column;
+            }
+
+            .toolbar-actions {
+              width: 100%;
+            }
+
+            .schedule-search {
+              flex: 1;
+              width: auto;
             }
           }
 
@@ -1574,11 +1876,15 @@ export default function SchedulesPage() {
           }
 
           @media (max-width: 700px) {
-            .hero,
-            .toolbar,
+            .toolbar-actions,
             .panel-heading {
-              flex-direction: column;
               align-items: stretch;
+              flex-direction: column;
+            }
+
+            .create-schedule-btn,
+            .schedule-search {
+              width: 100%;
             }
 
             .form-grid {
@@ -1600,6 +1906,21 @@ export default function SchedulesPage() {
             .metrics {
               grid-template-columns: 1fr;
             }
+
+            .table-footer {
+              align-items: flex-start;
+              flex-direction: column;
+            }
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            .page-reveal,
+            .schedule-row,
+            .modal {
+              opacity: 1 !important;
+              transform: none !important;
+              animation: none !important;
+            }
           }
         `}</style>
       </div>
@@ -1607,31 +1928,183 @@ export default function SchedulesPage() {
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({
+  icon,
+  tone,
+  label,
+  value,
+  hint,
+}: {
+  icon: ReactNode;
+  tone: "green" | "blue" | "amber" | "purple";
+  label: string;
+  value: number;
+  hint: string;
+}) {
   return (
     <article className="metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
+      <div className={`metric-icon ${tone}`}>{icon}</div>
+
+      <div className="metric-copy">
+        <span>{label}</span>
+        <strong>{value}</strong>
+        <small>{hint}</small>
+      </div>
+
       <style jsx>{`
         .metric {
-          display: grid;
-          gap: 5px;
-          padding: 17px;
+          min-height: 118px;
+          display: flex;
+          align-items: center;
+          gap: 15px;
+          padding: 18px 19px;
           border: 1px solid #dfe7e2;
-          border-radius: 15px;
-          background: #fff;
+          border-radius: 17px;
+          background: #ffffff;
+          box-shadow: 0 7px 20px rgba(16, 35, 27, 0.045);
+          transition:
+            transform 150ms ease,
+            box-shadow 150ms ease,
+            border-color 150ms ease;
         }
 
-        span {
-          color: #728078;
+        .metric:hover {
+          transform: translateY(-2px);
+          border-color: #c8d9cf;
+          box-shadow: 0 11px 25px rgba(16, 35, 27, 0.07);
+        }
+
+        .metric-icon {
+          width: 54px;
+          height: 54px;
+          flex: 0 0 54px;
+          display: grid;
+          place-items: center;
+          border-radius: 16px;
+        }
+
+        .metric-icon.green {
+          background: #e7f6ec;
+          color: #17914f;
+        }
+
+        .metric-icon.blue {
+          background: #e8f2fe;
+          color: #2580dc;
+        }
+
+        .metric-icon.amber {
+          background: #fff4dc;
+          color: #e8a000;
+        }
+
+        .metric-icon.purple {
+          background: #f1e9ff;
+          color: #8f43e6;
+        }
+
+        .metric-icon :global(svg) {
+          width: 27px;
+          height: 27px;
+          fill: currentColor;
+        }
+
+        .metric-copy {
+          min-width: 0;
+          display: grid;
+          gap: 4px;
+        }
+
+        .metric-copy span {
+          color: #465b50;
+          font-size: 14px;
+          font-weight: 800;
+        }
+
+        .metric-copy strong {
+          color: #10231b;
+          font-size: 28px;
+          line-height: 1;
+          font-weight: 950;
+          letter-spacing: -0.035em;
+        }
+
+        .metric-copy small {
+          color: #6b7d73;
           font-size: 12px;
+          line-height: 1.35;
         }
 
-        strong {
-          color: #153026;
-          font-size: 24px;
+        @media (max-width: 700px) {
+          .metric {
+            min-height: 104px;
+          }
         }
       `}</style>
     </article>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M10.7 4a6.7 6.7 0 1 0 0 13.4A6.7 6.7 0 0 0 10.7 4Zm0 2a4.7 4.7 0 1 1 0 9.4 4.7 4.7 0 0 1 0-9.4Zm5.8 9.1 4.5 4.5-1.4 1.4-4.5-4.5 1.4-1.4Z" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M8 4h8l1 2h4v2H3V6h4l1-2Zm1 6h2v7H9v-7Zm4 0h2v7h-2v-7ZM6 9h12l-1 11a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 9Z" />
+    </svg>
+  );
+}
+
+function PrevIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M15.4 5.4 9 11.8l6.4 6.4-1.4 1.4L6.2 12l7.8-7.8 1.4 1.2Z" />
+    </svg>
+  );
+}
+
+function NextIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m8.6 18.6 6.4-6.4-6.4-6.4L10 4.4l7.8 7.8-7.8 7.8-1.4-1.4Z" />
+    </svg>
+  );
+}
+
+function CalendarMetricIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 2h2v3H7V2Zm8 0h2v3h-2V2ZM4 5h16a1 1 0 0 1 1 1v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1Zm2 5v10h12V10H6Zm2 3h3v3H8v-3Z" />
+    </svg>
+  );
+}
+
+function ActiveMetricIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm-1.3 14.2-4-4 1.4-1.4 2.6 2.6 5.2-5.2 1.4 1.4-6.6 6.6Z" />
+    </svg>
+  );
+}
+
+function RouteMetricIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm10 8a3 3 0 1 0 0 6 3 3 0 0 0 0-6ZM9.7 8h6.8a3.5 3.5 0 0 1 0 7H14v-2h2.5a1.5 1.5 0 0 0 0-3H9.7V8Z" />
+    </svg>
+  );
+}
+
+function DriversMetricIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M8 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm8.5 2a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7ZM2 19c0-3.1 3.1-5 6-5s6 1.9 6 5v1H2v-1Zm12.5 1v-1c0-1.1-.3-2.1-.9-3 2.3.3 5.4 1.6 5.4 4h-4.5Z" />
+    </svg>
   );
 }
