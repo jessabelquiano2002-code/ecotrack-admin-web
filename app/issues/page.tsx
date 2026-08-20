@@ -283,6 +283,7 @@ export default function IssuesPage() {
   const [extraResidentRows, setExtraResidentRows] = useState<ResidentRow[]>([]);
 
   const [selected, setSelected] = useState<IssueRow | null>(null);
+  const [showFullImage, setShowFullImage] = useState(false);
   const [tab, setTab] = useState<TabType>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
@@ -1046,7 +1047,17 @@ export default function IssuesPage() {
 
                   {selected.photoBase64 && (
                     <div className="openedPhotoBox">
-                      <img src={getPhotoSrc(selected.photoBase64)} alt="Complaint attachment" />
+                      <img
+                        src={getPhotoSrc(selected.photoBase64)}
+                        alt="Complaint attachment"
+                      />
+
+                      <button
+                        className="viewFullImageButton"
+                        onClick={() => setShowFullImage(true)}
+                      >
+                        🔍 View Full Image
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1208,6 +1219,23 @@ export default function IssuesPage() {
             </aside>
           </main>
         </div>
+
+        {showFullImage && selected.photoBase64 && (
+          <div className="imageViewerOverlay">
+            <button
+              className="imageCloseButton"
+              onClick={() => setShowFullImage(false)}
+            >
+              ×
+            </button>
+
+            <img
+              src={getPhotoSrc(selected.photoBase64)}
+              alt="Full complaint evidence"
+              className="fullComplaintImage"
+            />
+          </div>
+        )}
 
         <datalist id="barangayOptions">
           {locationOptions.barangays.map((barangay) => (
@@ -1475,6 +1503,56 @@ export default function IssuesPage() {
             word-break: break-word;
           }
 
+          .viewFullImageButton {
+            width: 100%;
+            margin-top: 10px;
+            padding: 12px;
+            border: none;
+            border-radius: 12px;
+            background: #16a34a;
+            color: white;
+            font-weight: 900;
+            cursor: pointer;
+          }
+
+          .viewFullImageButton:hover {
+            background: #15803d;
+          }
+
+          .imageViewerOverlay {
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            background: rgba(0,0,0,.85);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 30px;
+          }
+
+          .fullComplaintImage {
+            max-width: 95%;
+            max-height: 90vh;
+            object-fit: contain;
+            border-radius: 18px;
+            box-shadow: 0 20px 80px rgba(0,0,0,.5);
+          }
+
+          .imageCloseButton {
+            position: absolute;
+            top: 25px;
+            right: 35px;
+            width: 45px;
+            height: 45px;
+            border-radius: 50%;
+            border: none;
+            background: white;
+            color: #111827;
+            font-size: 30px;
+            font-weight: bold;
+            cursor: pointer;
+          }
+
           .openedPhotoBox {
             margin-top: 12px;
             overflow: hidden;
@@ -1486,8 +1564,8 @@ export default function IssuesPage() {
           .openedPhotoBox img {
             display: block;
             width: 100%;
-            max-height: 280px;
-            object-fit: cover;
+            max-height: 320px;
+            object-fit: contain;
           }
 
           .adminReplyBubble {
