@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
-import { onValue, push, ref, remove, set, update } from "firebase/database";
-import { db } from "../../lib/firebase";
+import { onValue, push, ref, remove, set, update } from "@/lib/offlineFirebaseDatabase";
+import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
 import { SectionCard } from "../components/SectionCard";
 
@@ -772,6 +772,63 @@ export default function IssuesPage() {
       payload
     );
 
+    // Realtime Database stores the resident's inbox/history. A real phone
+    // notification (sound, vibration, lock-screen alert) must still be sent
+    // through Firebase Cloud Messaging. Resident complaint replies target the
+    // exact complainant UID(s); general advisories continue to use area targeting.
+    const currentAdmin = auth.currentUser;
+    if (!currentAdmin) {
+      throw new Error(
+        "Reply was saved, but your Admin session expired before the phone alert could be sent. Please sign in again and resend."
+      );
+    }
+
+    const adminToken = await currentAdmin.getIdToken();
+    const pushRequest = {
+      title,
+      message,
+      body: message,
+      type: payload.type,
+      target: "resident",
+      barangay,
+      purok,
+      issueId: issue?.id || "",
+      ...(isResidentReply ? { targetUids } : {}),
+    };
+
+    const pushResponse = await fetch("/api/send-alert", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify(pushRequest),
+    });
+
+    let pushResult: {
+      sent?: number;
+      failed?: number;
+      warning?: string;
+      error?: string;
+    } = {};
+
+    try {
+      pushResult = await pushResponse.json();
+    } catch {
+      pushResult = {};
+    }
+
+    if (!pushResponse.ok) {
+      throw new Error(
+        pushResult.error ||
+          "Reply was saved, but the resident phone notification could not be sent."
+      );
+    }
+
+    const pushSent = Number(pushResult.sent || 0);
+    const pushFailed = Number(pushResult.failed || 0);
+    const pushWarning = String(pushResult.warning || "").trim();
+
     if (issue?.id) {
       const nextStatus =
         issue.status === "Resolved" ? "Resolved" : "In Progress";
@@ -805,6 +862,9 @@ export default function IssuesPage() {
     return {
       notificationId,
       targetCount: targetResidents.length,
+      pushSent,
+      pushFailed,
+      pushWarning,
     };
   };
 
@@ -816,7 +876,9 @@ export default function IssuesPage() {
       const result = await writeResidentNotice(quickNotice, null);
 
       setQuickResult(
-        `Notice sent/saved successfully. Matched residents: ${result.targetCount}.`
+        result.pushSent > 0
+          ? `Notice saved and phone alert sent to ${result.pushSent} device${result.pushSent === 1 ? "" : "s"}.`
+          : `Notice saved, but no registered phone received the push.${result.pushWarning ? ` ${result.pushWarning}` : ""}`
       );
 
       setQuickNotice(EMPTY_NOTICE);
@@ -839,7 +901,9 @@ export default function IssuesPage() {
       const result = await writeResidentNotice(modalNotice, selected);
 
       setModalResult(
-        `Notice sent/saved successfully. Matched residents: ${result.targetCount}.`
+        result.pushSent > 0
+          ? `Reply saved and phone notification sent with sound to ${result.pushSent} registered device${result.pushSent === 1 ? "" : "s"}.`
+          : `Reply saved, but no registered resident phone received the push.${result.pushWarning ? ` ${result.pushWarning}` : ""}`
       );
     } catch (error) {
       setModalResult(

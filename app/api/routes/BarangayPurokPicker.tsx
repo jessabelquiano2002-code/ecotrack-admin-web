@@ -1,6 +1,6 @@
 "use client";
 
-import { onValue, ref } from "firebase/database";
+import { onValue, ref } from "@/lib/offlineFirebaseDatabase";
 import { useEffect, useMemo, useState } from "react";
 import { db } from "../../../lib/firebase";
 

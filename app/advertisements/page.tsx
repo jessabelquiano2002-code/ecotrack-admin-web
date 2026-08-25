@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { onValue, ref } from "firebase/database";
+import { onValue, ref } from "@/lib/offlineFirebaseDatabase";
 import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
 

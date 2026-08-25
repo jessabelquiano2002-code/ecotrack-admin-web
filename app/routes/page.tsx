@@ -1,9 +1,10 @@
 "use client";
 
-import { onValue, push, ref, update } from "firebase/database";
+import { onValue, push, ref, update } from "@/lib/offlineFirebaseDatabase";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Map as MapLibreMap, Marker as MapLibreMarker } from "maplibre-gl";
 import { db } from "../../lib/firebase";
+import { getWasteTrackMapStyle } from "../../lib/mapStyle";
 import { DashboardShell } from "../components/DashboardShell";
 
 const BARANGAYS = [
@@ -281,7 +282,7 @@ export default function RoutesPage() {
 
       const map = new maplibregl.Map({
         container: mapContainerRef.current,
-        style: "https://tiles.openfreemap.org/styles/bright",
+        style: getWasteTrackMapStyle("https://tiles.openfreemap.org/styles/bright"),
         center: CATBALOGAN_MAP_LOCATION.center,
         zoom: CATBALOGAN_MAP_LOCATION.zoom,
         attributionControl: { compact: true },

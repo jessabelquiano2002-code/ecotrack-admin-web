@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { usePathname, useRouter } from "next/navigation";
-import { onValue, ref, update } from "firebase/database";
+import { onValue, ref, subscribeOfflineState, update } from "@/lib/offlineFirebaseDatabase";
 import { auth, db } from "../../lib/firebase";
 import { AuthGate } from "./AuthGate";
 import {
@@ -201,6 +201,13 @@ const IconMap = () => (
   </svg>
 );
 
+
+const IconWastePoint = () => (
+  <svg viewBox="0 0 24 24" className="admin-svg-icon">
+    <path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7Zm-3.1 6h6.2l-.5 6.6a1.5 1.5 0 0 1-1.5 1.4h-2.2a1.5 1.5 0 0 1-1.5-1.4L8.9 8Zm-.7-2h2.2l.5-1h2.2l.5 1h2.2v1.4H8.2V6Z" />
+  </svg>
+);
+
 const IconRoutes = () => (
   <svg viewBox="0 0 24 24" className="admin-svg-icon">
     <path d="M7 7a3 3 0 1 1 .1 0H7Zm10 10a3 3 0 1 1-.1 0h.1ZM7 9.5c0 3.8 10 1.2 10 5h-2c0-1.7-10 .8-10-5H7Z" />
@@ -282,7 +289,7 @@ const links: SidebarLink[] = [
   },
   {
     href: "/drivers",
-    label: "Users",
+    label: "Users & Drivers",
     group: "MANAGEMENT",
     icon: <IconUsers />,
   },
@@ -293,20 +300,26 @@ const links: SidebarLink[] = [
     icon: <IconCalendar />,
   },
   {
+    href: "/waste-points",
+    label: "Waste Points",
+    group: "MANAGEMENT",
+    icon: <IconWastePoint />,
+  },
+  {
     href: "/content-management",
-    label: "Onboarding & Content",
+    label: "Education & Content",
     group: "MANAGEMENT",
     icon: <IconBook />,
   },
   {
     href: "/issues",
-    label: "Driver & Resident Issues",
+    label: "Issues & Complaints",
     group: "MANAGEMENT",
     icon: <IconWarning />,
   },
   {
     href: "/activity-requests",
-    label: "Driver Activity Requests",
+    label: "Driver Requests",
     group: "REPORTS",
     icon: <IconBook />,
   },
@@ -354,6 +367,12 @@ export function DashboardShell({
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
+  const [connectionState, setConnectionState] = useState({
+    online: true,
+    firebaseConnected: false,
+    pendingWrites: 0,
+  });
+  const [lastConnectedAt, setLastConnectedAt] = useState<number | null>(null);
 
   const [adminProfile, setAdminProfile] = useState<AdminProfile>({
     name: "Admin User",
@@ -364,6 +383,29 @@ export function DashboardShell({
 
   const menuRef = useRef<HTMLDivElement | null>(null);
   const logoutCancelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = subscribeOfflineState((state) => {
+      setConnectionState(state);
+      if (state.online && state.firebaseConnected) setLastConnectedAt(Date.now());
+    });
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    };
+
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, []);
 
   useEffect(() => {
     const unsub = onValue(ref(db, "notifications"), (snap) => {
@@ -507,6 +549,19 @@ export function DashboardShell({
   };
 
   const profileImageSrc = normalizeProfileImage(adminProfile.profileImage);
+  const offline = !connectionState.online;
+  const connecting = connectionState.online && !connectionState.firebaseConnected;
+  const syncing = connectionState.online && connectionState.firebaseConnected && connectionState.pendingWrites > 0;
+  const lastSyncLabel = lastConnectedAt
+    ? new Date(lastConnectedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    : "just now";
+  const connectionLabel = offline
+    ? `Offline • saved data${connectionState.pendingWrites ? ` • ${connectionState.pendingWrites} pending` : ""}`
+    : connecting
+      ? "Connecting to Firebase…"
+      : syncing
+        ? `Online • syncing ${connectionState.pendingWrites} change${connectionState.pendingWrites === 1 ? "" : "s"}`
+        : `Online • synced ${lastSyncLabel}`;
 
   const avatar = profileImageSrc ? (
     <img
@@ -688,6 +743,7 @@ export function DashboardShell({
               </span>
 
               <input
+                ref={searchInputRef}
                 className="admin-search"
                 type="text"
                 value={searchValue}
@@ -695,7 +751,7 @@ export function DashboardShell({
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleSearch();
                 }}
-                placeholder="Search trucks, routes, drivers..."
+                placeholder="Search users or drivers..."
               />
 
               {searchValue ? (
@@ -807,9 +863,14 @@ export function DashboardShell({
                   {description && <p>{description}</p>}
                 </div>
 
-                <div className="admin-update-status">
-                  <span>Last updated: Just now</span>
-                  <span className="admin-live-dot" />
+                <div
+                  className={`admin-update-status ${offline ? "is-offline" : connecting || syncing ? "is-syncing" : ""}`}
+                  role="status"
+                  aria-live="polite"
+                  title={offline ? "WasteTrack is showing saved information from this device." : "WasteTrack is connected to Firebase."}
+                >
+                  <span className="admin-live-dot" aria-hidden="true" />
+                  <span>{connectionLabel}</span>
                 </div>
               </section>
             )}

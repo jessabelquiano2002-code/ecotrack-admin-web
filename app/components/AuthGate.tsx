@@ -57,8 +57,17 @@ export function AuthGate({ children }: { children: ReactNode }) {
           } catch {
             if (!cancelled) {
               setIsAllowed(false);
-              setMessage("Unable to verify the session. Redirecting to sign in…");
               setChecking(true);
+
+              if (typeof navigator !== "undefined" && !navigator.onLine) {
+                // Keep the locally persisted Firebase session intact. A device
+                // that has never completed one online admin verification must
+                // connect once before secure offline mode can be enabled.
+                setMessage("Offline access is not verified on this device yet. Connect once, sign in, then WasteTrack can reopen offline.");
+                return;
+              }
+
+              setMessage("Unable to verify the session. Redirecting to sign in…");
               beginSignOutRedirect();
               await signOutAdmin().catch(() => undefined);
               redirectToLogin({ reason: "session-error" });

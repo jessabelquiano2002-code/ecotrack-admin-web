@@ -9,7 +9,7 @@ import {
   update,
   type DataSnapshot,
   type Unsubscribe,
-} from "firebase/database";
+} from "@/lib/offlineFirebaseDatabase";
 import { db } from "./firebase";
 import {
   COLLECTIONS,

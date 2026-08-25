@@ -1,0 +1,541 @@
+/*
+ * WasteTrack Admin — Older-User / Accessibility UI Layer
+ * ------------------------------------------------------
+ * Screen-only presentation overrides. No Firebase, route, API, database,
+ * authorization, offline queue, or report-printing logic is changed here.
+ */
+
+@media screen {
+  :root {
+    --wt-readable-text: #17251f;
+    --wt-readable-muted: #4b5f56;
+    --wt-readable-soft: #62766d;
+    --wt-readable-line: #cfdad4;
+    --wt-focus: #0b7a50;
+    --wt-danger: #b42318;
+  }
+
+  html {
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    color: var(--wt-readable-text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+  }
+
+  /* Strong keyboard visibility for older users and keyboard-only staff. */
+  :where(a, button, input, textarea, select, [role="button"], [tabindex]):focus-visible {
+    outline: 3px solid rgba(11, 122, 80, .38) !important;
+    outline-offset: 3px !important;
+  }
+
+  /* ---------------------------------------------------
+     ADMIN SHELL / NAVIGATION
+     --------------------------------------------------- */
+  .admin-shell {
+    font-size: 16px;
+    line-height: 1.5;
+  }
+
+  .admin-nav-group-title {
+    font-size: 13px !important;
+    line-height: 1.25 !important;
+    letter-spacing: .12em !important;
+    color: #a8c9ba !important;
+  }
+
+  .admin-nav-link {
+    min-height: 56px !important;
+    padding-inline: 17px !important;
+    font-size: 16px !important;
+    line-height: 1.3 !important;
+    font-weight: 760 !important;
+  }
+
+  .admin-nav-icon {
+    width: 31px !important;
+    height: 31px !important;
+    flex: 0 0 31px !important;
+  }
+
+  .admin-nav-icon .admin-svg-icon {
+    width: 22px !important;
+    height: 22px !important;
+  }
+
+  .admin-badge {
+    min-width: 30px !important;
+    height: 26px !important;
+    padding-inline: 8px !important;
+    font-size: 12px !important;
+    line-height: 1 !important;
+  }
+
+  .admin-user-name {
+    font-size: 15px !important;
+    line-height: 1.3 !important;
+  }
+
+  .admin-user-email {
+    font-size: 13px !important;
+    line-height: 1.35 !important;
+    color: #b9d0c5 !important;
+  }
+
+  .admin-topbar {
+    min-height: 72px !important;
+  }
+
+  .admin-search-wrap {
+    min-height: 48px !important;
+  }
+
+  .admin-search {
+    min-height: 48px !important;
+    font-size: 16px !important;
+    line-height: 1.3 !important;
+    color: #13241c !important;
+  }
+
+  .admin-search::placeholder {
+    color: #65786f !important;
+    opacity: 1 !important;
+  }
+
+  .admin-search-shortcut {
+    font-size: 13px !important;
+  }
+
+  .admin-search-clear,
+  .admin-icon-btn,
+  .admin-mobile-menu {
+    min-width: 44px !important;
+    min-height: 44px !important;
+  }
+
+  .admin-icon-btn {
+    width: 48px !important;
+    height: 48px !important;
+  }
+
+  .admin-profile-mini {
+    min-height: 48px !important;
+    padding-block: 5px !important;
+  }
+
+  .admin-profile-name {
+    font-size: 15px !important;
+    line-height: 1.25 !important;
+  }
+
+  .admin-profile-role,
+  .admin-dropdown-email {
+    font-size: 13px !important;
+    line-height: 1.35 !important;
+    color: #596d63 !important;
+  }
+
+  .admin-dropdown-name {
+    font-size: 16px !important;
+    line-height: 1.3 !important;
+  }
+
+  .admin-dropdown-item {
+    min-height: 48px !important;
+    font-size: 15px !important;
+    line-height: 1.35 !important;
+  }
+
+  .admin-content {
+    color: var(--wt-readable-text);
+  }
+
+  .admin-page-head h1 {
+    font-size: clamp(29px, 2.2vw, 34px) !important;
+    line-height: 1.15 !important;
+    letter-spacing: -.035em !important;
+  }
+
+  .admin-page-head p {
+    max-width: 780px;
+    font-size: 16px !important;
+    line-height: 1.6 !important;
+    font-weight: 500 !important;
+    color: var(--wt-readable-muted) !important;
+  }
+
+  .admin-update-status {
+    min-height: 36px;
+    padding: 7px 11px;
+    border: 1px solid #d6e2dc;
+    border-radius: 999px;
+    background: #ffffff;
+    color: #455b50 !important;
+    font-size: 14px !important;
+    line-height: 1.25 !important;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, .05);
+  }
+
+  .admin-update-status.is-offline {
+    border-color: #e9c46a;
+    background: #fff8e6;
+    color: #765610 !important;
+  }
+
+  .admin-update-status.is-syncing {
+    border-color: #b9dcca;
+    background: #f0fbf5;
+    color: #176a43 !important;
+  }
+
+  .admin-live-dot {
+    width: 11px !important;
+    height: 11px !important;
+    flex: 0 0 11px;
+  }
+
+  .admin-update-status.is-offline .admin-live-dot {
+    background: #d39a19 !important;
+    box-shadow: 0 0 0 5px rgba(211, 154, 25, .12) !important;
+  }
+
+  /* ---------------------------------------------------
+     COMMON PAGE TYPOGRAPHY / CONTROLS
+     --------------------------------------------------- */
+  .admin-shell :where(p, li, dd, dt) {
+    line-height: 1.55;
+  }
+
+  .admin-shell :where(label) {
+    font-size: 15px !important;
+    line-height: 1.4 !important;
+    color: #31483d !important;
+  }
+
+  .admin-shell :where(small) {
+    font-size: 14px !important;
+    line-height: 1.45 !important;
+  }
+
+  .admin-shell :where(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select, textarea) {
+    min-height: 48px !important;
+    font-size: 16px !important;
+    line-height: 1.35 !important;
+    color: #15251d !important;
+    border-color: #bfcfc7 !important;
+  }
+
+  .admin-shell textarea {
+    min-height: 112px !important;
+    padding-block: 12px !important;
+  }
+
+  .admin-shell :where(input, select, textarea):focus {
+    border-color: #0b7a50 !important;
+    box-shadow: 0 0 0 3px rgba(11, 122, 80, .12) !important;
+  }
+
+  .admin-shell :where(button):not(.maplibregl-ctrl button) {
+    font-size: 15px;
+    line-height: 1.3;
+  }
+
+  .admin-shell :where(
+    .primary-action,
+    .primaryButton,
+    .secondaryButton,
+    .dangerButton,
+    .danger-btn,
+    .soft-btn,
+    .cancel-btn,
+    .save-btn,
+    .create-route-btn,
+    .create-schedule-btn,
+    .delete-btn,
+    .clearButton,
+    .backButton,
+    .file-button,
+    .fileButton,
+    .reset-btn,
+    .primary,
+    .secondary
+  ) {
+    min-height: 46px !important;
+    padding: 10px 16px !important;
+    font-size: 15px !important;
+    font-weight: 750 !important;
+  }
+
+  .admin-shell :where(
+    .row-actions,
+    .table-actions,
+    .actions,
+    .cardActions,
+    .modal-actions,
+    .modalActions,
+    .composeActions,
+    .profile-modal-actions
+  ) button {
+    min-height: 42px !important;
+    min-width: 42px !important;
+    padding: 8px 12px !important;
+    font-size: 14px !important;
+  }
+
+  /* Status pills stay compact, but no longer use 9–11px text. */
+  .admin-shell :where(
+    .status-pill,
+    .statusPill,
+    .itemStatus,
+    .requiredPill,
+    .reviewStatus,
+    .composeStatusPill,
+    .licence-number-badge,
+    .audienceLabel
+  ) {
+    min-height: 26px;
+    display: inline-flex !important;
+    align-items: center;
+    font-size: 13px !important;
+    line-height: 1.15 !important;
+    font-weight: 800 !important;
+  }
+
+  /* Readable metadata/helper copy across the different page design systems. */
+  .admin-shell :where(
+    .metric-label,
+    .stat-label,
+    .metric-helper,
+    .metric-note,
+    .panel-total,
+    .record-time,
+    .adMeta,
+    .complaintMeta,
+    .profile-kicker,
+    .section-eyebrow,
+    .eyebrow,
+    .map-disclaimer,
+    .field-helper,
+    .form-help,
+    .helper,
+    .noticeFooter,
+    .profile-save-status
+  ) {
+    font-size: 14px !important;
+    line-height: 1.45 !important;
+  }
+
+  .admin-shell :where(
+    .metric-label,
+    .stat-label,
+    .metric-helper,
+    .metric-note,
+    .panel-total,
+    .record-time,
+    .adMeta,
+    .complaintMeta,
+    .map-disclaimer
+  ) {
+    color: var(--wt-readable-soft) !important;
+  }
+
+  /* ---------------------------------------------------
+     TABLES — larger rows, darker headings, clearer actions
+     --------------------------------------------------- */
+  .admin-shell :where(table) {
+    font-size: 15px;
+  }
+
+  .admin-shell :where(table th) {
+    padding: 14px 16px !important;
+    font-size: 14px !important;
+    line-height: 1.35 !important;
+    font-weight: 800 !important;
+    color: #41564c !important;
+    background-color: #f6faf8;
+  }
+
+  .admin-shell :where(table td) {
+    padding: 15px 16px !important;
+    font-size: 15px !important;
+    line-height: 1.5 !important;
+    color: #243a30;
+  }
+
+  .admin-shell :where(table tbody tr) {
+    min-height: 58px;
+  }
+
+  .admin-shell :where(table tbody tr:hover) {
+    background-color: #f8fbf9;
+  }
+
+  /* ---------------------------------------------------
+     CARDS / MODALS / EMPTY STATES
+     --------------------------------------------------- */
+  .admin-shell :where(
+    .modal-card,
+    .modal,
+    .editor,
+    .panel,
+    .profile-card,
+    .settings-card,
+    .request-card,
+    .adCard,
+    .dashboard-panel,
+    .users-table-card
+  ) {
+    color: var(--wt-readable-text);
+  }
+
+  .admin-shell :where(
+    .modal-card h2,
+    .modal h2,
+    .editor h2,
+    .panel h2,
+    .profile-card h2,
+    .settings-card h2
+  ) {
+    line-height: 1.25 !important;
+  }
+
+  .admin-shell :where(.empty-state, .emptyState, .empty) {
+    font-size: 15px !important;
+    line-height: 1.55 !important;
+  }
+
+  .admin-shell :where(.form-error, .errorBox, .error-message, .noticeBox, .noticeMessage, .warning-card) {
+    font-size: 14px !important;
+    line-height: 1.5 !important;
+  }
+
+  /* Destructive buttons must read as destructive, not merely icon-only. */
+  .admin-shell :where(.danger-btn, .dangerButton, .delete-btn, .deleteButton, .deleteTopButton) {
+    color: #fff !important;
+    background-color: var(--wt-danger) !important;
+    border-color: var(--wt-danger) !important;
+  }
+
+  /* ---------------------------------------------------
+     LOGIN — larger fields and readable security/help copy
+     --------------------------------------------------- */
+  .login-page {
+    font-size: 16px;
+    color: var(--wt-readable-text);
+  }
+
+  .login-page :where(label) {
+    font-size: 16px !important;
+    line-height: 1.35 !important;
+    font-weight: 700 !important;
+  }
+
+  .login-page :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    min-height: 52px !important;
+    font-size: 16px !important;
+    line-height: 1.35 !important;
+  }
+
+  .login-page .submit-button {
+    min-height: 52px !important;
+    font-size: 16px !important;
+    font-weight: 800 !important;
+  }
+
+  .login-page :where(.product-subtitle, .security-card, .page-footer, .error-message, .notice-message) {
+    font-size: 14px !important;
+    line-height: 1.5 !important;
+  }
+
+  .login-page .eyebrow {
+    font-size: 13px !important;
+    line-height: 1.35 !important;
+  }
+
+  /* ---------------------------------------------------
+     CONTENT MANAGEMENT CSS MODULE (hashed class names retain substring)
+     --------------------------------------------------- */
+  [class*="content-management"] :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea),
+  [class*="content-management"] :where(button) {
+    min-height: 46px;
+    font-size: 15px;
+  }
+
+  /* ---------------------------------------------------
+     RESPONSIVE
+     --------------------------------------------------- */
+  @media (max-width: 900px) {
+    .admin-nav-link,
+    .admin-shell.sidebar-collapsed .admin-nav-link {
+      min-height: 56px !important;
+      font-size: 16px !important;
+    }
+
+    .admin-topbar {
+      min-height: 70px !important;
+    }
+
+    .admin-search {
+      min-height: 46px !important;
+      font-size: 15px !important;
+    }
+
+    .admin-content {
+      padding: 22px 16px 30px !important;
+    }
+
+    .admin-page-head {
+      gap: 12px !important;
+    }
+
+    .admin-update-status {
+      white-space: normal !important;
+    }
+  }
+
+  @media (max-width: 620px) {
+    .admin-page-head h1 {
+      font-size: 28px !important;
+    }
+
+    .admin-page-head p {
+      font-size: 15px !important;
+    }
+
+    .admin-shell :where(table th) {
+      font-size: 13px !important;
+    }
+
+    .admin-shell :where(table td) {
+      font-size: 14px !important;
+    }
+  }
+
+  /* Users who prefer less motion should not have animated UI distractions. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      scroll-behavior: auto !important;
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+    }
+  }
+  /* Final readability lock: outranks legacy page-level global shell overrides. */
+  body .admin-shell .admin-nav-group-title { font-size: 13px !important; }
+  body .admin-shell .admin-nav-link { min-height: 56px !important; font-size: 16px !important; }
+  body .admin-shell .admin-user-name { font-size: 15px !important; }
+  body .admin-shell .admin-user-email { font-size: 13px !important; }
+  body .admin-shell .admin-search { min-height: 48px !important; font-size: 16px !important; }
+  body .admin-shell .admin-search-shortcut { font-size: 13px !important; }
+  body .admin-shell .admin-profile-name { font-size: 15px !important; }
+  body .admin-shell .admin-profile-role { font-size: 13px !important; }
+  body .admin-shell .admin-update-status { font-size: 14px !important; }
+  body .admin-shell .locationWarning { font-size: 14px !important; line-height: 1.45 !important; }
+
+}

@@ -1,9 +1,10 @@
 "use client";
 
 import type { GeoJSONSource, Map as MapLibreMap, Marker } from "maplibre-gl";
-import { onValue, ref } from "firebase/database";
+import { onValue, ref } from "@/lib/offlineFirebaseDatabase";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "../../lib/firebase";
+import { getWasteTrackMapStyle } from "../../lib/mapStyle";
 import { normalizeCheckpoints, normalizeCoordinates, type LngLatTuple } from "../../lib/geo";
 
 type RawRecord = Record<string, unknown>;
@@ -638,7 +639,7 @@ function RouteMap({ coordinates, actualPoints, checkpoints, passedSegments, sele
 
         // Use a vector basemap instead of requesting high-zoom
         // raster tiles directly from tile.openstreetmap.org.
-        style: "https://tiles.openfreemap.org/styles/liberty",
+        style: getWasteTrackMapStyle(),
       });
 
       map.addControl(new maplibregl.NavigationControl(), "top-right");
@@ -791,7 +792,7 @@ function ActivityDayMap({ activities, focusKey }: { activities: DriverActivity[]
         zoom: 13,
         minZoom: 0,
         maxZoom: 24,
-        style: "https://tiles.openfreemap.org/styles/liberty",
+        style: getWasteTrackMapStyle(),
         attributionControl: false,
       });
 
@@ -1450,7 +1451,7 @@ async function captureActualActivityMap(activities: DriverActivity[]): Promise<s
       zoom: 13,
       minZoom: 0,
       maxZoom: 24,
-      style: "https://tiles.openfreemap.org/styles/liberty",
+      style: getWasteTrackMapStyle(),
       attributionControl: false,
 
       // MapLibre's drawing buffer is normally discarded after rendering.

@@ -1,6 +1,6 @@
 "use client";
 
-import { onValue, ref } from "firebase/database";
+import { onValue, ref } from "@/lib/offlineFirebaseDatabase";
 import { useEffect, useMemo, useState } from "react";
 import { db } from "../../lib/firebase";
 
@@ -191,13 +191,13 @@ type ReportSummary = {
 };
 
 const REPORT_TYPES: Array<{ value: ReportType; label: string; description: string }> = [
-  { value: "complete", label: "Complete System", description: "Executive, collection, drivers, trucks, issues, schedules and GPS." },
-  { value: "collection", label: "Collection", description: "Barangay and Purok collection completion and follow-up." },
-  { value: "drivers", label: "Driver", description: "Driver activity, completion, GPS and service coverage." },
-  { value: "capacity", label: "Truck Capacity", description: "1/4, 1/2, 3/4 and Full truck operational pressure." },
-  { value: "issues", label: "Issues", description: "Resident and driver operational issues and unresolved cases." },
-  { value: "schedules", label: "Schedule", description: "Current schedule coverage and execution performance." },
-  { value: "gps", label: "GPS Activity", description: "Actual recorded collection-session GPS route traces." },
+  { value: "complete", label: "Full Agency Report", description: "Executive overview with collection, drivers, trucks, issues, schedules, and GPS." },
+  { value: "collection", label: "Collection Performance", description: "Barangay and Purok completion, missed service, and required follow-up." },
+  { value: "drivers", label: "Driver Operations", description: "Driver activity, assignments, collection completion, and GPS evidence." },
+  { value: "capacity", label: "Truck Capacity", description: "Operational truck-load pressure using 1/4, 1/2, 3/4, and Full estimates." },
+  { value: "issues", label: "Issues & Complaints", description: "Open and resolved operational issues reported by residents and drivers." },
+  { value: "schedules", label: "Schedule Performance", description: "Current service coverage compared with actual collection execution." },
+  { value: "gps", label: "GPS Activity", description: "Recorded collection-session route traces and field activity evidence." },
 ];
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -1434,22 +1434,22 @@ export function MetroWastePlanningReport() {
     <section className="ops-report-shell" aria-label="WasteTrack operations report generator">
       <div className="ops-hero">
         <div className="ops-hero-copy">
-          <div className="ops-kicker"><span className="ops-live-dot" /> WASTETRACK • METRO WASTE</div>
-          <h2>Operations Intelligence & Reporting</h2>
+          <div className="ops-kicker"><span className="ops-live-dot" /> WASTETRACK • AGENCY REPORTING</div>
+          <h2>Agency Operations Report</h2>
           <p>
-            Generate management-ready reports from the records WasteTrack actually captures: collection completion,
-            truck load, collected and uncollected Puroks, GPS activity, driver operations, issues, and schedule coverage.
+            Prepare clear, management-ready reports from WasteTrack operational records. Review collection performance,
+            service gaps, truck capacity, driver activity, GPS evidence, schedules, and reported issues in one place.
           </p>
           <div className="ops-source-chips">
-            <span><SourceIcon kind="database" />Realtime Database</span>
-            <span><SourceIcon kind="cloudOff" />No Firebase Storage</span>
-            <span><SourceIcon kind="shield" />Operational data only</span>
+            <span><SourceIcon kind="database" />Realtime operational data</span>
+            <span><SourceIcon kind="cloudOff" />Offline-ready records</span>
+            <span><SourceIcon kind="shield" />A4 portrait reporting</span>
           </div>
         </div>
         <div className="ops-hero-actions">
           <button type="button" className="ops-primary" onClick={generateReport}>
             <ActionIcon kind="report" />
-            Generate Operations Report
+            Generate Report
           </button>
           <button
             type="button"
@@ -1481,10 +1481,18 @@ export function MetroWastePlanningReport() {
       <div className="ops-config-card">
         <div className="ops-config-heading">
           <div>
-            <span>REPORT CONFIGURATION</span>
-            <strong>Choose the management view you need</strong>
+            <span>REPORT BUILDER</span>
+            <strong>Choose what the agency report should focus on</strong>
+            <small>Select a report type and service filters. No database records are changed when a report is generated.</small>
           </div>
-          <div className="ops-updated">Last realtime update <b>{formatDateTime(lastUpdated)}</b></div>
+          <div className="ops-updated"><span className="ops-updated-dot" />Last data update <b>{formatDateTime(lastUpdated)}</b></div>
+        </div>
+
+        <div className="ops-workflow" aria-label="Agency report steps">
+          <div><b>1</b><span><strong>Choose report</strong><small>Select the management view.</small></span></div>
+          <div><b>2</b><span><strong>Set filters</strong><small>Period, area, driver, or truck.</small></span></div>
+          <div><b>3</b><span><strong>Generate</strong><small>Review the report on screen.</small></span></div>
+          <div><b>4</b><span><strong>Print / PDF</strong><small>A4 portrait output.</small></span></div>
         </div>
 
         <div className="ops-report-types">
@@ -1564,7 +1572,7 @@ export function MetroWastePlanningReport() {
         <div className="ops-output">
           <header className="ops-output-head">
             <div>
-              <div className="ops-kicker">GENERATED OPERATIONS REPORT</div>
+              <div className="ops-kicker">AGENCY REPORT PREVIEW</div>
               <h3>{reportTypeLabel(reportType)} Report</h3>
               <p>{reportSubtitle}</p>
             </div>
@@ -1792,7 +1800,7 @@ export function MetroWastePlanningReport() {
           )}
 
           <footer className="ops-report-footer">
-            <div><strong>WasteTrack Operations Report</strong><span>Generated from Firebase Realtime Database operational records.</span></div>
+            <div><strong>WasteTrack Agency Operations Report</strong><span>Management-ready report generated from operational records.</span></div>
             <div><span>Prepared / Reviewed by</span><span className="signature-line" /></div>
             <div><span>Authorized Representative</span><span className="signature-line" /></div>
           </footer>
@@ -3055,6 +3063,330 @@ export function MetroWastePlanningReport() {
           .ops-kpi{border-right:0;border-bottom:1px solid #edf1ef}
           .ops-kpi:last-child{border-bottom:0}
         }
+
+        /* =========================================================
+           AGENCY REPORT — PROFESSIONAL LGU / OLDER-USER POLISH
+           Presentation only. Firebase/data/report calculations unchanged.
+           ========================================================= */
+        .ops-report-shell{
+          --agency-green:#087a4b;
+          --agency-green-dark:#055c39;
+          --agency-green-soft:#edf8f2;
+          --agency-ink:#14251d;
+          --agency-muted:#5f7168;
+          --agency-line:#dce7e1;
+          --agency-surface:#ffffff;
+          --agency-bg:#f7faf8;
+          gap:18px;
+          color:var(--agency-ink);
+        }
+        .ops-hero{
+          min-height:176px;
+          padding:24px 26px;
+          border:1px solid var(--agency-line);
+          border-left:5px solid var(--agency-green);
+          border-radius:18px;
+          background:
+            linear-gradient(110deg,#ffffff 0%,#ffffff 58%,#f1faf5 100%);
+          box-shadow:0 10px 30px rgba(20,52,36,.065);
+        }
+        .ops-hero h2{
+          margin:8px 0 7px;
+          color:#10251b;
+          font-size:30px;
+          line-height:1.15;
+          letter-spacing:-.025em;
+        }
+        .ops-hero p{
+          max-width:790px;
+          color:#53675d;
+          font-size:15px;
+          line-height:1.65;
+        }
+        .ops-kicker{
+          color:var(--agency-green);
+          font-size:13px;
+          letter-spacing:.055em;
+        }
+        .ops-source-chips span{
+          min-height:34px;
+          padding:7px 12px;
+          border-color:#d8e6de;
+          background:#fff;
+          color:#304b3e;
+          font-size:13px;
+        }
+        .ops-hero-actions{
+          min-width:260px;
+          gap:10px;
+        }
+        .ops-hero-actions button{
+          min-height:48px!important;
+          height:48px;
+          border-radius:11px!important;
+          font-size:15px;
+          font-weight:850;
+        }
+        .ops-primary{
+          background:linear-gradient(135deg,#0a8a52,#087344)!important;
+          box-shadow:0 8px 18px rgba(8,122,75,.18)!important;
+        }
+        .ops-config-card,
+        .ops-output,
+        .ops-panel{
+          border-color:var(--agency-line);
+          background:var(--agency-surface);
+          box-shadow:0 8px 24px rgba(20,52,36,.045);
+        }
+        .ops-config-card{
+          padding:20px 22px 22px;
+          border-radius:18px;
+        }
+        .ops-config-heading{
+          align-items:flex-start;
+        }
+        .ops-config-heading>div:first-child{
+          display:grid;
+          gap:4px;
+        }
+        .ops-config-heading span{
+          color:var(--agency-green);
+          font-size:12px;
+          letter-spacing:.06em;
+        }
+        .ops-config-heading strong{
+          color:#163025;
+          font-size:20px;
+          line-height:1.3;
+        }
+        .ops-config-heading small{
+          max-width:720px;
+          color:#677a70;
+          font-size:14px;
+          line-height:1.5;
+        }
+        .ops-updated{
+          display:inline-flex;
+          align-items:center;
+          gap:7px;
+          min-height:38px;
+          padding:8px 11px;
+          border:1px solid #e1e9e4;
+          border-radius:10px;
+          background:#f8faf9;
+          color:#67776f;
+          font-size:13px;
+          white-space:nowrap;
+        }
+        .ops-updated b{font-size:13px;color:#294338}
+        .ops-updated-dot{
+          width:8px;
+          height:8px;
+          border-radius:50%;
+          background:#16a34a;
+          box-shadow:0 0 0 3px rgba(22,163,74,.10);
+        }
+        .ops-workflow{
+          display:grid;
+          grid-template-columns:repeat(4,minmax(0,1fr));
+          gap:8px;
+          margin-top:17px;
+          padding:10px;
+          border:1px solid #e2eae5;
+          border-radius:14px;
+          background:#f8fbf9;
+        }
+        .ops-workflow>div{
+          display:flex;
+          align-items:center;
+          gap:10px;
+          min-width:0;
+          padding:8px 10px;
+          border-right:1px solid #e3ebe6;
+        }
+        .ops-workflow>div:last-child{border-right:0}
+        .ops-workflow b{
+          display:grid;
+          place-items:center;
+          flex:0 0 30px;
+          width:30px;
+          height:30px;
+          border-radius:9px;
+          background:#e7f6ee;
+          color:var(--agency-green);
+          font-size:14px;
+        }
+        .ops-workflow span{
+          display:grid;
+          min-width:0;
+          gap:1px;
+        }
+        .ops-workflow strong{
+          color:#274237;
+          font-size:13px;
+          line-height:1.3;
+        }
+        .ops-workflow small{
+          color:#74847c;
+          font-size:12px;
+          line-height:1.35;
+        }
+        .ops-report-types{
+          grid-template-columns:repeat(4,minmax(0,1fr));
+          gap:10px;
+          margin-top:15px;
+        }
+        .ops-report-types button{
+          min-height:104px;
+          grid-template-columns:42px minmax(0,1fr);
+          gap:11px;
+          padding:14px;
+          border-radius:12px;
+          border-color:#dce6e0;
+        }
+        .ops-report-types button strong{
+          color:#263f34;
+          font-size:14px;
+          line-height:1.35;
+        }
+        .ops-report-types button span{
+          color:#64766d;
+          font-size:13px;
+          line-height:1.45;
+        }
+        .ops-report-types button.active{
+          border-color:#26a962;
+          background:#f0faf4;
+          box-shadow:inset 0 0 0 1px rgba(38,169,98,.13),0 5px 15px rgba(21,119,70,.05);
+        }
+        .ops-type-icon{
+          width:40px;
+          height:40px;
+          border-radius:10px;
+        }
+        .ops-filter-grid{
+          grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+          gap:12px;
+          margin-top:16px;
+          padding:16px;
+          border:1px solid #e3ebe6;
+          border-radius:14px;
+          background:#fbfcfb;
+        }
+        .ops-filter-grid label>span{
+          color:#566b60;
+          font-size:12px;
+          letter-spacing:.045em;
+        }
+        .ops-filter-grid select,
+        .ops-filter-grid input{
+          height:48px;
+          border-radius:10px;
+          border-color:#d7e1db;
+          background:#fff;
+          color:#1d3328;
+          font-size:15px;
+        }
+        .ops-empty-state{
+          padding:52px 24px;
+          border:1px dashed #cbdad2;
+          border-radius:18px;
+          background:linear-gradient(180deg,#fbfdfc,#f6faf8);
+        }
+        .ops-empty-icon{
+          width:52px;
+          height:52px;
+          border-radius:14px;
+          background:#087a4b;
+          font-size:22px;
+        }
+        .ops-empty-state h3{font-size:20px;color:#183126}
+        .ops-empty-state p{max-width:570px;font-size:15px;line-height:1.6;color:#65786e}
+        .ops-output{
+          gap:16px;
+          padding:22px;
+          border-radius:18px;
+        }
+        .ops-output-head{
+          padding:3px 2px 15px;
+          border-bottom:1px solid #dfe8e3;
+        }
+        .ops-output-head h3{
+          color:#132b20;
+          font-size:28px;
+        }
+        .ops-output-head p,
+        .ops-report-meta,
+        .ops-report-meta strong{
+          font-size:14px;
+        }
+        .ops-basis-note{
+          border-color:#cfe0f6;
+          border-radius:13px;
+          background:#f3f8fe;
+        }
+        .ops-basis-note strong{font-size:14px}
+        .ops-basis-note p{font-size:14px;line-height:1.6}
+        .ops-kpi-grid{
+          grid-template-columns:repeat(4,minmax(0,1fr));
+          gap:10px;
+          padding:0;
+          border:0;
+          background:transparent;
+        }
+        .ops-kpi{
+          min-height:112px;
+          padding:15px 16px;
+          border:1px solid #dfe8e3!important;
+          border-radius:14px!important;
+          background:#fbfcfb!important;
+        }
+        .ops-kpi:before{display:block}
+        .ops-kpi span,.ops-kpi small{font-size:13px!important}
+        .ops-kpi strong{font-size:25px!important}
+        .ops-panel{border-radius:16px}
+        .ops-section-title span{font-size:12px}
+        .ops-section-title h4{font-size:20px;color:#183126}
+        .ops-section-title p{font-size:14px;color:#687a70}
+        .ops-table-wrap{
+          border-color:#dce6e0;
+          border-radius:12px;
+          box-shadow:0 2px 8px rgba(17,49,33,.02);
+        }
+        .ops-table{min-width:1240px}
+        .ops-table th{
+          background:#f4f8f5;
+          color:#53685d;
+        }
+        .ops-table tbody tr:hover{background:#fbfdfc}
+        .ops-report-footer{
+          border-top:1px solid #dce6e0;
+          color:#5f7168;
+        }
+
+        @media(max-width:1250px){
+          .ops-report-types{grid-template-columns:repeat(3,1fr)}
+          .ops-workflow{grid-template-columns:repeat(2,1fr)}
+          .ops-workflow>div:nth-child(2){border-right:0}
+        }
+        @media(max-width:900px){
+          .ops-hero{padding:20px;gap:18px}
+          .ops-hero h2{font-size:27px}
+          .ops-hero-actions{min-width:0}
+          .ops-config-card{padding:18px}
+          .ops-config-heading{gap:12px}
+          .ops-report-types{grid-template-columns:repeat(2,1fr)}
+          .ops-kpi-grid{grid-template-columns:repeat(2,1fr)}
+        }
+        @media(max-width:560px){
+          .ops-workflow{grid-template-columns:1fr}
+          .ops-workflow>div{border-right:0;border-bottom:1px solid #e3ebe6}
+          .ops-workflow>div:last-child{border-bottom:0}
+          .ops-report-types,.ops-kpi-grid{grid-template-columns:1fr}
+          .ops-report-types button{min-height:94px}
+          .ops-filter-grid{padding:13px;grid-template-columns:1fr}
+          .ops-output{padding:14px}
+        }
       `}</style>
     </section>
   );
@@ -3190,104 +3522,133 @@ function printOperationsReport(input: {
   managementActions: string[];
   capacityDistribution: { quarter: number; half: number; threeQuarter: number; full: number; unknown: number };
 }) {
-  const printWindow = window.open("", "_blank", "width=1400,height=900");
+  const printWindow = window.open("", "_blank", "width=900,height=1100");
   if (!printWindow) {
     window.alert("The print window was blocked. Allow pop-ups for this site and try again.");
     return;
   }
 
-  const areaRowsHtml = (rows: AreaRow[], scope: "barangay" | "purok") => rows.map((row, index) => `
-    <tr>
-      <td>${index + 1}</td>
-      <td><strong>${escapeHtml(row.barangay)}</strong>${scope === "purok" ? `<br/><span>${escapeHtml(row.purok)}</span>` : ""}</td>
-      <td>${row.trips}</td><td>${row.completed}</td><td>${row.partial + row.missed}</td><td>${escapeHtml(formatPercent(row.completionRate))}</td>
-      <td>${row.averageLoad === null ? "—" : escapeHtml(formatPercent(row.averageLoad))}</td><td>${row.fullTruckEvents}</td><td>${row.openIssues}</td><td>${row.activeSchedules}</td><td>${row.gpsTrips}/${row.trips}</td>
-      <td><span class="pill ${row.priority.toLowerCase()}">${escapeHtml(row.priority)}</span></td>
-      <td>${escapeHtml(row.reasons.join("; "))}<br/><span>${escapeHtml(row.recommendation)}</span></td>
-    </tr>`).join("");
+  const areaRowsHtml = (rows: AreaRow[], scope: "barangay" | "purok") => rows.map((row, index) => {
+    const areaLabel = scope === "purok"
+      ? `<strong>${escapeHtml(row.barangay)}</strong><span>Purok: ${escapeHtml(row.purok || "—")}</span>`
+      : `<strong>${escapeHtml(row.barangay)}</strong>${row.followUpPuroks.length > 0 ? `<span>Follow-up: ${escapeHtml(row.followUpPuroks.join(", "))}</span>` : ""}`;
+    const load = row.averageLoad === null ? "—" : formatPercent(row.averageLoad);
+    return `<tr>
+      <td class="num">${index + 1}</td>
+      <td>${areaLabel}</td>
+      <td><strong>${row.trips} run${row.trips === 1 ? "" : "s"}</strong><span>${row.completed} completed • ${row.partial + row.missed} follow-up</span></td>
+      <td><strong>${escapeHtml(formatPercent(row.completionRate))}</strong><span>Est. load ${escapeHtml(load)} • ${row.fullTruckEvents} full</span></td>
+      <td><strong>${row.openIssues} issue${row.openIssues === 1 ? "" : "s"}</strong><span>${row.activeSchedules} schedule${row.activeSchedules === 1 ? "" : "s"} • GPS ${row.gpsTrips}/${row.trips} • ${escapeHtml(formatDistance(row.distanceMeters))}</span></td>
+      <td><span class="pill ${row.priority.toLowerCase()}">${escapeHtml(row.priority)}</span><p>${escapeHtml(row.recommendation)}</p>${row.reasons.length ? `<span>${escapeHtml(row.reasons.join("; "))}</span>` : ""}</td>
+    </tr>`;
+  }).join("");
 
-  const driverRowsHtml = input.driverRows.map((row, index) => `<tr><td>${index + 1}</td><td><strong>${escapeHtml(row.driverName)}</strong><br/><span>${escapeHtml(row.barangays.join(", "))}</span></td><td>${escapeHtml(row.currentStatus)}${row.activeScheduleId ? `<br/><span>Schedule ${escapeHtml(row.activeScheduleId)}</span>` : ""}</td><td>${escapeHtml(row.trucks.join(", ") || "—")}</td><td>${row.lastGpsAt > 0 ? escapeHtml(formatDateTime(row.lastGpsAt)) : "—"}</td><td>${row.trips}</td><td>${row.completed}</td><td>${row.partial + row.missed}</td><td>${escapeHtml(formatPercent(row.completionRate))}</td><td>${row.averageLoad === null ? "—" : escapeHtml(formatPercent(row.averageLoad))}</td><td>${row.fullTruckEvents}</td><td>${row.gpsTrips}</td><td>${escapeHtml(formatDistance(row.distanceMeters))}</td><td>${row.openIssues}</td><td>${escapeHtml(row.assessment)}</td></tr>`).join("");
+  const driverRowsHtml = input.driverRows.map((row, index) => `<tr>
+    <td class="num">${index + 1}</td>
+    <td><strong>${escapeHtml(row.driverName)}</strong><span>${escapeHtml(row.barangays.join(", ") || "No assigned area")}</span></td>
+    <td><strong>${escapeHtml(row.currentStatus || "—")}</strong><span>${escapeHtml(row.trucks.join(", ") || "No truck")}${row.activeScheduleId ? ` • Schedule ${escapeHtml(row.activeScheduleId)}` : ""}</span></td>
+    <td><strong>${row.trips} run${row.trips === 1 ? "" : "s"} • ${escapeHtml(formatPercent(row.completionRate))}</strong><span>${row.completed} completed • ${row.partial + row.missed} follow-up</span></td>
+    <td><strong>GPS ${row.gpsTrips}/${row.trips} • ${escapeHtml(formatDistance(row.distanceMeters))}</strong><span>Load ${row.averageLoad === null ? "—" : escapeHtml(formatPercent(row.averageLoad))} • ${row.fullTruckEvents} full • Last GPS ${row.lastGpsAt > 0 ? escapeHtml(formatDateTime(row.lastGpsAt)) : "—"}</span></td>
+    <td><strong>${row.openIssues} open issue${row.openIssues === 1 ? "" : "s"}</strong><span class="assessment-text">${escapeHtml(row.assessment)}</span></td>
+  </tr>`).join("");
 
-  const truckRowsHtml = input.truckRows.map((row, index) => `<tr><td>${index + 1}</td><td><strong>${escapeHtml(row.truckId)}</strong></td><td>${row.trips}</td><td>${row.completed}</td><td>${row.partial}</td><td>${row.averageLoad === null ? "—" : escapeHtml(formatPercent(row.averageLoad))}</td><td>${row.fullTruckEvents}</td><td>${escapeHtml(row.barangays.join(", "))}</td><td>${escapeHtml(row.drivers.join(", "))}</td><td>${escapeHtml(formatDistance(row.distanceMeters))}</td><td>${escapeHtml(row.assessment)}</td></tr>`).join("");
+  const truckRowsHtml = input.truckRows.map((row, index) => `<tr>
+    <td class="num">${index + 1}</td>
+    <td><strong>${escapeHtml(row.truckId)}</strong></td>
+    <td><strong>${row.trips} run${row.trips === 1 ? "" : "s"}</strong><span>${row.completed} completed • ${row.partial} partial</span></td>
+    <td><strong>${row.averageLoad === null ? "—" : escapeHtml(formatPercent(row.averageLoad))} avg. load</strong><span>${row.fullTruckEvents} full-truck event${row.fullTruckEvents === 1 ? "" : "s"}</span></td>
+    <td><strong>${escapeHtml(row.barangays.join(", ") || "—")}</strong><span>Drivers: ${escapeHtml(row.drivers.join(", ") || "—")} • ${escapeHtml(formatDistance(row.distanceMeters))}</span></td>
+    <td><strong>${escapeHtml(row.assessment)}</strong></td>
+  </tr>`).join("");
 
-  const issueRowsHtml = input.issueRows.slice(0, 100).map((row, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(formatDateTime(row.timestamp))}</td><td>${escapeHtml(row.source)}</td><td><strong>${escapeHtml(row.barangay)}</strong><br/><span>${escapeHtml(row.puroks.join(", "))}</span></td><td>${escapeHtml(row.type)}</td><td>${escapeHtml(row.severity)}</td><td>${escapeHtml(row.isOpen ? "Open" : "Resolved")}</td><td>${escapeHtml(row.details || "—")}</td></tr>`).join("");
+  const issueRowsHtml = input.issueRows.slice(0, 100).map((row, index) => `<tr>
+    <td class="num">${index + 1}</td>
+    <td><strong>${escapeHtml(formatDateTime(row.timestamp))}</strong><span>${escapeHtml(row.source)}</span></td>
+    <td><strong>${escapeHtml(row.barangay)}</strong><span>${escapeHtml(row.puroks.join(", ") || "No Purok specified")}</span></td>
+    <td><strong>${escapeHtml(row.type)}</strong><span>${escapeHtml(row.severity)}</span></td>
+    <td><span class="status ${row.isOpen ? "open" : "resolved"}">${escapeHtml(row.isOpen ? "Open" : "Resolved")}</span></td>
+    <td>${escapeHtml(row.details || "—")}</td>
+  </tr>`).join("");
 
-  const scheduleRowsHtml = input.scheduleRows.map((row, index) => `<tr><td>${index + 1}</td><td><strong>${escapeHtml(row.title)}</strong></td><td>${escapeHtml(row.barangay)}<br/><span>${escapeHtml(row.puroks.join(", ") || "All / unspecified Puroks")}</span></td><td>${escapeHtml(row.driverName)}</td><td>${escapeHtml(row.truckId)}</td><td>${escapeHtml(row.status)}</td><td>${row.trips}</td><td>${row.completed}</td><td>${row.partial}</td><td>${escapeHtml(formatPercent(row.completionRate))}</td><td>${escapeHtml(formatDateTime(row.lastActivity))}</td><td>${escapeHtml(row.assessment)}</td></tr>`).join("");
+  const scheduleRowsHtml = input.scheduleRows.map((row, index) => `<tr>
+    <td class="num">${index + 1}</td>
+    <td><strong>${escapeHtml(row.title)}</strong><span>${escapeHtml(row.barangay)} • ${escapeHtml(row.puroks.join(", ") || "All / unspecified Puroks")}</span></td>
+    <td><strong>${escapeHtml(row.driverName)}</strong><span>${escapeHtml(row.truckId)} • ${escapeHtml(row.status)}</span></td>
+    <td><strong>${row.trips} run${row.trips === 1 ? "" : "s"}</strong><span>${row.completed} completed • ${row.partial} partial</span></td>
+    <td><strong>${escapeHtml(formatPercent(row.completionRate))}</strong><span>Last activity: ${escapeHtml(formatDateTime(row.lastActivity))}</span></td>
+    <td><strong>${escapeHtml(row.assessment)}</strong></td>
+  </tr>`).join("");
 
-  const gpsHtml = input.gpsCards.slice(0, 20).map(({ collection, trace }, index) => `<div class="gps-card"><div class="gps-index">${index + 1}</div>${routeSvgHtml(trace.points)}<div class="gps-info"><strong>${escapeHtml(collection.routeName)}</strong><span>${escapeHtml(collection.barangay)} • ${escapeHtml(collection.driverName)} • ${escapeHtml(collection.truckId)}</span><span>${escapeHtml(formatDateTime(collection.timestamp))} • ${trace.points.length} points • ${escapeHtml(formatDistance(collection.distanceMeters))} • ${escapeHtml(formatDuration(collection.durationSeconds))}</span></div></div>`).join("");
+  const gpsHtml = input.gpsCards.slice(0, 20).map(({ collection, trace }, index) => `<div class="gps-card">
+    <div class="gps-index">${index + 1}</div>
+    ${routeSvgHtml(trace.points)}
+    <div class="gps-info"><strong>${escapeHtml(collection.routeName)}</strong><span>${escapeHtml(collection.barangay)} • ${escapeHtml(collection.driverName)} • ${escapeHtml(collection.truckId)}</span><span>${escapeHtml(formatDateTime(collection.timestamp))} • ${trace.points.length} points • ${escapeHtml(formatDistance(collection.distanceMeters))} • ${escapeHtml(formatDuration(collection.durationSeconds))}</span></div>
+  </div>`).join("");
 
   const actionsHtml = input.managementActions.map((action, index) => `<li><b>${index + 1}</b><span>${escapeHtml(action)}</span></li>`).join("");
   const include = (section: Exclude<ReportType, "complete">) => input.reportType === "complete" || input.reportType === section;
+  const reportTitle = `${reportTypeLabel(input.reportType)} Operations Report`;
 
-  printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"/><title>WasteTrack Operations Report</title><style>
-    *{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;margin:0;color:#0f172a;background:#fff;font-size:9px}.page{padding:18mm 12mm}.head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;border-bottom:3px solid #047857;padding-bottom:12px}.brand{font-size:8px;font-weight:900;letter-spacing:.12em;color:#047857}.head h1{margin:5px 0 4px;font-size:24px;letter-spacing:-.03em}.head p{margin:0;color:#64748b;line-height:1.45}.meta{text-align:right;color:#64748b}.meta strong{display:block;color:#0f172a;margin-top:3px}.basis{margin:11px 0;padding:10px 12px;border:1px solid #bfdbfe;border-radius:8px;background:#eff6ff;line-height:1.5}.basis strong{color:#1e40af}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin:11px 0}.kpi{border:1px solid #e2e8f0;border-radius:8px;padding:9px;background:#f8fafc}.kpi small,.kpi strong,.kpi span{display:block}.kpi small{font-size:6px;font-weight:900;text-transform:uppercase;color:#64748b}.kpi strong{font-size:15px;margin:3px 0}.kpi span{font-size:6.5px;color:#64748b}.section{margin-top:15px;page-break-inside:auto}.section-head{display:flex;justify-content:space-between;align-items:end;border-bottom:1px solid #cbd5e1;padding-bottom:5px;margin-bottom:7px}.section-head h2{margin:0;font-size:14px}.section-head span{color:#64748b;font-size:7px}.actions{background:#f0fdf4;border-left:4px solid #059669;padding:9px 11px;border-radius:6px}.actions ol{margin:0;padding:0;list-style:none;display:grid;gap:4px}.actions li{display:flex;gap:7px;line-height:1.45}.actions b{display:grid;place-items:center;flex:0 0 16px;height:16px;border-radius:5px;background:#047857;color:white;font-size:7px}table{width:100%;border-collapse:collapse;font-size:6.7px}th,td{border:1px solid #dbe3ea;padding:5px;text-align:left;vertical-align:top}th{background:#f1f5f9;color:#475569;font-size:5.8px;text-transform:uppercase}td span{color:#64748b}.pill{display:inline-block;border-radius:999px;padding:3px 5px;font-size:5.8px;font-weight:900}.pill.critical{background:#fee2e2;color:#b91c1c}.pill.high{background:#ffedd5;color:#c2410c}.pill.monitor{background:#dbeafe;color:#1d4ed8}.pill.stable{background:#dcfce7;color:#166534}.capacity{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:8px}.capacity div{border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#f8fafc}.capacity small,.capacity strong{display:block}.capacity small{color:#64748b}.capacity strong{font-size:15px;margin-top:3px}.gps-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.gps-card{position:relative;border:1px solid #dbe3ea;border-radius:8px;overflow:hidden;page-break-inside:avoid}.gps-index{position:absolute;z-index:2;left:7px;top:7px;width:18px;height:18px;border-radius:6px;background:#0f172a;color:#fff;display:grid;place-items:center;font-weight:900}.gps-svg{display:block;width:100%;height:125px}.gps-info{display:grid;gap:2px;padding:7px}.gps-info strong{font-size:8px}.gps-info span{color:#64748b;font-size:6.3px}.gps-empty{padding:20px;text-align:center}.signoff{display:grid;grid-template-columns:1fr 1fr;gap:60px;margin-top:30px}.signoff div{border-top:1px solid #0f172a;padding-top:5px;text-align:center;color:#64748b}.footer{margin-top:14px;padding-top:7px;border-top:1px solid #e2e8f0;color:#64748b;font-size:6px}
-    /* Print readability: keep report text at 12px minimum */
-    body{font-size:12px;line-height:1.45;color:#111827}
-    .page{padding:10mm 8mm}
-    .brand{font-size:12px}
-    .head h1{font-size:28px}
-    .head p,.meta,.meta strong{font-size:12px;line-height:1.45}
-    .basis,.basis strong{font-size:12px;line-height:1.55}
-    .kpi{padding:10px}
-    .kpi small,.kpi span{font-size:12px;line-height:1.35}
-    .kpi strong{font-size:20px}
-    .section-head h2{font-size:18px}
-    .section-head span{font-size:12px}
-    .actions li,.actions li span,.actions b{font-size:12px;line-height:1.5}
-    table{font-size:12px;line-height:1.35;table-layout:auto}
-    th,td{font-size:12px;padding:5px 4px;line-height:1.35;overflow-wrap:anywhere;word-break:normal}
-    th{font-size:12px;font-weight:800;background:#f1f5f9}
-    td span{font-size:12px;line-height:1.35}
-    .pill{font-size:12px;padding:3px 6px}
-    .capacity small,.capacity strong{font-size:12px}
-    .capacity strong{font-size:20px}
-    .gps-info strong,.gps-info span{font-size:12px;line-height:1.4}
-    .gps-index{font-size:12px;width:22px;height:22px}
-    .gps-empty,.signoff div,.footer{font-size:12px;line-height:1.45}
-    thead{display:table-header-group}
-    tfoot{display:table-footer-group}
-    tr{break-inside:avoid;page-break-inside:avoid}
-    .gps-card{break-inside:avoid;page-break-inside:avoid}
-
-    /* FINAL PRINT READABILITY — 14PX MINIMUM */
-    body{font-size:14px;line-height:1.45}
-    .brand{font-size:14px}
-    .head h1{font-size:28px}
-    .head p,.meta,.meta strong{font-size:14px}
-    .basis,.basis strong{font-size:14px}
-    .kpi small,.kpi span{font-size:14px}
-    .kpi strong{font-size:22px}
-    .section-head h2{font-size:20px}
-    .section-head span{font-size:14px}
-    .actions li,.actions li span,.actions b{font-size:14px}
-    table,th,td,td span{font-size:14px;line-height:1.35}
-    th{font-size:14px}
-    .pill{font-size:14px;padding:4px 7px}
-    .capacity small,.capacity strong{font-size:14px}
-    .capacity strong{font-size:22px}
-    .gps-info strong,.gps-info span{font-size:14px}
-    .gps-index{font-size:14px}
-    .gps-empty,.signoff div,.footer{font-size:14px}
-
-        @page{size:A4 landscape;margin:7mm}
+  printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${escapeHtml(reportTitle)}</title><style>
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;background:#fff;color:#17251e}
+    body{font-family:Arial,"Helvetica Neue",sans-serif;font-size:10.5pt;line-height:1.45;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .page{width:100%;max-width:190mm;margin:0 auto;padding:10mm 0 14mm}
+    .document-head{display:grid;grid-template-columns:minmax(0,1fr) 48mm;gap:8mm;align-items:start;padding-bottom:6mm;border-bottom:2.5px solid #087a4b}
+    .agency{display:flex;align-items:center;gap:3mm;margin-bottom:2mm;color:#087a4b;font-size:8.5pt;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+    .agency-mark{display:grid;place-items:center;width:8mm;height:8mm;border-radius:2.2mm;background:#087a4b;color:#fff;font-size:10pt;font-weight:900}
+    h1{margin:0 0 2mm;color:#14291f;font-size:20pt;line-height:1.12;letter-spacing:-.02em}
+    .subtitle{margin:0;color:#5e7167;font-size:9.7pt;line-height:1.45}
+    .meta{display:grid;gap:2.3mm;padding:3.5mm;border:1px solid #dbe6df;border-radius:2.5mm;background:#f7faf8}
+    .meta-row{display:grid;gap:.6mm}.meta span{color:#6c7c74;font-size:7.6pt;text-transform:uppercase;letter-spacing:.04em}.meta strong{color:#263d32;font-size:9pt}
+    .basis{margin:4.5mm 0 0;padding:3.5mm 4mm;border:1px solid #cfe0f3;border-left:3px solid #2d73c9;border-radius:2.5mm;background:#f4f8fd;color:#425b70;font-size:9.1pt;line-height:1.5}.basis strong{color:#214f86}
+    .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2.5mm;margin:4.5mm 0}
+    .kpi{min-height:23mm;padding:3.3mm;border:1px solid #dce6e0;border-radius:2.5mm;background:#fafcfb;break-inside:avoid}
+    .kpi small,.kpi strong,.kpi span{display:block}.kpi small{color:#63756c;font-size:7.2pt;font-weight:800;text-transform:uppercase;letter-spacing:.035em}.kpi strong{margin:1mm 0;color:#14291f;font-size:15.5pt;line-height:1.1}.kpi span{color:#697b72;font-size:7.6pt;line-height:1.35}
+    .section{margin-top:6mm;break-inside:auto}.section-head{display:flex;justify-content:space-between;align-items:end;gap:4mm;margin-bottom:2.5mm;padding-bottom:1.8mm;border-bottom:1px solid #bfcfc6;break-after:avoid}.section-head h2{margin:0;color:#173126;font-size:13pt;line-height:1.25}.section-head span{color:#697a72;font-size:8pt;text-align:right}
+    .actions{padding:3.5mm 4mm;border:1px solid #cae6d5;border-left:3px solid #159451;border-radius:2.5mm;background:#f3fbf6}.actions ol{display:grid;gap:2.3mm;margin:0;padding:0;list-style:none}.actions li{display:flex;gap:2.5mm;align-items:flex-start;color:#334d40;font-size:9.2pt;line-height:1.45;break-inside:avoid}.actions b{display:grid;place-items:center;flex:0 0 6mm;width:6mm;height:6mm;border-radius:1.7mm;background:#087a4b;color:#fff;font-size:8pt}
+    table{width:100%;border-collapse:separate;border-spacing:0;border:1px solid #d9e3dd;border-radius:2.2mm;overflow:hidden;font-size:8.4pt;line-height:1.35;table-layout:fixed}
+    thead{display:table-header-group}th{padding:2.2mm 1.8mm;border-bottom:1px solid #cedad3;background:#f2f7f4;color:#4d6257;font-size:7.3pt;font-weight:800;text-align:left;text-transform:uppercase;letter-spacing:.025em;vertical-align:bottom}
+    td{padding:2.3mm 1.8mm;border-bottom:1px solid #e4ebe7;color:#3d5147;vertical-align:top;overflow-wrap:anywhere}tbody tr:last-child td{border-bottom:0}tr{break-inside:avoid;page-break-inside:avoid}
+    td strong,td span{display:block}td strong{color:#20372c;font-size:8.6pt;line-height:1.35}td span{margin-top:.7mm;color:#6b7d74;font-size:7.8pt;line-height:1.35}td p{margin:1.2mm 0 0;color:#445a4f;font-size:7.8pt;line-height:1.4}.num{width:8mm;text-align:center;color:#718179}
+    .pill,.status{display:inline-flex!important;width:max-content;align-items:center;min-height:5.3mm;padding:0 2mm;border-radius:999px;font-size:7.2pt!important;font-weight:800}.pill.critical,.status.open{background:#fee2e2;color:#a91d1d}.pill.high{background:#ffedd5;color:#b8500c}.pill.monitor{background:#dbeafe;color:#1d4ed8}.pill.stable,.status.resolved{background:#dcfce7;color:#166534}.assessment-text{margin-top:1mm!important;font-weight:700;color:#314c3e!important}
+    .capacity{display:grid;grid-template-columns:repeat(4,1fr);gap:2.5mm;margin-bottom:3mm}.capacity>div{padding:3mm;border:1px solid #dce6e0;border-radius:2.3mm;background:#f9fbfa;break-inside:avoid}.capacity small,.capacity strong{display:block}.capacity small{color:#65776e;font-size:7.5pt}.capacity strong{margin-top:1mm;color:#173126;font-size:14pt}
+    .gps-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3mm}.gps-card{position:relative;overflow:hidden;border:1px solid #d9e3dd;border-radius:2.5mm;background:#fff;break-inside:avoid;page-break-inside:avoid}.gps-index{position:absolute;z-index:2;top:2mm;left:2mm;display:grid;place-items:center;width:7mm;height:7mm;border-radius:2mm;background:#183126;color:#fff;font-size:8pt;font-weight:900}.gps-svg{display:block;width:100%;height:42mm;border-bottom:1px solid #e3eae6}.gps-info{display:grid;gap:.8mm;padding:2.5mm 3mm}.gps-info strong{color:#20372c;font-size:8.7pt}.gps-info span{color:#6b7d74;font-size:7.6pt;line-height:1.35}.gps-empty{padding:8mm;text-align:center;border:1px dashed #cbd8d0;border-radius:2.5mm;color:#687970}
+    .signoff{display:grid;grid-template-columns:1fr 1fr;gap:20mm;margin-top:14mm;break-inside:avoid}.signoff div{padding-top:2mm;border-top:1px solid #405148;color:#66776f;font-size:8.5pt;text-align:center}.footer{margin-top:7mm;padding-top:2.5mm;border-top:1px solid #dbe4df;color:#6d7d75;font-size:7.5pt;text-align:center}
+    .collection-table th:nth-child(1){width:7mm}.collection-table th:nth-child(2){width:32mm}.collection-table th:nth-child(3){width:30mm}.collection-table th:nth-child(4){width:30mm}.collection-table th:nth-child(5){width:38mm}.collection-table th:nth-child(6){width:auto}
+    .driver-table th:nth-child(1),.truck-table th:nth-child(1),.issue-table th:nth-child(1),.schedule-table th:nth-child(1){width:7mm}
+    @page{size:A4 portrait;margin:10mm 10mm 12mm}
     @media print{
-      body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-      .page{padding:3mm 1mm}
+      html,body{width:210mm;min-height:297mm}
+      .page{max-width:none;padding:0}
       .section{break-inside:auto}
-      .gps-card{break-inside:avoid}
+      .document-head,.basis,.kpi,.actions,.capacity>div,.gps-card,.signoff{break-inside:avoid;page-break-inside:avoid}
     }
-  </style></head><body><div class="page">
-    <div class="head"><div><div class="brand">WASTETRACK • METRO WASTE</div><h1>${escapeHtml(reportTypeLabel(input.reportType))} Operations Report</h1><p>${escapeHtml(input.subtitle)}</p></div><div class="meta">Generated<strong>${escapeHtml(formatDateTime(input.generatedAt))}</strong>Last realtime update<strong>${escapeHtml(formatDateTime(input.lastUpdated))}</strong></div></div>
-    <div class="basis"><strong>Truck capacity measurement.</strong> WasteTrack does not measure collected waste in kilograms. Drivers estimate truck capacity as 1/4 (25%), 1/2 (50%), 3/4 (75%), or Full (100%) at collection completion. These operational capacity estimates are used with collection completion, uncollected Puroks, GPS route history, issues, and schedules.</div>
-    <div class="kpis"><div class="kpi"><small>Collection Runs</small><strong>${input.summary.totalTrips}</strong><span>Recorded collection sessions</span></div><div class="kpi"><small>Fully Completed</small><strong>${input.summary.completedTrips}</strong><span>${escapeHtml(formatPercent(input.summary.completionRate))} completion rate</span></div><div class="kpi"><small>Follow-up Runs</small><strong>${input.summary.partialTrips + input.summary.missedTrips}</strong><span>${input.summary.followUpPuroks} uncollected Puroks</span></div><div class="kpi"><small>Estimated Truck Load</small><strong>${input.summary.averageTruckLoad === null ? "—" : escapeHtml(formatPercent(input.summary.averageTruckLoad))}</strong><span>${input.summary.truckFullEvents} full-truck event${input.summary.truckFullEvents === 1 ? "" : "s"}</span></div><div class="kpi"><small>Open Issues</small><strong>${input.summary.openIssues}</strong><span>Operational follow-up</span></div><div class="kpi"><small>Active Schedules</small><strong>${input.summary.activeSchedules}</strong><span>${input.summary.trackingDrivers} tracking now • ${input.summary.onlineDrivers} online</span></div><div class="kpi"><small>GPS Verified</small><strong>${input.summary.gpsVerifiedTrips}</strong><span>${escapeHtml(formatPercent(input.summary.gpsVerificationRate))} of runs</span></div><div class="kpi"><small>GPS Distance</small><strong>${escapeHtml(formatDistance(input.summary.totalDistanceMeters))}</strong><span>${escapeHtml(formatDuration(input.summary.totalDurationSeconds))} activity time</span></div></div>
-    <div class="section"><div class="section-head"><h2>Executive Management Actions</h2><span>Operational decision support</span></div><div class="actions"><ol>${actionsHtml}</ol></div></div>
-    ${include("collection") ? `<div class="section"><div class="section-head"><h2>Barangay Operational Performance</h2><span>Collection completion, capacity, issues and GPS</span></div><table><thead><tr><th>#</th><th>Barangay</th><th>Runs</th><th>Completed</th><th>Follow-up</th><th>Completion</th><th>Avg Est. Load</th><th>Full Truck</th><th>Open Issues</th><th>Schedules</th><th>GPS</th><th>Priority</th><th>Recommendation</th></tr></thead><tbody>${areaRowsHtml(input.barangayRows,"barangay") || `<tr><td colspan="13">No data.</td></tr>`}</tbody></table></div><div class="section"><div class="section-head"><h2>Purok Operational Performance</h2><span>Detailed service-area follow-up</span></div><table><thead><tr><th>#</th><th>Barangay / Purok</th><th>Runs</th><th>Completed</th><th>Follow-up</th><th>Completion</th><th>Avg Est. Load</th><th>Full Truck</th><th>Open Issues</th><th>Schedules</th><th>GPS</th><th>Priority</th><th>Recommendation</th></tr></thead><tbody>${areaRowsHtml(input.purokRows,"purok") || `<tr><td colspan="13">No data.</td></tr>`}</tbody></table></div>` : ""}
-    ${include("drivers") ? `<div class="section"><div class="section-head"><h2>Driver Activity & Service Performance</h2><span>Realtime driver status + operational workload; not a disciplinary score</span></div><table><thead><tr><th>#</th><th>Driver</th><th>Live Status</th><th>Truck</th><th>Last GPS</th><th>Runs</th><th>Completed</th><th>Partial/Missed</th><th>Completion</th><th>Avg Est. Load</th><th>Full Truck</th><th>GPS</th><th>Distance</th><th>Open Issues</th><th>Assessment</th></tr></thead><tbody>${driverRowsHtml || `<tr><td colspan="15">No driver data.</td></tr>`}</tbody></table></div>` : ""}
-    ${include("capacity") ? `<div class="section"><div class="section-head"><h2>Truck Capacity Utilization</h2><span>Driver-estimated truck capacity • 1/4, 1/2, 3/4, Full</span></div><div class="capacity"><div><small>1/4 Truck</small><strong>${input.capacityDistribution.quarter}</strong></div><div><small>1/2 Truck</small><strong>${input.capacityDistribution.half}</strong></div><div><small>3/4 Truck</small><strong>${input.capacityDistribution.threeQuarter}</strong></div><div><small>Full Truck</small><strong>${input.capacityDistribution.full}</strong></div></div><table><thead><tr><th>#</th><th>Truck</th><th>Runs</th><th>Completed</th><th>Partial</th><th>Avg Est. Load</th><th>Full Events</th><th>Barangays</th><th>Drivers</th><th>Distance</th><th>Assessment</th></tr></thead><tbody>${truckRowsHtml || `<tr><td colspan="11">No truck data.</td></tr>`}</tbody></table></div>` : ""}
-    ${include("issues") ? `<div class="section"><div class="section-head"><h2>Operational Issue Register</h2><span>Driver, resident and complaint records</span></div><table><thead><tr><th>#</th><th>Date</th><th>Source</th><th>Area</th><th>Issue</th><th>Severity</th><th>Status</th><th>Details</th></tr></thead><tbody>${issueRowsHtml || `<tr><td colspan="8">No issues.</td></tr>`}</tbody></table></div>` : ""}
-    ${include("schedules") ? `<div class="section"><div class="section-head"><h2>Schedule Performance & Coverage</h2><span>Current schedules versus selected-period collection activity</span></div><table><thead><tr><th>#</th><th>Schedule</th><th>Service Area</th><th>Driver</th><th>Truck</th><th>Status</th><th>Runs</th><th>Completed</th><th>Partial</th><th>Completion</th><th>Last Activity</th><th>Assessment</th></tr></thead><tbody>${scheduleRowsHtml || `<tr><td colspan="12">No schedules.</td></tr>`}</tbody></table></div>` : ""}
-    ${include("gps") ? `<div class="section"><div class="section-head"><h2>GPS Collection Activity</h2><span>Actual route traces from Realtime Database • Green start • Red end</span></div><div class="gps-grid">${gpsHtml || `<div class="gps-empty">No GPS route with at least two points matches the selected filters.</div>`}</div></div>` : ""}
-    <div class="signoff"><div>Prepared / Reviewed by</div><div>Metro Waste Authorized Representative</div></div><div class="footer">WasteTrack Operations Report • Generated from Firebase Realtime Database • No Firebase Storage required for this report.</div>
-  </div><script>window.onload=()=>window.setTimeout(()=>{window.focus();window.print()},350);<\/script></body></html>`);
+  </style></head><body><main class="page">
+    <header class="document-head">
+      <div><div class="agency"><span class="agency-mark">W</span>WasteTrack • Metro Waste Management</div><h1>${escapeHtml(reportTitle)}</h1><p class="subtitle">${escapeHtml(input.subtitle)}</p></div>
+      <div class="meta"><div class="meta-row"><span>Generated</span><strong>${escapeHtml(formatDateTime(input.generatedAt))}</strong></div><div class="meta-row"><span>Last data update</span><strong>${escapeHtml(formatDateTime(input.lastUpdated))}</strong></div><div class="meta-row"><span>Print format</span><strong>A4 • Portrait</strong></div></div>
+    </header>
+    <div class="basis"><strong>Reporting basis.</strong> WasteTrack does not measure collected waste in kilograms. Drivers estimate truck capacity as 1/4 (25%), 1/2 (50%), 3/4 (75%), or Full (100%) at collection completion. These operational estimates are evaluated together with collection completion, uncollected Puroks, GPS route history, issues, and schedules.</div>
+    <section class="kpis">
+      <div class="kpi"><small>Collection Runs</small><strong>${input.summary.totalTrips}</strong><span>Recorded collection sessions</span></div>
+      <div class="kpi"><small>Fully Completed</small><strong>${input.summary.completedTrips}</strong><span>${escapeHtml(formatPercent(input.summary.completionRate))} completion rate</span></div>
+      <div class="kpi"><small>Follow-up Runs</small><strong>${input.summary.partialTrips + input.summary.missedTrips}</strong><span>${input.summary.followUpPuroks} uncollected Puroks</span></div>
+      <div class="kpi"><small>Estimated Truck Load</small><strong>${input.summary.averageTruckLoad === null ? "—" : escapeHtml(formatPercent(input.summary.averageTruckLoad))}</strong><span>${input.summary.truckFullEvents} full-truck event${input.summary.truckFullEvents === 1 ? "" : "s"}</span></div>
+      <div class="kpi"><small>Open Issues</small><strong>${input.summary.openIssues}</strong><span>Operational follow-up</span></div>
+      <div class="kpi"><small>Active Schedules</small><strong>${input.summary.activeSchedules}</strong><span>${input.summary.trackingDrivers} tracking • ${input.summary.onlineDrivers} online</span></div>
+      <div class="kpi"><small>GPS Verified</small><strong>${input.summary.gpsVerifiedTrips}</strong><span>${escapeHtml(formatPercent(input.summary.gpsVerificationRate))} of runs</span></div>
+      <div class="kpi"><small>GPS Distance</small><strong>${escapeHtml(formatDistance(input.summary.totalDistanceMeters))}</strong><span>${escapeHtml(formatDuration(input.summary.totalDurationSeconds))} activity time</span></div>
+    </section>
+    <section class="section"><div class="section-head"><h2>Executive Management Actions</h2><span>Priority operational decision support</span></div><div class="actions"><ol>${actionsHtml}</ol></div></section>
+    ${include("collection") ? `<section class="section"><div class="section-head"><h2>Barangay Operational Performance</h2><span>Collection, capacity, issues, schedules, and GPS</span></div><table class="collection-table"><thead><tr><th>#</th><th>Barangay</th><th>Service Runs</th><th>Completion / Load</th><th>Operations</th><th>Priority & Recommended Action</th></tr></thead><tbody>${areaRowsHtml(input.barangayRows,"barangay") || `<tr><td colspan="6">No Barangay data for the selected filters.</td></tr>`}</tbody></table></section><section class="section"><div class="section-head"><h2>Purok Operational Performance</h2><span>Detailed service-area follow-up</span></div><table class="collection-table"><thead><tr><th>#</th><th>Barangay / Purok</th><th>Service Runs</th><th>Completion / Load</th><th>Operations</th><th>Priority & Recommended Action</th></tr></thead><tbody>${areaRowsHtml(input.purokRows,"purok") || `<tr><td colspan="6">No Purok data for the selected filters.</td></tr>`}</tbody></table></section>` : ""}
+    ${include("drivers") ? `<section class="section"><div class="section-head"><h2>Driver Activity & Service Performance</h2><span>Operational view; not a disciplinary score</span></div><table class="driver-table"><thead><tr><th>#</th><th>Driver / Area</th><th>Current Assignment</th><th>Collection Performance</th><th>Field Evidence</th><th>Issues / Assessment</th></tr></thead><tbody>${driverRowsHtml || `<tr><td colspan="6">No driver data for the selected filters.</td></tr>`}</tbody></table></section>` : ""}
+    ${include("capacity") ? `<section class="section"><div class="section-head"><h2>Truck Capacity Utilization</h2><span>Driver-estimated operational truck load</span></div><div class="capacity"><div><small>1/4 Truck</small><strong>${input.capacityDistribution.quarter}</strong></div><div><small>1/2 Truck</small><strong>${input.capacityDistribution.half}</strong></div><div><small>3/4 Truck</small><strong>${input.capacityDistribution.threeQuarter}</strong></div><div><small>Full Truck</small><strong>${input.capacityDistribution.full}</strong></div></div><table class="truck-table"><thead><tr><th>#</th><th>Truck</th><th>Activity</th><th>Capacity</th><th>Coverage</th><th>Assessment</th></tr></thead><tbody>${truckRowsHtml || `<tr><td colspan="6">No truck data for the selected filters.</td></tr>`}</tbody></table></section>` : ""}
+    ${include("issues") ? `<section class="section"><div class="section-head"><h2>Operational Issue Register</h2><span>Resident, driver, and complaint records</span></div><table class="issue-table"><thead><tr><th>#</th><th>Date / Source</th><th>Service Area</th><th>Issue / Severity</th><th>Status</th><th>Details</th></tr></thead><tbody>${issueRowsHtml || `<tr><td colspan="6">No issues for the selected filters.</td></tr>`}</tbody></table></section>` : ""}
+    ${include("schedules") ? `<section class="section"><div class="section-head"><h2>Schedule Performance & Coverage</h2><span>Current schedules compared with collection activity</span></div><table class="schedule-table"><thead><tr><th>#</th><th>Schedule / Area</th><th>Assignment</th><th>Service Activity</th><th>Completion</th><th>Assessment</th></tr></thead><tbody>${scheduleRowsHtml || `<tr><td colspan="6">No schedules for the selected filters.</td></tr>`}</tbody></table></section>` : ""}
+    ${include("gps") ? `<section class="section"><div class="section-head"><h2>GPS Collection Activity</h2><span>Recorded route traces • green start • red end</span></div><div class="gps-grid">${gpsHtml || `<div class="gps-empty">No GPS route with at least two points matches the selected filters.</div>`}</div></section>` : ""}
+    <div class="signoff"><div>Prepared / Reviewed by</div><div>Authorized Agency Representative</div></div>
+    <div class="footer">WasteTrack Agency Operations Report • Generated from Firebase Realtime Database operational records • A4 portrait print layout</div>
+  </main><script>window.onload=()=>window.setTimeout(()=>{window.focus();window.print()},300);<\/script></body></html>`);
   printWindow.document.close();
 }

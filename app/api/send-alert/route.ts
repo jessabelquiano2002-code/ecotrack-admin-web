@@ -5,6 +5,8 @@ import { authErrorStatus, requireAdmin } from "../../../lib/serverAuth";
 type TokenRecord = {
   token?: string;
   role?: string;
+  uid?: string;
+  residentId?: string;
   barangay?: string;
   barangayKey?: string;
   purok?: string | number;
@@ -126,6 +128,20 @@ export async function POST(request: NextRequest) {
       ),
     );
 
+    const targetUidValues = [
+      ...(Array.isArray(body.targetUids) ? body.targetUids : []),
+      ...(body.targetUid ? [body.targetUid] : []),
+      ...(body.targetResidentId ? [body.targetResidentId] : []),
+    ];
+
+    const requestedTargetUids = Array.from(
+      new Set(
+        targetUidValues
+          .map((value) => String(value ?? "").trim())
+          .filter(Boolean),
+      ),
+    );
+
     if (!title || !message) {
       return NextResponse.json(
         { error: "Title and message are required." },
@@ -169,7 +185,13 @@ export async function POST(request: NextRequest) {
         role === target;
 
       if (!roleMatch) return;
-      if (!matchesArea(item, requestedBarangays, requestedPuroks)) return;
+
+      if (requestedTargetUids.length > 0) {
+        const tokenResidentId = String(item.uid || item.residentId || "").trim();
+        if (!tokenResidentId || !requestedTargetUids.includes(tokenResidentId)) return;
+      } else if (!matchesArea(item, requestedBarangays, requestedPuroks)) {
+        return;
+      }
 
       tokenSet.add(token);
     });
@@ -235,6 +257,8 @@ export async function POST(request: NextRequest) {
                 ? "home"
                 : "notifications",
           timestamp: String(Date.now()),
+          targetUid: requestedTargetUids.length === 1 ? requestedTargetUids[0] : "",
+          targetUids: JSON.stringify(requestedTargetUids),
         },
         android: {
           priority: "high",
@@ -251,6 +275,10 @@ export async function POST(request: NextRequest) {
       sent,
       failed,
       matchedTokens: tokens.length,
+      warning:
+        failed > 0
+          ? `${failed} registered device${failed === 1 ? "" : "s"} could not receive the push.`
+          : "",
     });
   } catch (error: unknown) {
     const status = authErrorStatus(error);

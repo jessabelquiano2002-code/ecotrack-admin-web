@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { get, ref, set, update } from "firebase/database";
+import { get, ref, set, update } from "@/lib/offlineFirebaseDatabase";
 import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
 

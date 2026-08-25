@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { onValue, push, ref, remove, set } from "firebase/database";
+import { onValue, push, ref, remove, set } from "@/lib/offlineFirebaseDatabase";
 import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
 
@@ -46,6 +46,7 @@ type NotificationRow = {
   status?: NotificationStatus | string;
   recipients?: number;
   recipientCount?: number;
+  targetRecipientCount?: number;
   seen?: boolean;
   createdAt?: number;
   timestamp?: number;
@@ -181,8 +182,20 @@ export default function NotificationsPage() {
   const [statusFilter, setStatusFilter] = useState<FilterStatus>("all");
   const [barangayFilter, setBarangayFilter] = useState("all");
   const [notice, setNotice] = useState("");
+  const [networkOnline, setNetworkOnline] = useState(true);
 
   const formIsAllPurok = form.targetMode === "all_purok";
+
+  useEffect(() => {
+    const syncNetworkState = () => setNetworkOnline(navigator.onLine);
+    syncNetworkState();
+    window.addEventListener("online", syncNetworkState);
+    window.addEventListener("offline", syncNetworkState);
+    return () => {
+      window.removeEventListener("online", syncNetworkState);
+      window.removeEventListener("offline", syncNetworkState);
+    };
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onValue(ref(db, "notifications"), (snapshot) => {
@@ -248,12 +261,14 @@ export default function NotificationsPage() {
   };
 
   const getDisplayRecipients = (row: NotificationRow) => {
-    const savedCount = Number(row.recipientCount ?? row.recipients ?? 0);
+    if (row.status === "saved") {
+      const draftTargetCount = Number(row.targetRecipientCount ?? 0);
+      if (draftTargetCount > 0) return draftTargetCount;
+      const fallbackPurok = isAllPurokTarget(row) ? ALL_PUROK_LABEL : row.purok;
+      return countTargetResidents(row.barangay, fallbackPurok);
+    }
 
-    if (savedCount > 0) return savedCount;
-
-    const fallbackPurok = isAllPurokTarget(row) ? ALL_PUROK_LABEL : row.purok;
-    return countTargetResidents(row.barangay, fallbackPurok);
+    return Number(row.recipientCount ?? row.recipients ?? 0);
   };
 
   const stats = useMemo(() => {
@@ -356,7 +371,8 @@ export default function NotificationsPage() {
   const saveNotificationRecord = async (
     payload: NotificationForm,
     status: NotificationStatus,
-    recipients = 0
+    deliveredRecipients = 0,
+    targetRecipientCount?: number
   ) => {
     const now = Date.now();
     const barangayKey = makeBarangayKey(payload.barangay);
@@ -366,10 +382,12 @@ export default function NotificationsPage() {
       : "barangay_purok";
     const mainPurok = isAllPurok ? ALL_PUROK_LABEL : payload.purok;
     const mainPurokKey = isAllPurok ? "all" : makePurokKey(payload.purok);
-    const finalRecipientCount =
-      recipients > 0
-        ? recipients
-        : countTargetResidents(payload.barangay, isAllPurok ? ALL_PUROK_LABEL : payload.purok);
+    const targetCount =
+      targetRecipientCount ??
+      countTargetResidents(
+        payload.barangay,
+        isAllPurok ? ALL_PUROK_LABEL : payload.purok
+      );
 
     const notificationData = {
       title: payload.title.trim(),
@@ -383,22 +401,28 @@ export default function NotificationsPage() {
       targetType,
       target: "resident",
       status,
-      recipients: finalRecipientCount,
-      recipientCount: finalRecipientCount,
+      recipients: status === "saved" ? 0 : deliveredRecipients,
+      recipientCount: status === "saved" ? 0 : deliveredRecipients,
+      targetRecipientCount: targetCount,
       seen: false,
       createdAt: now,
       timestamp: now,
     };
 
+    // Drafts stay in Admin history only. Residents must never see a draft.
     await set(push(ref(db, "notifications")), notificationData);
+    if (status === "saved" || status === "failed") return;
 
     if (isAllPurok) {
-      await set(push(ref(db, `notificationsByBarangay/${barangayKey}`)), notificationData);
+      await set(
+        push(ref(db, `notificationsByBarangay/${barangayKey}`)),
+        notificationData
+      );
 
       await Promise.all(
         PUROKS.map((purok) => {
           const purokKey = makePurokKey(purok);
-          const purokRecipientCount = countTargetResidents(payload.barangay, purok);
+          const purokTargetCount = countTargetResidents(payload.barangay, purok);
 
           return set(
             push(ref(db, `notificationsByArea/${barangayKey}/${purokKey}`)),
@@ -408,13 +432,11 @@ export default function NotificationsPage() {
               purokKey,
               targetMode: "all_purok" as TargetMode,
               targetType: "barangay_all_purok" as TargetType,
-              recipients: purokRecipientCount,
-              recipientCount: purokRecipientCount,
+              targetRecipientCount: purokTargetCount,
             }
           );
         })
       );
-
       return;
     }
 
@@ -430,17 +452,19 @@ export default function NotificationsPage() {
     try {
       setSaving(true);
 
-      const recipientCount = countTargetResidents(
+      const targetCount = countTargetResidents(
         form.barangay,
         form.targetMode === "all_purok" ? ALL_PUROK_LABEL : form.purok
       );
 
-      await saveNotificationRecord(form, "saved", recipientCount);
-      setNotice(`Notification saved to history for ${recipientCount} registered recipient${recipientCount === 1 ? "" : "s"}.`);
+      await saveNotificationRecord(form, "saved", 0, targetCount);
+      setNotice(
+        `Draft saved for ${targetCount} selected resident${targetCount === 1 ? "" : "s"}. Residents cannot see it until you send it.`
+      );
       resetAndClose();
     } catch (error) {
-      console.error("Save notification failed:", error);
-      alert("Failed to save notification. Please check your Firebase connection.");
+      console.error("Save notification draft failed:", error);
+      alert("Failed to save the draft. Please check your Firebase connection.");
     } finally {
       setSaving(false);
     }
@@ -450,7 +474,7 @@ export default function NotificationsPage() {
     const barangayKey = makeBarangayKey(form.barangay);
     const purokKey = makePurokKey(targetPurok);
     const now = Date.now();
-    const fallbackRecipients = countTargetResidents(form.barangay, targetPurok);
+    const targetRecipients = countTargetResidents(form.barangay, targetPurok);
 
     const pushPayload = {
       title: form.title.trim(),
@@ -470,6 +494,7 @@ export default function NotificationsPage() {
 
     const currentAdmin = auth.currentUser;
     if (!currentAdmin) throw new Error("Your session has expired. Please sign in again.");
+
     const token = await currentAdmin.getIdToken();
     const response = await fetch("/api/send-alert", {
       method: "POST",
@@ -487,68 +512,99 @@ export default function NotificationsPage() {
     if (!response.ok) {
       return {
         ok: false,
-        recipients: fallbackRecipients,
+        recipients: 0,
+        targetRecipients,
         warning: "",
-        error: result?.error || `Push sending failed for ${targetPurok}.`,
+        error: result?.error || `Notification delivery failed for ${targetPurok}.`,
       };
     }
 
-    const apiRecipients =
+    const delivered =
       Number(result?.sent) ||
       Number(result?.successCount) ||
       Number(result?.recipients) ||
       0;
 
     return {
-      ok: true,
-      recipients: apiRecipients > 0 ? apiRecipients : fallbackRecipients,
-      warning: result?.warning || "",
-      error: "",
+      ok: delivered > 0,
+      recipients: delivered,
+      targetRecipients,
+      warning:
+        result?.warning ||
+        (delivered === 0
+          ? `No registered device token was available for ${targetPurok}.`
+          : ""),
+      error: delivered > 0 ? "" : `No phone received the notification for ${targetPurok}.`,
     };
   };
 
   const saveAndSend = async () => {
     if (!validateForm()) return;
 
+    if (!navigator.onLine) {
+      alert("You are offline. Save this as a draft, then send it when the internet connection returns.");
+      return;
+    }
+
+    if (selectedTargetCount <= 0) {
+      alert("No registered residents were found for this barangay/purok target.");
+      return;
+    }
+
     try {
       setSending(true);
 
       const targetPuroks = form.targetMode === "all_purok" ? PUROKS : [form.purok];
-      let recipients = 0;
+      let deliveredRecipients = 0;
       const failedPuroks: string[] = [];
       const warnings: string[] = [];
 
       for (const purok of targetPuroks) {
         const result = await sendPushToPurok(purok);
-        recipients += result.recipients;
+        deliveredRecipients += result.recipients;
 
         if (!result.ok) failedPuroks.push(purok);
         if (result.warning) warnings.push(`${purok}: ${result.warning}`);
       }
 
-      const finalStatus: NotificationStatus = failedPuroks.length > 0 ? "failed" : "sent";
-      await saveNotificationRecord(form, finalStatus, recipients);
+      // If at least one device received the push, keep the sent history visible
+      // to the target Residents. A total delivery failure stays Admin-only.
+      const finalStatus: NotificationStatus = deliveredRecipients > 0 ? "sent" : "failed";
+      await saveNotificationRecord(
+        form,
+        finalStatus,
+        deliveredRecipients,
+        selectedTargetCount
+      );
 
-      if (failedPuroks.length > 0) {
+      if (deliveredRecipients === 0) {
         alert(
-          `Notification saved, but push failed for: ${failedPuroks.join(
-            ", "
-          )}. Please check /api/send-alert and resident FCM tokens.`
+          "No resident phone received this notification. The failed attempt was saved in Admin history. Check resident FCM tokens and /api/send-alert."
         );
-        setNotice("Notification saved, but some push requests failed.");
+        setNotice("Notification was not delivered. Review device registration before trying again.");
         resetAndClose();
         return;
       }
 
-      if (warnings.length > 0) alert(warnings.join("\n"));
+      if (failedPuroks.length > 0 || warnings.length > 0) {
+        const details = warnings.length > 0 ? `\n\n${warnings.join("\n")}` : "";
+        alert(
+          `Notification delivered to ${deliveredRecipients} device${deliveredRecipients === 1 ? "" : "s"}, but some targets could not be reached.${details}`
+        );
+        setNotice(
+          `Partially delivered to ${deliveredRecipients} device${deliveredRecipients === 1 ? "" : "s"}.`
+        );
+        resetAndClose();
+        return;
+      }
 
       setNotice(
-        `Notification sent and saved for ${recipients} registered recipient${recipients === 1 ? "" : "s"}.`
+        `Notification delivered to ${deliveredRecipients} device${deliveredRecipients === 1 ? "" : "s"}.`
       );
       resetAndClose();
     } catch (error) {
       console.error("Send notification failed:", error);
-      alert("Failed to send notification. Please check the API route and Firebase.");
+      alert("Failed to send the notification. Please check the API route, Firebase, and internet connection.");
     } finally {
       setSending(false);
     }
@@ -588,14 +644,14 @@ export default function NotificationsPage() {
 
             <div className="composeTopActions">
               <button className="secondaryButton" onClick={saveOnly} disabled={saving || sending}>
-                {saving ? "Saving..." : "Save Only"}
+                {saving ? "Saving..." : "Save Draft"}
               </button>
               <button className="primaryButton" onClick={saveAndSend} disabled={saving || sending}>
                 {sending
                   ? formIsAllPurok
                     ? "Sending to all puroks..."
                     : "Sending..."
-                  : "Send Push"}
+                  : "Send Notification"}
               </button>
             </div>
           </div>
@@ -606,10 +662,10 @@ export default function NotificationsPage() {
                 <span className="eyebrow">Create Targeted Alert</span>
                 <h2>New Notification</h2>
                 <p>
-                  Compose the alert, choose the barangay and purok target, then save or send the notification.
+                  Write a clear message, choose exactly who should receive it, then save a private draft or send the notification.
                 </p>
               </div>
-              <span className="composeStatusPill">Composer View</span>
+              <span className="composeStatusPill">Resident delivery</span>
             </div>
 
             <div className="composeLayout">
@@ -763,14 +819,14 @@ export default function NotificationsPage() {
                 Cancel
               </button>
               <button className="secondaryButton" onClick={saveOnly} disabled={saving || sending}>
-                {saving ? "Saving..." : "Save Only"}
+                {saving ? "Saving..." : "Save Draft"}
               </button>
               <button className="primaryButton" onClick={saveAndSend} disabled={saving || sending}>
                 {sending
                   ? formIsAllPurok
                     ? "Sending to all puroks..."
                     : "Sending..."
-                  : "Send Push"}
+                  : "Send Notification"}
               </button>
             </div>
           </div>
@@ -798,9 +854,9 @@ export default function NotificationsPage() {
           </div>
 
           <div className="heroActions">
-            <div className="systemStatus">
+            <div className={`systemStatus ${networkOnline ? "" : "offline"}`}>
               <span className="pulse" />
-              Firebase live
+              {networkOnline ? "Online" : "Offline"}
             </div>
             <a
               className="secondaryButton advertisementLink"
@@ -820,7 +876,7 @@ export default function NotificationsPage() {
           <MetricCard label="Total Alerts" value={stats.total} hint="Notification records created in Firebase" icon="🔔" />
           <MetricCard label="Sent Alerts" value={stats.sent} hint="Push requests marked as sent" icon="📤" tone="green" />
           <MetricCard label="This Week" value={stats.thisWeek} hint="Created in the last 7 days" icon="📅" tone="blue" />
-          <MetricCard label="Recipients" value={stats.recipients} hint="Registered target recipients from resident records" icon="👥" tone="dark" />
+          <MetricCard label="Delivered" value={stats.recipients} hint="Successful device deliveries recorded for sent alerts" icon="👥" tone="dark" />
         </div>
 
         <div className="historyCard">
@@ -1024,6 +1080,17 @@ function NotificationsStyles() {
           color: #166534;
           font-size: 14px;
           font-weight: 900;
+        }
+
+        .systemStatus.offline {
+          background: #f8fafc;
+          border-color: #e2e8f0;
+          color: #64748b;
+        }
+
+        .systemStatus.offline .pulse {
+          background: #94a3b8;
+          box-shadow: 0 0 0 6px rgba(148, 163, 184, 0.12);
         }
 
         .pulse {
