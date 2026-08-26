@@ -45,9 +45,97 @@ function normalizeProfileImage(value?: string): string {
 type SidebarLink = {
   href: string;
   label: string;
-  group: "MAIN" | "MANAGEMENT" | "REPORTS";
+  help: string;
+  group: "START HERE" | "DAILY OPERATIONS" | "SYSTEM SETUP" | "REPORTS & MESSAGES";
   icon: ReactNode;
 };
+
+type AdminGuideStep = {
+  number: string;
+  title: string;
+  detail: string;
+  href: string;
+  action: string;
+};
+
+const firstTimeSetupSteps: AdminGuideStep[] = [
+  {
+    number: "1",
+    title: "Create driver accounts",
+    detail: "Add or review driver accounts before assigning collection work.",
+    href: "/drivers",
+    action: "Open accounts",
+  },
+  {
+    number: "2",
+    title: "Confirm waste points",
+    detail: "Record the official drop-off and collection locations shown to residents.",
+    href: "/waste-points",
+    action: "Open waste points",
+  },
+  {
+    number: "3",
+    title: "Create routes and assignments",
+    detail: "Choose the Barangay and Puroks, then assign the correct driver.",
+    href: "/routes",
+    action: "Open routes",
+  },
+];
+
+const dailyOperationSteps: AdminGuideStep[] = [
+  {
+    number: "1",
+    title: "Review today’s schedule",
+    detail: "Check the collection day, time, service area, and assigned route.",
+    href: "/schedules",
+    action: "Check schedules",
+  },
+  {
+    number: "2",
+    title: "Monitor the collection",
+    detail: "Use the live map to confirm which trucks are online and moving.",
+    href: "/live-map",
+    action: "Track trucks",
+  },
+  {
+    number: "3",
+    title: "Handle reports and complaints",
+    detail: "Open each concern, update its status, and record the action taken.",
+    href: "/issues",
+    action: "Review reports",
+  },
+  {
+    number: "4",
+    title: "Inform affected residents",
+    detail: "Send a clear update only to the correct Barangay or Purok.",
+    href: "/notifications",
+    action: "Send an update",
+  },
+  {
+    number: "5",
+    title: "Review results",
+    detail: "Check completion, activity, and unresolved work before ending the day.",
+    href: "/analytics",
+    action: "View reports",
+  },
+];
+
+const pageGuidance = [
+  { path: "/dashboard", title: "Start with today’s priorities", detail: "Check open issues, active trucks, schedules, and recent activity before making changes." },
+  { path: "/live-map", title: "Monitor active collection work", detail: "Select a driver or route and confirm the truck location before contacting the driver." },
+  { path: "/routes", title: "Create the service-area assignment", detail: "Choose the Barangay and Puroks first, then assign one verified driver and save." },
+  { path: "/drivers", title: "Manage people and access", detail: "Create or review driver accounts here before using them in route assignments." },
+  { path: "/schedules", title: "Set the collection date and time", detail: "Match every schedule to the correct service area so residents receive accurate reminders." },
+  { path: "/waste-points", title: "Maintain official collection locations", detail: "Check the location name and map position carefully before publishing it to residents." },
+  { path: "/content-management", title: "Publish resident information", detail: "Preview every announcement or education item before saving it for the mobile app." },
+  { path: "/issues", title: "Resolve reports in order", detail: "Read the details, verify the affected area, update the status, then notify residents when needed." },
+  { path: "/activity-requests", title: "Review driver report requests", detail: "Verify the requested date and GPS activity before generating and sending a report." },
+  { path: "/agency-report", title: "Prepare the planning report", detail: "Review the selected period and included records before printing or sharing the report." },
+  { path: "/analytics", title: "Review performance and unfinished work", detail: "Use the filters first, then compare collections, reports, schedules, and service areas." },
+  { path: "/notifications", title: "Send a targeted resident update", detail: "Select the correct Barangay and Purok, use a clear message, then review before sending." },
+  { path: "/profile", title: "Maintain the administrator profile", detail: "Keep the displayed name and contact information accurate for accountability." },
+  { path: "/settings", title: "Review system information", detail: "Only change settings you understand; operational records are managed from the pages in the sidebar." },
+];
 
 
 const MetroWasteLogo = () => (
@@ -262,6 +350,12 @@ const IconMenu = () => (
   </svg>
 );
 
+const IconHelp = () => (
+  <svg viewBox="0 0 24 24" className="admin-svg-icon" aria-hidden="true">
+    <path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm0-4.2a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5Zm.2-10.1c-2.2 0-3.8 1.2-4 3.3h2.1c.1-.9.8-1.4 1.8-1.4 1.1 0 1.7.5 1.7 1.3 0 .7-.4 1.1-1.4 1.8-1.2.8-1.7 1.7-1.6 3.2h2c0-.9.2-1.3 1.2-2 1.2-.8 2-1.7 2-3.1 0-1.9-1.5-3.1-3.8-3.1Z" />
+  </svg>
+);
+
 const IconCollapse = () => (
   <svg viewBox="0 0 24 24" className="admin-svg-icon" aria-hidden="true">
     <path d="m14.7 5.3-1.4-1.4L5.2 12l8.1 8.1 1.4-1.4L8 12l6.7-6.7Zm4 0-1.4-1.4L9.2 12l8.1 8.1 1.4-1.4L12 12l6.7-6.7Z" />
@@ -272,78 +366,95 @@ const links: SidebarLink[] = [
   {
     href: "/dashboard",
     label: "Dashboard",
-    group: "MAIN",
+    help: "See today’s priorities and system activity.",
+    group: "START HERE",
     icon: <IconDashboard />,
   },
   {
     href: "/live-map",
-    label: "Live Map",
-    group: "MAIN",
+    label: "Track Trucks Live",
+    help: "Monitor active drivers and truck locations.",
+    group: "DAILY OPERATIONS",
     icon: <IconMap />,
   },
   {
     href: "/routes",
-    label: "Routes",
-    group: "MAIN",
+    label: "Routes & Assignments",
+    help: "Assign a driver to a Barangay and Puroks.",
+    group: "DAILY OPERATIONS",
     icon: <IconRoutes />,
   },
   {
     href: "/drivers",
-    label: "Users & Drivers",
-    group: "MANAGEMENT",
+    label: "Accounts & Drivers",
+    help: "Create and review resident and driver accounts.",
+    group: "SYSTEM SETUP",
     icon: <IconUsers />,
   },
   {
     href: "/schedules",
-    label: "Schedules",
-    group: "MANAGEMENT",
+    label: "Collection Schedules",
+    help: "Set collection days, times, and service areas.",
+    group: "DAILY OPERATIONS",
     icon: <IconCalendar />,
   },
   {
     href: "/waste-points",
-    label: "Waste Points",
-    group: "MANAGEMENT",
+    label: "Waste Drop-off Points",
+    help: "Maintain official locations shown to residents.",
+    group: "SYSTEM SETUP",
     icon: <IconWastePoint />,
   },
   {
     href: "/content-management",
-    label: "Education & Content",
-    group: "MANAGEMENT",
+    label: "Resident Content",
+    help: "Publish announcements and education materials.",
+    group: "SYSTEM SETUP",
     icon: <IconBook />,
   },
   {
     href: "/issues",
-    label: "Issues & Complaints",
-    group: "MANAGEMENT",
+    label: "Complaints & Reports",
+    help: "Review, update, and resolve submitted concerns.",
+    group: "DAILY OPERATIONS",
     icon: <IconWarning />,
   },
   {
     href: "/activity-requests",
-    label: "Driver Requests",
-    group: "REPORTS",
+    label: "Driver Report Requests",
+    help: "Review and generate requested activity reports.",
+    group: "REPORTS & MESSAGES",
     icon: <IconBook />,
   },
   {
     href: "/agency-report",
-    label: "Agency Report",
-    group: "REPORTS",
+    label: "Planning Report",
+    help: "Prepare the whole-system agency report.",
+    group: "REPORTS & MESSAGES",
     icon: <IconAgencyReport />,
   },
   {
     href: "/analytics",
-    label: "Analytics",
-    group: "REPORTS",
+    label: "Reports & Analytics",
+    help: "Review operational results and trends.",
+    group: "REPORTS & MESSAGES",
     icon: <IconAnalytics />,
   },
   {
     href: "/notifications",
-    label: "Notifications",
-    group: "REPORTS",
+    label: "Send Notifications",
+    help: "Send targeted alerts to residents.",
+    group: "REPORTS & MESSAGES",
     icon: <IconBell />,
   },
 ];
 
-const groups: SidebarLink["group"][] = ["MAIN", "MANAGEMENT", "REPORTS"];
+const groups: SidebarLink["group"][] = [
+  "START HERE",
+  "DAILY OPERATIONS",
+  "SYSTEM SETUP",
+  "REPORTS & MESSAGES",
+];
 
 export function DashboardShell({
   title,
@@ -364,6 +475,7 @@ export function DashboardShell({
   const [searchValue, setSearchValue] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -382,6 +494,7 @@ export function DashboardShell({
   });
 
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const guideCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const logoutCancelButtonRef = useRef<HTMLButtonElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -482,6 +595,9 @@ export function DashboardShell({
     const saved = window.localStorage.getItem("wastetrack.sidebar.collapsed");
     if (saved === "true") setSidebarCollapsed(true);
 
+    const guideSeen = window.localStorage.getItem("metrowaste.admin.guide.seen");
+    if (guideSeen !== "true") setGuideOpen(true);
+
     const handleResize = () => {
       if (window.innerWidth > 900) setMobileSidebarOpen(false);
     };
@@ -489,6 +605,28 @@ export function DashboardShell({
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  useEffect(() => {
+    if (!guideOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    guideCloseButtonRef.current?.focus();
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        window.localStorage.setItem("metrowaste.admin.guide.seen", "true");
+        setGuideOpen(false);
+      }
+    };
+
+    document.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [guideOpen]);
 
   const toggleSidebar = () => {
     setSidebarCollapsed((current) => {
@@ -524,6 +662,16 @@ export function DashboardShell({
     setLogoutDialogOpen(true);
   };
 
+  const openAdminGuide = () => {
+    setMenuOpen(false);
+    setGuideOpen(true);
+  };
+
+  const closeAdminGuide = () => {
+    window.localStorage.setItem("metrowaste.admin.guide.seen", "true");
+    setGuideOpen(false);
+  };
+
   const logout = async () => {
     if (isLoggingOut) return;
     setIsLoggingOut(true);
@@ -535,7 +683,7 @@ export function DashboardShell({
       redirectToLogin({ reason: "signed-out" });
     } catch {
       cancelSignOutRedirect();
-      setLogoutError("WasteTrack could not close the session. Check your connection and try again.");
+      setLogoutError("MetroWaste could not close the session. Check your connection and try again.");
       setIsLoggingOut(false);
     }
   };
@@ -549,6 +697,12 @@ export function DashboardShell({
   };
 
   const profileImageSrc = normalizeProfileImage(adminProfile.profileImage);
+  const currentPageGuidance =
+    pageGuidance.find((item) => pathname === item.path || pathname.startsWith(`${item.path}/`)) ||
+    {
+      title: `Work safely in ${title}`,
+      detail: description || "Review the information on this page before saving any changes.",
+    };
   const offline = !connectionState.online;
   const connecting = connectionState.online && !connectionState.firebaseConnected;
   const syncing = connectionState.online && connectionState.firebaseConnected && connectionState.pendingWrites > 0;
@@ -676,7 +830,8 @@ export function DashboardShell({
                         key={link.href}
                         href={link.href}
                         className={`admin-nav-link ${active ? "active" : ""}`}
-                        title={sidebarCollapsed ? link.label : undefined}
+                        aria-label={`${link.label}. ${link.help}`}
+                        title={sidebarCollapsed ? `${link.label}: ${link.help}` : link.help}
                         data-tooltip={link.label}
                       >
                         <span className="admin-nav-icon">{link.icon}</span>
@@ -769,6 +924,17 @@ export function DashboardShell({
             </div>
 
             <div className="admin-topbar-actions">
+              <button
+                type="button"
+                className="admin-guide-trigger"
+                onClick={openAdminGuide}
+                aria-label="Open the MetroWaste administrator guide"
+                title="Learn the administrator workflow"
+              >
+                <IconHelp />
+                <span>Admin Guide</span>
+              </button>
+
               <button
                 type="button"
                 className="admin-icon-btn"
@@ -867,7 +1033,7 @@ export function DashboardShell({
                   className={`admin-update-status ${offline ? "is-offline" : connecting || syncing ? "is-syncing" : ""}`}
                   role="status"
                   aria-live="polite"
-                  title={offline ? "WasteTrack is showing saved information from this device." : "WasteTrack is connected to Firebase."}
+                  title={offline ? "MetroWaste is showing saved information from this device." : "MetroWaste is connected to Firebase."}
                 >
                   <span className="admin-live-dot" aria-hidden="true" />
                   <span>{connectionLabel}</span>
@@ -875,10 +1041,119 @@ export function DashboardShell({
               </section>
             )}
 
+            {!hidePageHeader && (
+              <section className="admin-page-guidance" aria-label="Guidance for this page">
+                <span className="admin-page-guidance-icon" aria-hidden="true">
+                  <IconHelp />
+                </span>
+                <div className="admin-page-guidance-copy">
+                  <strong>{currentPageGuidance.title}</strong>
+                  <span>{currentPageGuidance.detail}</span>
+                </div>
+                <button type="button" onClick={openAdminGuide}>
+                  View full admin guide
+                </button>
+              </section>
+            )}
+
             {children}
           </main>
         </section>
       </div>
+
+      {guideOpen && (
+        <div
+          className="admin-guide-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeAdminGuide();
+          }}
+        >
+          <section
+            className="admin-guide-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="admin-guide-title"
+            aria-describedby="admin-guide-description"
+          >
+            <header className="admin-guide-header">
+              <div>
+                <span className="admin-guide-kicker">FIRST-TIME ADMIN HELP</span>
+                <h2 id="admin-guide-title">MetroWaste Admin Guide</h2>
+                <p id="admin-guide-description">
+                  Follow this order to operate the system safely. No technical knowledge is required.
+                </p>
+              </div>
+              <button
+                ref={guideCloseButtonRef}
+                type="button"
+                className="admin-guide-close"
+                onClick={closeAdminGuide}
+                aria-label="Close administrator guide"
+              >
+                ×
+              </button>
+            </header>
+
+            <div className="admin-guide-body">
+              <aside className="admin-guide-rule" role="note">
+                <strong>Safe admin rule</strong>
+                <span>Read the selected Barangay, Purok, driver, date, and message one more time before pressing Save or Send.</span>
+              </aside>
+
+              <section className="admin-guide-section" aria-labelledby="first-setup-title">
+                <div className="admin-guide-section-heading">
+                  <span>SET UP ONCE</span>
+                  <h3 id="first-setup-title">First-time system setup</h3>
+                  <p>Complete these records before starting normal collection operations.</p>
+                </div>
+
+                <div className="admin-guide-step-grid setup-grid">
+                  {firstTimeSetupSteps.map((step) => (
+                    <article className="admin-guide-step" key={step.href}>
+                      <span className="admin-guide-number">{step.number}</span>
+                      <div>
+                        <h4>{step.title}</h4>
+                        <p>{step.detail}</p>
+                        <Link href={step.href} onClick={closeAdminGuide}>
+                          {step.action} <span aria-hidden="true">→</span>
+                        </Link>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              <section className="admin-guide-section" aria-labelledby="daily-flow-title">
+                <div className="admin-guide-section-heading">
+                  <span>FOLLOW EACH COLLECTION DAY</span>
+                  <h3 id="daily-flow-title">Daily administrator flow</h3>
+                  <p>Work from step 1 to step 5 so no collection task or resident concern is missed.</p>
+                </div>
+
+                <div className="admin-guide-step-grid daily-grid">
+                  {dailyOperationSteps.map((step) => (
+                    <article className="admin-guide-step" key={step.href}>
+                      <span className="admin-guide-number">{step.number}</span>
+                      <div>
+                        <h4>{step.title}</h4>
+                        <p>{step.detail}</p>
+                        <Link href={step.href} onClick={closeAdminGuide}>
+                          {step.action} <span aria-hidden="true">→</span>
+                        </Link>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            </div>
+
+            <footer className="admin-guide-footer">
+              <p>The Admin Guide button remains available at the top of every page.</p>
+              <button type="button" onClick={closeAdminGuide}>I understand — close guide</button>
+            </footer>
+          </section>
+        </div>
+      )}
 
       {logoutDialogOpen && (
         <div
@@ -902,7 +1177,7 @@ export function DashboardShell({
 
             <div className="logout-dialog-copy">
               <span>Secure administrator session</span>
-              <h2 id="logout-title">Sign out of WasteTrack?</h2>
+              <h2 id="logout-title">Sign out of MetroWaste?</h2>
               <p id="logout-description">
                 You will be returned to the secure login page and protected administration pages will no longer be accessible.
               </p>
@@ -3496,6 +3771,412 @@ export function DashboardShell({
           }
         }
 
+      `}</style>
+
+      <style jsx global>{`
+        .admin-guide-trigger {
+          min-height: 48px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          padding: 0 14px;
+          border: 1px solid #b9d8c7;
+          border-radius: 14px;
+          background: #eef9f2;
+          color: #0b6b40;
+          font-size: 14px;
+          font-weight: 850;
+          cursor: pointer;
+          white-space: nowrap;
+          transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
+        }
+
+        .admin-guide-trigger:hover {
+          background: #e0f4e8;
+          border-color: #8fc7a7;
+          transform: translateY(-1px);
+        }
+
+        .admin-guide-trigger .admin-svg-icon {
+          width: 21px;
+          height: 21px;
+          fill: currentColor;
+        }
+
+        .admin-page-guidance {
+          min-height: 76px;
+          display: flex;
+          align-items: center;
+          gap: 14px;
+          margin: -10px 0 24px;
+          padding: 14px 16px;
+          border: 1px solid #cce3d5;
+          border-radius: 16px;
+          background: linear-gradient(135deg, #f2fbf5, #ffffff);
+          box-shadow: 0 8px 22px rgba(15, 72, 45, .05);
+        }
+
+        .admin-page-guidance-icon {
+          width: 42px;
+          height: 42px;
+          flex: 0 0 42px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 13px;
+          background: #dff5e7;
+          color: #0c7647;
+        }
+
+        .admin-page-guidance-icon .admin-svg-icon {
+          width: 23px;
+          height: 23px;
+          fill: currentColor;
+        }
+
+        .admin-page-guidance-copy {
+          min-width: 0;
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
+        }
+
+        .admin-page-guidance-copy strong {
+          color: #123c2a;
+          font-size: 16px;
+          line-height: 1.3;
+        }
+
+        .admin-page-guidance-copy span {
+          color: #52695d;
+          font-size: 14px;
+          line-height: 1.5;
+        }
+
+        .admin-page-guidance > button {
+          min-height: 46px;
+          padding: 0 15px;
+          border: 1px solid #afd3bd;
+          border-radius: 12px;
+          background: #ffffff;
+          color: #0b6b40;
+          font-size: 14px;
+          font-weight: 850;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+
+        .admin-page-guidance > button:hover {
+          background: #e9f7ee;
+          border-color: #82bd9a;
+        }
+
+        .admin-guide-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 300;
+          display: grid;
+          place-items: center;
+          padding: 24px;
+          background: rgba(2, 20, 14, .68);
+          backdrop-filter: blur(8px);
+          animation: adminGuideFadeIn 180ms ease-out;
+        }
+
+        .admin-guide-dialog {
+          width: min(1120px, 100%);
+          max-height: min(900px, calc(100dvh - 48px));
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, .72);
+          border-radius: 24px;
+          background: #f7faf8;
+          box-shadow: 0 28px 80px rgba(0, 17, 10, .34);
+          animation: adminGuideDialogIn 220ms ease-out;
+        }
+
+        .admin-guide-header {
+          position: relative;
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 18px;
+          padding: 25px 28px 23px;
+          color: #ffffff;
+          background:
+            radial-gradient(circle at 90% 10%, rgba(104, 236, 128, .22), transparent 34%),
+            linear-gradient(135deg, #063d2b, #087a50);
+        }
+
+        .admin-guide-kicker {
+          display: block;
+          margin-bottom: 7px;
+          color: #9df2b4;
+          font-size: 12px;
+          line-height: 1.2;
+          font-weight: 900;
+          letter-spacing: .1em;
+        }
+
+        .admin-guide-header h2 {
+          margin: 0;
+          color: #ffffff;
+          font-size: clamp(27px, 3vw, 38px);
+          line-height: 1.08;
+          letter-spacing: -.035em;
+        }
+
+        .admin-guide-header p {
+          max-width: 720px;
+          margin: 9px 0 0;
+          color: #def5e7;
+          font-size: 15px;
+          line-height: 1.55;
+        }
+
+        .admin-guide-close {
+          width: 48px;
+          height: 48px;
+          flex: 0 0 48px;
+          border: 1px solid rgba(255, 255, 255, .28);
+          border-radius: 14px;
+          background: rgba(255, 255, 255, .1);
+          color: #ffffff;
+          font-size: 30px;
+          line-height: 1;
+          cursor: pointer;
+        }
+
+        .admin-guide-close:hover {
+          background: rgba(255, 255, 255, .18);
+        }
+
+        .admin-guide-body {
+          overflow-y: auto;
+          padding: 22px 26px 26px;
+        }
+
+        .admin-guide-rule {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 13px 15px;
+          border: 1px solid #efd49c;
+          border-radius: 14px;
+          background: #fff8e8;
+          color: #674d18;
+        }
+
+        .admin-guide-rule strong {
+          flex: 0 0 auto;
+          color: #7a4c08;
+          font-size: 14px;
+        }
+
+        .admin-guide-rule span {
+          font-size: 14px;
+          line-height: 1.5;
+        }
+
+        .admin-guide-section {
+          margin-top: 24px;
+        }
+
+        .admin-guide-section-heading > span {
+          color: #168a4a;
+          font-size: 12px;
+          font-weight: 900;
+          letter-spacing: .09em;
+        }
+
+        .admin-guide-section-heading h3 {
+          margin: 5px 0 0;
+          color: #102d20;
+          font-size: 21px;
+          line-height: 1.2;
+        }
+
+        .admin-guide-section-heading p {
+          margin: 6px 0 0;
+          color: #5c7066;
+          font-size: 14px;
+          line-height: 1.5;
+        }
+
+        .admin-guide-step-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 12px;
+          margin-top: 14px;
+        }
+
+        .admin-guide-step {
+          min-width: 0;
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+          padding: 16px;
+          border: 1px solid #d8e5dd;
+          border-radius: 16px;
+          background: #ffffff;
+          box-shadow: 0 7px 18px rgba(14, 47, 31, .045);
+        }
+
+        .admin-guide-number {
+          width: 34px;
+          height: 34px;
+          flex: 0 0 34px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 11px;
+          background: #dff5e7;
+          color: #0b7644;
+          font-size: 15px;
+          font-weight: 950;
+        }
+
+        .admin-guide-step h4 {
+          margin: 1px 0 0;
+          color: #153629;
+          font-size: 15px;
+          line-height: 1.35;
+        }
+
+        .admin-guide-step p {
+          margin: 6px 0 10px;
+          color: #5c7066;
+          font-size: 13px;
+          line-height: 1.5;
+        }
+
+        .admin-guide-step a {
+          color: #0b7644;
+          font-size: 13px;
+          font-weight: 850;
+          text-decoration: none;
+        }
+
+        .admin-guide-step a:hover {
+          text-decoration: underline;
+        }
+
+        .admin-guide-footer {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+          padding: 16px 26px;
+          border-top: 1px solid #d8e5dd;
+          background: #ffffff;
+        }
+
+        .admin-guide-footer p {
+          margin: 0;
+          color: #5c7066;
+          font-size: 13px;
+        }
+
+        .admin-guide-footer button {
+          min-height: 48px;
+          padding: 0 18px;
+          border: 0;
+          border-radius: 13px;
+          background: #0b7a50;
+          color: #ffffff;
+          font-size: 14px;
+          font-weight: 900;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+
+        .admin-guide-footer button:hover {
+          background: #096742;
+        }
+
+        @keyframes adminGuideFadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+
+        @keyframes adminGuideDialogIn {
+          from { opacity: 0; transform: translateY(12px) scale(.985); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        @media (max-width: 900px) {
+          .admin-page-guidance {
+            align-items: flex-start;
+            flex-wrap: wrap;
+          }
+
+          .admin-page-guidance > button {
+            width: 100%;
+          }
+
+          .admin-guide-step-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 680px) {
+          .admin-guide-trigger span {
+            display: none;
+          }
+
+          .admin-guide-trigger {
+            width: 48px;
+            padding: 0;
+          }
+
+          .admin-guide-backdrop {
+            padding: 0;
+          }
+
+          .admin-guide-dialog {
+            width: 100%;
+            max-height: 100dvh;
+            min-height: 100dvh;
+            border: 0;
+            border-radius: 0;
+          }
+
+          .admin-guide-header {
+            padding: 20px 18px;
+          }
+
+          .admin-guide-body {
+            padding: 18px;
+          }
+
+          .admin-guide-rule,
+          .admin-guide-footer {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .admin-guide-step-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .admin-guide-footer {
+            padding: 14px 18px;
+          }
+
+          .admin-guide-footer button {
+            width: 100%;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .admin-guide-backdrop,
+          .admin-guide-dialog {
+            animation: none !important;
+          }
+        }
       `}</style>
     </AuthGate>
   );

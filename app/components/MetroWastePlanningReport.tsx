@@ -1431,13 +1431,13 @@ export function MetroWastePlanningReport() {
   };
 
   return (
-    <section className="ops-report-shell" aria-label="WasteTrack operations report generator">
+    <section className="ops-report-shell" aria-label="MetroWaste operations report generator">
       <div className="ops-hero">
         <div className="ops-hero-copy">
           <div className="ops-kicker"><span className="ops-live-dot" /> WASTETRACK • AGENCY REPORTING</div>
           <h2>Agency Operations Report</h2>
           <p>
-            Prepare clear, management-ready reports from WasteTrack operational records. Review collection performance,
+            Prepare clear, management-ready reports from MetroWaste operational records. Review collection performance,
             service gaps, truck capacity, driver activity, GPS evidence, schedules, and reported issues in one place.
           </p>
           <div className="ops-source-chips">
@@ -1587,7 +1587,7 @@ export function MetroWastePlanningReport() {
             <div>
               <strong>Truck capacity measurement</strong>
               <p>
-                WasteTrack does not measure collected waste in kilograms. At the end of each collection, the driver
+                MetroWaste does not measure collected waste in kilograms. At the end of each collection, the driver
                 provides an estimated truck-capacity level: 1/4 truck (25%), 1/2 truck (50%), 3/4 truck (75%),
                 or Full truck (100%). These are operational capacity estimates used for monitoring, reporting, and
                 route planning together with completed/uncollected Puroks, GPS activity, issues, and schedules.
@@ -1800,7 +1800,7 @@ export function MetroWastePlanningReport() {
           )}
 
           <footer className="ops-report-footer">
-            <div><strong>WasteTrack Agency Operations Report</strong><span>Management-ready report generated from operational records.</span></div>
+            <div><strong>MetroWaste Agency Operations Report</strong><span>Management-ready report generated from operational records.</span></div>
             <div><span>Prepared / Reviewed by</span><span className="signature-line" /></div>
             <div><span>Authorized Representative</span><span className="signature-line" /></div>
           </footer>
@@ -3626,10 +3626,10 @@ function printOperationsReport(input: {
     }
   </style></head><body><main class="page">
     <header class="document-head">
-      <div><div class="agency"><span class="agency-mark">W</span>WasteTrack • Metro Waste Management</div><h1>${escapeHtml(reportTitle)}</h1><p class="subtitle">${escapeHtml(input.subtitle)}</p></div>
+      <div><div class="agency"><span class="agency-mark">M</span>MetroWaste • Catbalogan Waste Management</div><h1>${escapeHtml(reportTitle)}</h1><p class="subtitle">${escapeHtml(input.subtitle)}</p></div>
       <div class="meta"><div class="meta-row"><span>Generated</span><strong>${escapeHtml(formatDateTime(input.generatedAt))}</strong></div><div class="meta-row"><span>Last data update</span><strong>${escapeHtml(formatDateTime(input.lastUpdated))}</strong></div><div class="meta-row"><span>Print format</span><strong>A4 • Portrait</strong></div></div>
     </header>
-    <div class="basis"><strong>Reporting basis.</strong> WasteTrack does not measure collected waste in kilograms. Drivers estimate truck capacity as 1/4 (25%), 1/2 (50%), 3/4 (75%), or Full (100%) at collection completion. These operational estimates are evaluated together with collection completion, uncollected Puroks, GPS route history, issues, and schedules.</div>
+    <div class="basis"><strong>Reporting basis.</strong> MetroWaste does not measure collected waste in kilograms. Drivers estimate truck capacity as 1/4 (25%), 1/2 (50%), 3/4 (75%), or Full (100%) at collection completion. These operational estimates are evaluated together with collection completion, uncollected Puroks, GPS route history, issues, and schedules.</div>
     <section class="kpis">
       <div class="kpi"><small>Collection Runs</small><strong>${input.summary.totalTrips}</strong><span>Recorded collection sessions</span></div>
       <div class="kpi"><small>Fully Completed</small><strong>${input.summary.completedTrips}</strong><span>${escapeHtml(formatPercent(input.summary.completionRate))} completion rate</span></div>
@@ -3648,7 +3648,7 @@ function printOperationsReport(input: {
     ${include("schedules") ? `<section class="section"><div class="section-head"><h2>Schedule Performance & Coverage</h2><span>Current schedules compared with collection activity</span></div><table class="schedule-table"><thead><tr><th>#</th><th>Schedule / Area</th><th>Assignment</th><th>Service Activity</th><th>Completion</th><th>Assessment</th></tr></thead><tbody>${scheduleRowsHtml || `<tr><td colspan="6">No schedules for the selected filters.</td></tr>`}</tbody></table></section>` : ""}
     ${include("gps") ? `<section class="section"><div class="section-head"><h2>GPS Collection Activity</h2><span>Recorded route traces • green start • red end</span></div><div class="gps-grid">${gpsHtml || `<div class="gps-empty">No GPS route with at least two points matches the selected filters.</div>`}</div></section>` : ""}
     <div class="signoff"><div>Prepared / Reviewed by</div><div>Authorized Agency Representative</div></div>
-    <div class="footer">WasteTrack Agency Operations Report • Generated from Firebase Realtime Database operational records • A4 portrait print layout</div>
+    <div class="footer">MetroWaste Agency Operations Report • Generated from Firebase Realtime Database operational records • A4 portrait print layout</div>
   </main><script>window.onload=()=>window.setTimeout(()=>{window.focus();window.print()},300);<\/script></body></html>`);
   printWindow.document.close();
 }

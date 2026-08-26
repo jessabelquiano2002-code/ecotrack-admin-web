@@ -338,11 +338,11 @@ export default function ContentManagementPage() {
     }, 700);
   };
 
-  if (!authReady || loading) return <DashboardShell title="Media & Education" description="Loading content management…"><div className={styles.loadingCard}><span className={styles.spinner} />Loading Realtime Database content…</div></DashboardShell>;
-  if (!user) return <DashboardShell title="Media & Education" description="Administrator access required"><div className={styles.errorCard}><h2>Sign in required</h2><p>Sign in with an administrator account before opening content management.</p></div></DashboardShell>;
-  if (!config || !meta) return <DashboardShell title="Media & Education" description="Content management unavailable"><div className={styles.errorCard}><h2>Could not load the content schema</h2><p>{toast?.message ?? "Verify the Firebase configuration and database rules."}</p>{lastRetry && <button onClick={() => void lastRetry()}>Retry</button>}</div></DashboardShell>;
+  if (!authReady || loading) return <DashboardShell title="Resident Content" description="Loading resident content…"><div className={styles.loadingCard}><span className={styles.spinner} />Loading saved content…</div></DashboardShell>;
+  if (!user) return <DashboardShell title="Resident Content" description="Administrator access required"><div className={styles.errorCard}><h2>Sign in required</h2><p>Sign in with an administrator account before opening resident content.</p></div></DashboardShell>;
+  if (!config || !meta) return <DashboardShell title="Resident Content" description="Resident content is unavailable"><div className={styles.errorCard}><h2>Could not load the content setup</h2><p>{toast?.message ?? "Check the system connection and access rules."}</p>{lastRetry && <button onClick={() => void lastRetry()}>Retry</button>}</div></DashboardShell>;
 
-  return <DashboardShell title="Media & Education" description="Publish resident announcements, education, rules, schedules, and onboarding content.">
+  return <DashboardShell title="Resident Content" description="Publish announcements, education, rules, schedules, and onboarding information for residents.">
     <div className={styles.page}>
       {progress > 0 && <div className={styles.progressTrack} aria-label={`${busy} ${progress}%`}><span style={{ width: `${progress}%` }} /></div>}
       {toast && <div className={`${styles.toast} ${styles[toast.kind]}`} role="status"><span>{toast.message}</span><div>{toast.kind === "error" && lastRetry && <button onClick={() => void lastRetry()}>Retry</button>}<button aria-label="Close message" onClick={() => setToast(null)}>×</button></div></div>}

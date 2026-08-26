@@ -781,8 +781,8 @@ export default function WastePointsPage() {
 
   return (
     <DashboardShell
-      title="Waste Points"
-      description="Manage official waste drop-off locations shown to residents"
+      title="Waste Drop-off Points"
+      description="Manage the official collection locations shown to residents."
       hidePageHeader
     >
       <main className="waste-points-page">

@@ -50,6 +50,7 @@ type RouteRecord = {
   routeName?: string;
   barangay?: string;
   barangayKey?: string;
+  barangayKeys?: string[] | Record<string, string | boolean>;
   barangays?: string[] | Record<string, string | boolean>;
   puroks?: string[] | Record<string, string | boolean>;
   assignedDriverId?: string;
@@ -85,7 +86,10 @@ const EMPTY_FORM: RouteForm = {
 
 function normalizeArray(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return value.map(String).map((item) => item.trim()).filter(Boolean);
+    return value
+      .map(String)
+      .map((item) => item.trim())
+      .filter(Boolean);
   }
 
   if (value && typeof value === "object") {
@@ -114,8 +118,12 @@ function makeBarangayKey(value: string): string {
     .replace(/\s+/g, "_");
 }
 
-function getRouteBarangay(route: RouteRecord): string {
-  return route.barangay || normalizeArray(route.barangays)[0] || "";
+function getRouteBarangays(route: RouteRecord): string[] {
+  const values = [route.barangay, ...normalizeArray(route.barangays)]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(values));
 }
 
 function getRoutePuroks(route: RouteRecord): string[] {
@@ -222,13 +230,16 @@ export default function RoutesPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
   const [form, setForm] = useState<RouteForm>(EMPTY_FORM);
+  const [selectedBarangays, setSelectedBarangays] = useState<string[]>([]);
+  const [barangayPickerOpen, setBarangayPickerOpen] = useState(false);
   const [selectedPuroks, setSelectedPuroks] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
-  const markerRef = useRef<MapLibreMarker | null>(null);
+  const markerRefs = useRef<MapLibreMarker[]>([]);
+  const barangayPickerRef = useRef<HTMLDivElement | null>(null);
   const [mapReady, setMapReady] = useState(false);
 
   useEffect(() => {
@@ -273,6 +284,33 @@ export default function RoutesPage() {
   }, []);
 
   useEffect(() => {
+    if (!barangayPickerOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        barangayPickerRef.current &&
+        !barangayPickerRef.current.contains(event.target as Node)
+      ) {
+        setBarangayPickerOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setBarangayPickerOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [barangayPickerOpen]);
+
+  useEffect(() => {
     if (!editorOpen || !mapContainerRef.current || mapRef.current) return;
 
     let disposed = false;
@@ -282,7 +320,9 @@ export default function RoutesPage() {
 
       const map = new maplibregl.Map({
         container: mapContainerRef.current,
-        style: getWasteTrackMapStyle("https://tiles.openfreemap.org/styles/bright"),
+        style: getWasteTrackMapStyle(
+          "https://tiles.openfreemap.org/styles/bright",
+        ),
         center: CATBALOGAN_MAP_LOCATION.center,
         zoom: CATBALOGAN_MAP_LOCATION.zoom,
         attributionControl: { compact: true },
@@ -316,8 +356,8 @@ export default function RoutesPage() {
     return () => {
       disposed = true;
       setMapReady(false);
-      markerRef.current?.remove();
-      markerRef.current = null;
+      markerRefs.current.forEach((marker) => marker.remove());
+      markerRefs.current = [];
       mapRef.current?.remove();
       mapRef.current = null;
     };
@@ -326,57 +366,116 @@ export default function RoutesPage() {
   useEffect(() => {
     if (!editorOpen || !mapReady || !mapRef.current) return;
 
-    markerRef.current?.remove();
-    markerRef.current = null;
+    markerRefs.current.forEach((marker) => marker.remove());
+    markerRefs.current = [];
 
-    const selectedLocation = form.barangay
-      ? BARANGAY_MAP_LOCATIONS[form.barangay]
-      : CATBALOGAN_MAP_LOCATION;
+    let cancelled = false;
+    const selectedLocations = selectedBarangays
+      .map((barangay) => ({
+        barangay,
+        location: BARANGAY_MAP_LOCATIONS[barangay],
+      }))
+      .filter(
+        (item): item is { barangay: string; location: BarangayMapLocation } =>
+          Boolean(item.location),
+      );
 
-    if (!selectedLocation) return;
-
-    mapRef.current.flyTo({
-      center: selectedLocation.center,
-      zoom: selectedLocation.zoom,
-      speed: 1.2,
-      curve: 1.35,
-      essential: true,
-    });
-
-    if (!form.barangay) return;
+    if (selectedLocations.length === 0) {
+      mapRef.current.flyTo({
+        center: CATBALOGAN_MAP_LOCATION.center,
+        zoom: CATBALOGAN_MAP_LOCATION.zoom,
+        speed: 1.2,
+        curve: 1.35,
+        essential: true,
+      });
+      return;
+    }
 
     void import("maplibre-gl").then((maplibregl) => {
-      if (!mapRef.current || !form.barangay) return;
+      if (cancelled || !mapRef.current) return;
+      const activeMap = mapRef.current;
 
-      markerRef.current = new maplibregl.Marker({
-        color: "#1b9d58",
-        scale: 0.92,
-      })
-        .setLngLat(selectedLocation.center)
-        .setPopup(
-          new maplibregl.Popup({ offset: 20 }).setText(
-            `${form.barangay}, Catbalogan City`,
-          ),
-        )
-        .addTo(mapRef.current);
+      markerRefs.current = selectedLocations.map(
+        ({ barangay, location }, index) =>
+          new maplibregl.Marker({
+            color: index === 0 ? "#0f9f5b" : "#2563eb",
+            scale: index === 0 ? 0.96 : 0.88,
+          })
+            .setLngLat(location.center)
+            .setPopup(
+              new maplibregl.Popup({ offset: 20 }).setText(
+                `${barangay}, Catbalogan City`,
+              ),
+            )
+            .addTo(activeMap),
+      );
+
+      if (selectedLocations.length === 1) {
+        const [{ location }] = selectedLocations;
+        activeMap.flyTo({
+          center: location.center,
+          zoom: location.zoom,
+          speed: 1.2,
+          curve: 1.35,
+          essential: true,
+        });
+        return;
+      }
+
+      const bounds = new maplibregl.LngLatBounds();
+      selectedLocations.forEach(({ location }) =>
+        bounds.extend(location.center),
+      );
+      activeMap.fitBounds(bounds, {
+        padding: 72,
+        maxZoom: 14.5,
+        duration: 850,
+      });
     });
-  }, [editorOpen, form.barangay, mapReady]);
 
-  const focusSelectedBarangay = () => {
+    return () => {
+      cancelled = true;
+    };
+  }, [editorOpen, mapReady, selectedBarangays]);
+
+  const focusSelectedBarangays = async () => {
     if (!mapRef.current) return;
 
-    const location = form.barangay
-      ? BARANGAY_MAP_LOCATIONS[form.barangay]
-      : CATBALOGAN_MAP_LOCATION;
+    const selectedLocations = selectedBarangays
+      .map((barangay) => BARANGAY_MAP_LOCATIONS[barangay])
+      .filter((location): location is BarangayMapLocation => Boolean(location));
 
-    if (!location) return;
+    if (selectedLocations.length === 0) {
+      mapRef.current.flyTo({
+        center: CATBALOGAN_MAP_LOCATION.center,
+        zoom: CATBALOGAN_MAP_LOCATION.zoom,
+        speed: 1.2,
+        curve: 1.35,
+        essential: true,
+      });
+      return;
+    }
 
-    mapRef.current.flyTo({
-      center: location.center,
-      zoom: location.zoom,
-      speed: 1.2,
-      curve: 1.35,
-      essential: true,
+    if (selectedLocations.length === 1) {
+      mapRef.current.flyTo({
+        center: selectedLocations[0].center,
+        zoom: selectedLocations[0].zoom,
+        speed: 1.2,
+        curve: 1.35,
+        essential: true,
+      });
+      return;
+    }
+
+    const maplibregl = await import("maplibre-gl");
+    if (!mapRef.current) return;
+    const activeMap = mapRef.current;
+    const bounds = new maplibregl.LngLatBounds();
+    selectedLocations.forEach((location) => bounds.extend(location.center));
+    activeMap.fitBounds(bounds, {
+      padding: 72,
+      maxZoom: 14.5,
+      duration: 850,
     });
   };
 
@@ -396,7 +495,7 @@ export default function RoutesPage() {
     return routes.filter((route) => {
       const text = [
         route.routeName,
-        getRouteBarangay(route),
+        getRouteBarangays(route).join(" "),
         getRoutePuroks(route).join(" "),
         route.assignedDriverName,
         route.assignedVehicle,
@@ -426,6 +525,8 @@ export default function RoutesPage() {
   const resetEditor = () => {
     setEditingRouteId(null);
     setForm(EMPTY_FORM);
+    setSelectedBarangays([]);
+    setBarangayPickerOpen(false);
     setSelectedPuroks([]);
     setSaving(false);
   };
@@ -444,14 +545,39 @@ export default function RoutesPage() {
   const openEditEditor = (route: RouteRecord) => {
     setSuccessMessage("");
     setEditingRouteId(route.id);
+    const routeBarangays = getRouteBarangays(route);
     setForm({
       routeName: route.routeName || "",
-      barangay: getRouteBarangay(route),
+      barangay: routeBarangays[0] || "",
       assignedDriverId: route.assignedDriverId || "",
       assignedVehicle: route.assignedVehicle || "",
     });
+    setSelectedBarangays(routeBarangays);
+    setBarangayPickerOpen(false);
     setSelectedPuroks(getRoutePuroks(route));
     setEditorOpen(true);
+  };
+
+  const toggleBarangay = (barangay: string) => {
+    setSelectedBarangays((current) => {
+      const next = current.includes(barangay)
+        ? current.filter((item) => item !== barangay)
+        : [...current, barangay];
+
+      setForm((currentForm) => ({
+        ...currentForm,
+        barangay: next[0] || "",
+      }));
+
+      return next;
+    });
+  };
+
+  const selectAllBarangays = () => {
+    const next =
+      selectedBarangays.length === BARANGAYS.length ? [] : [...BARANGAYS];
+    setSelectedBarangays(next);
+    setForm((current) => ({ ...current, barangay: next[0] || "" }));
   };
 
   const togglePurok = (purok: string) => {
@@ -470,12 +596,16 @@ export default function RoutesPage() {
 
   const saveRoute = async () => {
     const routeName = form.routeName.trim();
+    const barangays = Array.from(
+      new Set(selectedBarangays.map((item) => item.trim()).filter(Boolean)),
+    );
+    const primaryBarangay = barangays[0] || "";
     const assignedDriver = drivers.find(
       (driver) => driver.id === form.assignedDriverId,
     );
 
     if (!routeName) return alert("Enter a route name.");
-    if (!form.barangay) return alert("Select a barangay.");
+    if (barangays.length === 0) return alert("Select at least one Barangay.");
     if (selectedPuroks.length === 0) {
       return alert("Select at least one Purok.");
     }
@@ -497,9 +627,10 @@ export default function RoutesPage() {
 
     const payload = {
       routeName,
-      barangay: form.barangay,
-      barangayKey: makeBarangayKey(form.barangay),
-      barangays: [form.barangay],
+      barangay: primaryBarangay,
+      barangayKey: makeBarangayKey(primaryBarangay),
+      barangays,
+      barangayKeys: barangays.map(makeBarangayKey),
       puroks: selectedPuroks,
       assignedDriverId: assignedDriver.id,
       assignedDriverName: assignedDriver.name || "Driver",
@@ -518,19 +649,25 @@ export default function RoutesPage() {
       [`drivers/${assignedDriver.id}/assignedRouteId`]: routeId,
       [`drivers/${assignedDriver.id}/assignedRouteName`]: routeName,
       [`drivers/${assignedDriver.id}/assignedVehicle`]: vehicle,
-      [`barangay_assignments/${makeBarangayKey(form.barangay)}/${routeId}`]: {
+    };
+
+    barangays.forEach((barangay) => {
+      const barangayKey = makeBarangayKey(barangay);
+      rootUpdates[`barangay_assignments/${barangayKey}/${routeId}`] = {
         routeId,
         routeName,
-        barangay: form.barangay,
-        barangayKey: makeBarangayKey(form.barangay),
+        barangay,
+        barangayKey,
+        barangays,
+        barangayKeys: barangays.map(makeBarangayKey),
         puroks: selectedPuroks,
         driverId: assignedDriver.id,
         driverName: assignedDriver.name || "Driver",
         assignedVehicle: vehicle,
         routeType: "service-area",
         updatedAt: now,
-      },
-    };
+      };
+    });
 
     if (routeStatusKey) {
       rootUpdates[`route_status_updates/${routeStatusKey}`] = {
@@ -538,7 +675,8 @@ export default function RoutesPage() {
         routeName,
         driverId: assignedDriver.id,
         driverName: assignedDriver.name || "Driver",
-        barangay: form.barangay,
+        barangay: primaryBarangay,
+        barangays,
         puroks: selectedPuroks,
         status: editingRouteId ? "updated" : "ready",
         routeType: "service-area",
@@ -550,24 +688,24 @@ export default function RoutesPage() {
       existingRoute?.assignedDriverId &&
       existingRoute.assignedDriverId !== assignedDriver.id
     ) {
-      rootUpdates[
-        `drivers/${existingRoute.assignedDriverId}/assignedRouteId`
-      ] = null;
+      rootUpdates[`drivers/${existingRoute.assignedDriverId}/assignedRouteId`] =
+        null;
       rootUpdates[
         `drivers/${existingRoute.assignedDriverId}/assignedRouteName`
       ] = null;
     }
 
-    const previousBarangay = existingRoute ? getRouteBarangay(existingRoute) : "";
+    const selectedBarangayKeys = new Set(barangays.map(makeBarangayKey));
+    const previousBarangays = existingRoute
+      ? getRouteBarangays(existingRoute)
+      : [];
 
-    if (
-      previousBarangay &&
-      makeBarangayKey(previousBarangay) !== makeBarangayKey(form.barangay)
-    ) {
-      rootUpdates[
-        `barangay_assignments/${makeBarangayKey(previousBarangay)}/${routeId}`
-      ] = null;
-    }
+    previousBarangays.forEach((barangay) => {
+      const barangayKey = makeBarangayKey(barangay);
+      if (!selectedBarangayKeys.has(barangayKey)) {
+        rootUpdates[`barangay_assignments/${barangayKey}/${routeId}`] = null;
+      }
+    });
 
     try {
       setSaving(true);
@@ -580,7 +718,9 @@ export default function RoutesPage() {
       closeEditor();
     } catch (error) {
       console.error("Unable to save route assignment", error);
-      alert("Unable to save the route. Check Firebase permissions and try again.");
+      alert(
+        "Unable to save the route. Check Firebase permissions and try again.",
+      );
       setSaving(false);
     }
   };
@@ -614,12 +754,11 @@ export default function RoutesPage() {
       rootUpdates[`drivers/${route.assignedDriverId}/assignedRouteName`] = null;
     }
 
-    const barangay = getRouteBarangay(route);
-    if (barangay) {
+    getRouteBarangays(route).forEach((barangay) => {
       rootUpdates[
         `barangay_assignments/${makeBarangayKey(barangay)}/${route.id}`
       ] = null;
-    }
+    });
 
     try {
       await update(ref(db), rootUpdates);
@@ -632,8 +771,8 @@ export default function RoutesPage() {
 
   return (
     <DashboardShell
-      title="Route Management"
-      description="Assign a driver to a Barangay and selected Puroks. The map automatically focuses on the selected Barangay for reference only."
+      title="Routes & Assignments"
+      description="Choose one or more Barangays and Puroks, then assign the responsible driver."
     >
       <div className="route-page">
         {successMessage ? (
@@ -657,8 +796,10 @@ export default function RoutesPage() {
             icon={<ReadyIcon />}
             tone="blue"
             label="Ready"
-            value={routes.filter((route) => getRoutePuroks(route).length > 0).length}
-            hint="Barangay and Puroks configured"
+            value={
+              routes.filter((route) => getRoutePuroks(route).length > 0).length
+            }
+            hint="Barangays and Puroks configured"
           />
           <Metric
             icon={<DriverIcon />}
@@ -712,7 +853,7 @@ export default function RoutesPage() {
               <thead>
                 <tr>
                   <th>Route</th>
-                  <th>Barangay</th>
+                  <th>Barangays</th>
                   <th>Purok coverage</th>
                   <th>Driver / Truck</th>
                   <th>Status</th>
@@ -744,13 +885,21 @@ export default function RoutesPage() {
                               <RouteIcon />
                             </span>
                             <div>
-                              <strong>{route.routeName || "Unnamed route"}</strong>
+                              <strong>
+                                {route.routeName || "Unnamed route"}
+                              </strong>
                               <small>{route.id}</small>
                             </div>
                           </div>
                         </td>
 
-                        <td>{getRouteBarangay(route) || "—"}</td>
+                        <td>
+                          <div className="barangay-list">
+                            {getRouteBarangays(route).map((barangay) => (
+                              <span key={barangay}>{barangay}</span>
+                            ))}
+                          </div>
+                        </td>
 
                         <td>
                           <div className="purok-list">
@@ -766,8 +915,12 @@ export default function RoutesPage() {
                               <TruckIcon />
                             </span>
                             <div>
-                              <strong>{route.assignedDriverName || "Unassigned"}</strong>
-                              <small>{route.assignedVehicle || "No truck assigned"}</small>
+                              <strong>
+                                {route.assignedDriverName || "Unassigned"}
+                              </strong>
+                              <small>
+                                {route.assignedVehicle || "No truck assigned"}
+                              </small>
                             </div>
                           </div>
                         </td>
@@ -779,11 +932,16 @@ export default function RoutesPage() {
                           </span>
                         </td>
 
-                        <td>{formatDate(route.updatedAt || route.createdAt)}</td>
+                        <td>
+                          {formatDate(route.updatedAt || route.createdAt)}
+                        </td>
 
                         <td>
                           <div className="table-actions">
-                            <button type="button" onClick={() => openEditEditor(route)}>
+                            <button
+                              type="button"
+                              onClick={() => openEditEditor(route)}
+                            >
                               <PencilIcon />
                               Edit
                             </button>
@@ -807,8 +965,8 @@ export default function RoutesPage() {
 
           <div className="table-footer">
             <p>
-              Showing {filteredRoutes.length === 0 ? 0 : 1} to {filteredRoutes.length} of{" "}
-              {filteredRoutes.length} routes
+              Showing {filteredRoutes.length === 0 ? 0 : 1} to{" "}
+              {filteredRoutes.length} of {filteredRoutes.length} routes
             </p>
 
             <div className="pagination">
@@ -844,8 +1002,8 @@ export default function RoutesPage() {
                       : "Create service area route"}
                   </h2>
                   <p>
-                    Select the Barangay, Puroks, and assigned driver. The map
-                    will automatically focus on the selected Barangay.
+                    Select one or more Barangays, the covered Puroks, and the
+                    assigned driver. The map previews every selected area.
                   </p>
                 </div>
                 <button type="button" onClick={closeEditor} aria-label="Close">
@@ -869,25 +1027,93 @@ export default function RoutesPage() {
                     />
                   </label>
 
-                  <label>
-                    <span>Barangay</span>
-                    <select
-                      value={form.barangay}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          barangay: event.target.value,
-                        }))
-                      }
+                  <div
+                    className="field-group barangay-field"
+                    ref={barangayPickerRef}
+                  >
+                    <span className="field-label">Barangays</span>
+                    <button
+                      type="button"
+                      className={`multi-select-trigger ${barangayPickerOpen ? "open" : ""}`}
+                      aria-haspopup="listbox"
+                      aria-expanded={barangayPickerOpen}
+                      onClick={() => setBarangayPickerOpen((open) => !open)}
                     >
-                      <option value="">Select Barangay</option>
-                      {BARANGAYS.map((barangay) => (
-                        <option key={barangay} value={barangay}>
-                          {barangay}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                      <span>
+                        {selectedBarangays.length === 0
+                          ? "Select one or more Barangays"
+                          : selectedBarangays.length === 1
+                            ? selectedBarangays[0]
+                            : `${selectedBarangays.length} Barangays selected`}
+                      </span>
+                      <strong>{selectedBarangays.length || ""}</strong>
+                      <i aria-hidden="true">⌄</i>
+                    </button>
+
+                    {barangayPickerOpen ? (
+                      <div
+                        className="multi-select-menu"
+                        role="listbox"
+                        aria-label="Select route Barangays"
+                        aria-multiselectable="true"
+                      >
+                        <div className="multi-select-menu-head">
+                          <span>Service areas</span>
+                          <button type="button" onClick={selectAllBarangays}>
+                            {selectedBarangays.length === BARANGAYS.length
+                              ? "Clear all"
+                              : "Select all"}
+                          </button>
+                        </div>
+
+                        {BARANGAYS.map((barangay) => {
+                          const selected = selectedBarangays.includes(barangay);
+                          return (
+                            <button
+                              key={barangay}
+                              type="button"
+                              className={`multi-select-option ${selected ? "selected" : ""}`}
+                              role="option"
+                              aria-selected={selected}
+                              onClick={() => toggleBarangay(barangay)}
+                            >
+                              <span className="check-box">
+                                {selected ? "✓" : ""}
+                              </span>
+                              <span>{barangay}</span>
+                            </button>
+                          );
+                        })}
+
+                        <button
+                          type="button"
+                          className="multi-select-done"
+                          onClick={() => setBarangayPickerOpen(false)}
+                        >
+                          Done
+                        </button>
+                      </div>
+                    ) : null}
+
+                    {selectedBarangays.length > 0 ? (
+                      <div
+                        className="selected-barangay-chips"
+                        aria-label="Selected Barangays"
+                      >
+                        {selectedBarangays.map((barangay) => (
+                          <button
+                            key={barangay}
+                            type="button"
+                            onClick={() => toggleBarangay(barangay)}
+                            aria-label={`Remove ${barangay}`}
+                          >
+                            {barangay}
+                            <span aria-hidden="true">×</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
 
                   <label>
                     <span>Assigned driver</span>
@@ -895,7 +1121,9 @@ export default function RoutesPage() {
                       value={form.assignedDriverId}
                       onChange={(event) => {
                         const driverId = event.target.value;
-                        const driver = drivers.find((item) => item.id === driverId);
+                        const driver = drivers.find(
+                          (item) => item.id === driverId,
+                        );
                         setForm((current) => ({
                           ...current,
                           assignedDriverId: driverId,
@@ -933,10 +1161,15 @@ export default function RoutesPage() {
                   <div className="panel-heading">
                     <div>
                       <h3>Purok coverage</h3>
-                      <p>Select Purok 1 to Purok 10 covered by this route.</p>
+                      <p>
+                        Select Purok 1 to Purok 10. This coverage applies to
+                        every selected Barangay.
+                      </p>
                     </div>
                     <button type="button" onClick={selectAllPuroks}>
-                      {selectedPuroks.length === PUROKS.length ? "Clear all" : "Select all"}
+                      {selectedPuroks.length === PUROKS.length
+                        ? "Clear all"
+                        : "Select all"}
                     </button>
                   </div>
 
@@ -964,12 +1197,16 @@ export default function RoutesPage() {
                     <div>
                       <h3>Barangay map preview</h3>
                       <p>
-                        {form.barangay
-                          ? `Showing the reference location for ${form.barangay}.`
-                          : "Select a Barangay to focus the map."}
+                        {selectedBarangays.length > 0
+                          ? `Showing ${selectedBarangays.length} selected Barangay${selectedBarangays.length === 1 ? "" : "s"}.`
+                          : "Select at least one Barangay to focus the map."}
                       </p>
                     </div>
-                    <button type="button" onClick={focusSelectedBarangay} disabled={!mapReady}>
+                    <button
+                      type="button"
+                      onClick={focusSelectedBarangays}
+                      disabled={!mapReady}
+                    >
                       Recenter map
                     </button>
                   </div>
@@ -978,30 +1215,34 @@ export default function RoutesPage() {
                     ref={mapContainerRef}
                     className="barangay-map"
                     aria-label={
-                      form.barangay
-                        ? `Map focused on ${form.barangay}`
+                      selectedBarangays.length > 0
+                        ? `Map showing ${selectedBarangays.join(", ")}`
                         : "Catbalogan City map"
                     }
                   />
 
                   <p className="map-disclaimer">
-                    This map is for visual reference only. It does not require route
-                    drawing, checkpoints, or Purok pins.
+                    This map is for visual reference only. It does not require
+                    route drawing, checkpoints, or Purok pins.
                   </p>
                 </div>
 
                 <div className="info-card">
                   <strong>Area-based route assignment</strong>
                   <p>
-                    Saving the route records only the selected Barangay, Puroks,
-                    driver, and truck. The map location is not saved as a route
-                    line.
+                    Saving records all selected Barangays, the shared Purok
+                    coverage, driver, and truck. The first Barangay is also kept
+                    as the legacy primary area for older app versions.
                   </p>
                 </div>
               </div>
 
               <footer className="editor-footer">
-                <button type="button" className="secondary" onClick={closeEditor}>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={closeEditor}
+                >
                   Cancel
                 </button>
                 <button
@@ -1034,12 +1275,18 @@ export default function RoutesPage() {
           .reveal {
             opacity: 0;
             transform: translateY(10px);
-            animation: revealIn .42s cubic-bezier(.2,.75,.25,1) forwards;
+            animation: revealIn 0.42s cubic-bezier(0.2, 0.75, 0.25, 1) forwards;
           }
 
-          .reveal-1 { animation-delay: 20ms; }
-          .reveal-2 { animation-delay: 80ms; }
-          .reveal-3 { animation-delay: 140ms; }
+          .reveal-1 {
+            animation-delay: 20ms;
+          }
+          .reveal-2 {
+            animation-delay: 80ms;
+          }
+          .reveal-3 {
+            animation-delay: 140ms;
+          }
 
           @keyframes revealIn {
             to {
@@ -1081,13 +1328,15 @@ export default function RoutesPage() {
             border: 1px solid #dfe8e2;
             border-radius: 16px;
             background: #ffffff;
-            box-shadow: 0 6px 18px rgba(16,35,27,.045);
-            transition: transform .16s ease, box-shadow .16s ease;
+            box-shadow: 0 6px 18px rgba(16, 35, 27, 0.045);
+            transition:
+              transform 0.16s ease,
+              box-shadow 0.16s ease;
           }
 
           .metric-card:hover {
             transform: translateY(-2px);
-            box-shadow: 0 12px 26px rgba(16,35,27,.08);
+            box-shadow: 0 12px 26px rgba(16, 35, 27, 0.08);
           }
 
           .metric-icon {
@@ -1153,7 +1402,7 @@ export default function RoutesPage() {
             border: 1px solid #dfe7e2;
             border-radius: 18px;
             background: #ffffff;
-            box-shadow: 0 8px 24px rgba(16,35,27,.045);
+            box-shadow: 0 8px 24px rgba(16, 35, 27, 0.045);
           }
 
           .table-toolbar {
@@ -1241,17 +1490,17 @@ export default function RoutesPage() {
             font-weight: 900;
             white-space: nowrap;
             cursor: pointer;
-            box-shadow: 0 7px 16px rgba(22, 138, 74, .14);
+            box-shadow: 0 7px 16px rgba(22, 138, 74, 0.14);
             transition:
-              transform .15s ease,
-              background .15s ease,
-              box-shadow .15s ease;
+              transform 0.15s ease,
+              background 0.15s ease,
+              box-shadow 0.15s ease;
           }
 
           .create-route-btn:hover {
             transform: translateY(-1px);
             background: #117a42;
-            box-shadow: 0 10px 19px rgba(22, 138, 74, .20);
+            box-shadow: 0 10px 19px rgba(22, 138, 74, 0.2);
           }
 
           .table-wrap {
@@ -1279,7 +1528,7 @@ export default function RoutesPage() {
             font-size: 11px;
             font-weight: 900;
             text-transform: uppercase;
-            letter-spacing: .06em;
+            letter-spacing: 0.06em;
           }
 
           td strong,
@@ -1296,7 +1545,7 @@ export default function RoutesPage() {
           .row-fade {
             opacity: 0;
             transform: translateY(6px);
-            animation: rowFade .3s ease forwards;
+            animation: rowFade 0.3s ease forwards;
           }
 
           @keyframes rowFade {
@@ -1337,6 +1586,7 @@ export default function RoutesPage() {
             fill: currentColor;
           }
 
+          .barangay-list,
           .purok-list {
             display: flex;
             flex-wrap: wrap;
@@ -1344,6 +1594,7 @@ export default function RoutesPage() {
             max-width: 320px;
           }
 
+          .barangay-list span,
           .purok-list span {
             display: inline-flex;
             border-radius: 999px;
@@ -1352,6 +1603,11 @@ export default function RoutesPage() {
             color: #158d4d;
             font-size: 12px;
             font-weight: 800;
+          }
+
+          .barangay-list span {
+            background: #eff6ff;
+            color: #1d4ed8;
           }
 
           .status-pill {
@@ -1464,7 +1720,7 @@ export default function RoutesPage() {
             display: grid;
             place-items: center;
             padding: 24px;
-            background: rgba(15, 23, 42, 0.50);
+            background: rgba(15, 23, 42, 0.5);
             backdrop-filter: blur(5px);
           }
 
@@ -1475,13 +1731,13 @@ export default function RoutesPage() {
             border-radius: 22px;
             background: #ffffff;
             box-shadow: 0 28px 90px rgba(15, 23, 42, 0.28);
-            animation: modalIn .28s ease;
+            animation: modalIn 0.28s ease;
           }
 
           @keyframes modalIn {
             from {
               opacity: 0;
-              transform: translateY(10px) scale(.985);
+              transform: translateY(10px) scale(0.985);
             }
             to {
               opacity: 1;
@@ -1511,7 +1767,7 @@ export default function RoutesPage() {
             color: #209657;
             font-size: 11px;
             font-weight: 900;
-            letter-spacing: .12em;
+            letter-spacing: 0.12em;
           }
 
           .editor-header h2,
@@ -1563,6 +1819,192 @@ export default function RoutesPage() {
             color: #34463c;
             font-size: 12px;
             font-weight: 800;
+          }
+
+          .field-group {
+            position: relative;
+            min-width: 0;
+            display: grid;
+            align-content: start;
+            gap: 7px;
+          }
+
+          .field-label {
+            color: #34463c;
+            font-size: 12px;
+            font-weight: 800;
+          }
+
+          .multi-select-trigger {
+            width: 100%;
+            min-height: 43px;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto auto;
+            align-items: center;
+            gap: 9px;
+            padding: 10px 12px;
+            border: 1px solid #d5dfd9;
+            border-radius: 11px;
+            background: #ffffff;
+            color: #17231d;
+            text-align: left;
+            cursor: pointer;
+          }
+
+          .multi-select-trigger.open,
+          .multi-select-trigger:focus-visible {
+            border-color: #10b981;
+            outline: 0;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
+          }
+
+          .multi-select-trigger > span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .multi-select-trigger strong {
+            min-width: 23px;
+            min-height: 23px;
+            display: grid;
+            place-items: center;
+            border-radius: 999px;
+            background: #e9f8ef;
+            color: #087443;
+            font-size: 11px;
+          }
+
+          .multi-select-trigger strong:empty {
+            display: none;
+          }
+
+          .multi-select-trigger i {
+            color: #52645b;
+            font-size: 18px;
+            font-style: normal;
+            line-height: 1;
+            transition: transform 160ms ease;
+          }
+
+          .multi-select-trigger.open i {
+            transform: rotate(180deg);
+          }
+
+          .multi-select-menu {
+            position: absolute;
+            z-index: 40;
+            top: 69px;
+            left: 0;
+            right: 0;
+            display: grid;
+            gap: 5px;
+            padding: 9px;
+            border: 1px solid #cfddd5;
+            border-radius: 13px;
+            background: #ffffff;
+            box-shadow: 0 18px 45px rgba(15, 40, 29, 0.18);
+          }
+
+          .multi-select-menu-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 4px 5px 7px;
+            border-bottom: 1px solid #edf2ef;
+            color: #40544a;
+            font-size: 11px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+          }
+
+          .multi-select-menu-head button,
+          .multi-select-done {
+            border: 0;
+            background: transparent;
+            color: #078249;
+            font-size: 11px;
+            font-weight: 900;
+            cursor: pointer;
+          }
+
+          .multi-select-option {
+            width: 100%;
+            min-height: 39px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 7px 9px;
+            border: 1px solid transparent;
+            border-radius: 9px;
+            background: #ffffff;
+            color: #25392f;
+            text-align: left;
+            cursor: pointer;
+          }
+
+          .multi-select-option:hover {
+            background: #f5faf7;
+          }
+
+          .multi-select-option.selected {
+            border-color: #a7e6c2;
+            background: #ecfdf5;
+            color: #047857;
+            font-weight: 800;
+          }
+
+          .check-box {
+            width: 20px;
+            height: 20px;
+            flex: 0 0 20px;
+            display: grid;
+            place-items: center;
+            border: 1px solid #bccdc3;
+            border-radius: 6px;
+            background: #ffffff;
+            color: #ffffff;
+            font-size: 12px;
+          }
+
+          .multi-select-option.selected .check-box {
+            border-color: #10b981;
+            background: #10b981;
+          }
+
+          .multi-select-done {
+            min-height: 36px;
+            margin-top: 2px;
+            border-radius: 9px;
+            background: #ecfdf5;
+          }
+
+          .selected-barangay-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+          }
+
+          .selected-barangay-chips button {
+            min-height: 29px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 9px;
+            border: 1px solid #bfdbfe;
+            border-radius: 999px;
+            background: #eff6ff;
+            color: #1d4ed8;
+            font-size: 11px;
+            font-weight: 800;
+            cursor: pointer;
+          }
+
+          .selected-barangay-chips button span {
+            font-size: 15px;
+            line-height: 1;
           }
 
           input,
@@ -1794,8 +2236,12 @@ export default function RoutesPage() {
               width: 100%;
               min-height: 190px;
               padding: 25px 24px 92px;
-              background:
-                linear-gradient(180deg, rgba(5,79,49,.94) 0%, rgba(5,79,49,.82) 58%, rgba(5,79,49,.22) 100%);
+              background: linear-gradient(
+                180deg,
+                rgba(5, 79, 49, 0.94) 0%,
+                rgba(5, 79, 49, 0.82) 58%,
+                rgba(5, 79, 49, 0.22) 100%
+              );
             }
 
             .hero-copy h2,
@@ -1806,7 +2252,7 @@ export default function RoutesPage() {
             .hero-illustration-svg {
               width: 100%;
               min-width: 600px;
-              opacity: .66;
+              opacity: 0.66;
             }
 
             .hero-cta {

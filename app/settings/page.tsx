@@ -47,7 +47,7 @@ export default function SettingsPage() {
         const data = snap.val();
 
         setSettings({
-          systemName: data.systemName || "WasteTrack",
+          systemName: data.systemName || "MetroWaste",
           cityName: data.cityName || "Catbalogan City",
           contactEmail: data.contactEmail || user.email || "",
           notificationsEnabled:
@@ -142,7 +142,7 @@ export default function SettingsPage() {
                           systemName: e.target.value,
                         }))
                       }
-                      placeholder="WasteTrack"
+                      placeholder="MetroWaste"
                     />
                   </div>
 

@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "WasteTrack Administration",
-    short_name: "WasteTrack",
+    name: "MetroWaste Administration",
+    short_name: "MetroWaste",
     description: "Catbalogan City Waste Management System",
     start_url: "/dashboard",
     display: "standalone",

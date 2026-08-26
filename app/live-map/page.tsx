@@ -467,8 +467,8 @@ export default function LiveMapPage() {
 
   return (
     <DashboardShell
-      title="Live Map"
-      description="Monitor driver GPS locations and route assignments in real time"
+      title="Track Trucks Live"
+      description="Monitor active drivers, truck locations, and assigned routes on one map."
       hidePageHeader
     >
       <div className="live-map-page">

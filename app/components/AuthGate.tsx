@@ -63,7 +63,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
                 // Keep the locally persisted Firebase session intact. A device
                 // that has never completed one online admin verification must
                 // connect once before secure offline mode can be enabled.
-                setMessage("Offline access is not verified on this device yet. Connect once, sign in, then WasteTrack can reopen offline.");
+                setMessage("Offline access is not verified on this device yet. Connect once, sign in, then MetroWaste can reopen offline.");
                 return;
               }
 
@@ -97,7 +97,7 @@ function AuthStatusScreen({ message }: { message: string }) {
   return (
     <main className="auth-loading" aria-live="polite" aria-busy="true">
       <span className="auth-logo" aria-hidden="true">E</span>
-      <strong>WasteTrack Administration</strong>
+      <strong>MetroWaste Administration</strong>
       <p>{message}</p>
       <span className="auth-progress" aria-hidden="true"><i /></span>
       <style jsx>{`

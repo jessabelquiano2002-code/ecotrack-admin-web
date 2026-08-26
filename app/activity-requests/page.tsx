@@ -424,8 +424,8 @@ export default function DriverActivityRequestsPage() {
 
   return (
     <DashboardShell
-      title="Driver Activity Requests"
-      description="Review exact-date driver requests, generate printable reports with linked GPS activity maps, and notify the requesting driver."
+      title="Driver Report Requests"
+      description="Verify the requested date and GPS activity, generate the printable report, then notify the driver."
     >
       <div className="activity-page">
         <div className="toolbar">

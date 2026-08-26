@@ -627,8 +627,8 @@ export default function NotificationsPage() {
   if (showModal) {
     return (
       <DashboardShell
-        title="Notifications"
-        description="Create targeted notification"
+        title="Send Notifications"
+        description="Prepare a targeted update for the correct residents."
         hidePageHeader
       >
         <section className="notificationsPage composeOnlyPage">
@@ -839,8 +839,8 @@ export default function NotificationsPage() {
 
   return (
     <DashboardShell
-      title="Notifications"
-      description="Send barangay and purok alerts to selected residents"
+      title="Send Notifications"
+      description="Select the correct Barangay and Purok, review the message, then send it to residents."
       hidePageHeader
     >
       <section className="notificationsPage">

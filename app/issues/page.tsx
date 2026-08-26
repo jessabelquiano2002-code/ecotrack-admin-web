@@ -1835,8 +1835,8 @@ export default function IssuesPage() {
 
   return (
     <DashboardShell
-      title="Admin Complaints & Reports"
-      description="Receive resident and driver complaints, manage status, and send notices to affected residents."
+      title="Complaints & Reports"
+      description="Review concerns, update their status, record the action taken, and notify affected residents."
     >
       <div className="adminIssuesPage">
         {errorMessage && <div className="errorBox">{errorMessage}</div>}

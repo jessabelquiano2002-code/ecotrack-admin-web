@@ -1,7 +1,7 @@
 "use client";
 
 import { onValue, push, ref, remove, set } from "@/lib/offlineFirebaseDatabase";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
 
@@ -13,10 +13,7 @@ const BARANGAYS = [
   "Poblacion 13",
 ];
 
-const PUROKS = Array.from(
-  { length: 10 },
-  (_, index) => `Purok ${index + 1}`,
-);
+const PUROKS = Array.from({ length: 10 }, (_, index) => `Purok ${index + 1}`);
 
 const DAYS = [
   "Sunday",
@@ -44,6 +41,7 @@ type RouteRecord = {
   routeName?: string;
   barangay?: string;
   barangayKey?: string;
+  barangayKeys?: string[] | Record<string, string | boolean>;
   barangays?: string[] | Record<string, string | boolean>;
   puroks?: string[] | Record<string, string | boolean>;
   assignedDriverId?: string;
@@ -59,11 +57,15 @@ type Schedule = {
   title?: string;
   barangay?: string;
   barangayKey?: string;
+  barangays?: string[] | Record<string, string | boolean>;
+  barangayKeys?: string[] | Record<string, string | boolean>;
   assignedPuroks?: string[] | Record<string, string | boolean>;
   puroks?: Array<string | number> | Record<string, string | number | boolean>;
   scheduleDay?: string;
   scheduleDays?: string[] | string;
   startTime?: string;
+  purokTimes?: Record<string, string>;
+  collectionTimesByPurok?: Record<string, string>;
   truckId?: string;
   assignedDriverId?: string;
   driverId?: string;
@@ -84,7 +86,6 @@ type Schedule = {
 
 type ScheduleForm = {
   title: string;
-  startTime: string;
   truckId: string;
   assignedDriverId: string;
   notes: string;
@@ -93,7 +94,6 @@ type ScheduleForm = {
 
 const EMPTY_FORM: ScheduleForm = {
   title: "",
-  startTime: "",
   truckId: "",
   assignedDriverId: "",
   notes: "",
@@ -102,7 +102,10 @@ const EMPTY_FORM: ScheduleForm = {
 
 function normalizeArray(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return value.map(String).map((item) => item.trim()).filter(Boolean);
+    return value
+      .map(String)
+      .map((item) => item.trim())
+      .filter(Boolean);
   }
 
   if (value && typeof value === "object") {
@@ -145,23 +148,29 @@ function makePurokKey(value: unknown): string {
   return number ? `purok_${Number(number)}` : "";
 }
 
-function getRouteBarangay(route: RouteRecord): string {
-  return route.barangay || normalizeArray(route.barangays)[0] || "";
+function getRouteBarangays(route: RouteRecord): string[] {
+  const values = [route.barangay, ...normalizeArray(route.barangays)]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(values));
 }
 
 function getRoutePuroks(route: RouteRecord): string[] {
-  return normalizeArray(route.puroks)
-    .map(normalizePurokLabel)
-    .filter(Boolean);
+  return normalizeArray(route.puroks).map(normalizePurokLabel).filter(Boolean);
 }
 
 function routeCoversSelection(
   route: RouteRecord,
-  barangay: string,
+  barangays: string[],
   selectedPuroks: string[],
 ): boolean {
-  const matchesBarangay =
-    makeBarangayKey(getRouteBarangay(route)) === makeBarangayKey(barangay);
+  const routeBarangayKeys = new Set(
+    getRouteBarangays(route).map(makeBarangayKey),
+  );
+  const coversAllBarangays = barangays.every((barangay) =>
+    routeBarangayKeys.has(makeBarangayKey(barangay)),
+  );
 
   const coveredPuroks = new Set(getRoutePuroks(route));
   const coversAllSelectedPuroks = selectedPuroks.every((purok) =>
@@ -174,11 +183,19 @@ function routeCoversSelection(
   );
 
   return (
-    matchesBarangay &&
+    coversAllBarangays &&
     coversAllSelectedPuroks &&
     routeIsAvailable &&
     Boolean(route.assignedDriverId)
   );
+}
+
+function getScheduleBarangays(schedule: Schedule): string[] {
+  const values = [schedule.barangay, ...normalizeArray(schedule.barangays)]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(values));
 }
 
 function getSchedulePuroks(schedule: Schedule): string[] {
@@ -194,12 +211,35 @@ function getScheduleDays(schedule: Schedule): string[] {
   return DAYS.filter((day) => uniqueDays.has(day));
 }
 
+function getSchedulePurokTimes(schedule: Schedule): Record<string, string> {
+  const source = schedule.purokTimes || schedule.collectionTimesByPurok || {};
+  const fallback = String(schedule.startTime || "");
+
+  return getSchedulePuroks(schedule).reduce<Record<string, string>>(
+    (result, purok) => {
+      result[purok] = source[purok] || source[makePurokKey(purok)] || fallback;
+      return result;
+    },
+    {},
+  );
+}
+
+function formatScheduleTimeSummary(schedule: Schedule): string {
+  const times = Object.values(getSchedulePurokTimes(schedule)).filter(Boolean);
+  const uniqueTimes = Array.from(new Set(times));
+
+  if (uniqueTimes.length === 0) return "—";
+  if (uniqueTimes.length === 1) return formatTime(uniqueTimes[0]);
+  return `${times.length} Purok times`;
+}
+
 function formatDayList(days: string[]): string {
   const orderedDays = DAYS.filter((day) => days.includes(day));
 
   if (orderedDays.length === 0) return "—";
   if (orderedDays.length === 1) return orderedDays[0];
-  if (orderedDays.length === 2) return `${orderedDays[0]} and ${orderedDays[1]}`;
+  if (orderedDays.length === 2)
+    return `${orderedDays[0]} and ${orderedDays[1]}`;
 
   return `${orderedDays.slice(0, -1).join(", ")}, and ${orderedDays.at(-1)}`;
 }
@@ -238,10 +278,13 @@ export default function SchedulesPage() {
   const [successMessage, setSuccessMessage] = useState("");
   const [search, setSearch] = useState("");
 
-  const [selectedBarangay, setSelectedBarangay] = useState("");
+  const [selectedBarangays, setSelectedBarangays] = useState<string[]>([]);
+  const [barangayPickerOpen, setBarangayPickerOpen] = useState(false);
   const [selectedPuroks, setSelectedPuroks] = useState<string[]>([]);
+  const [purokTimes, setPurokTimes] = useState<Record<string, string>>({});
   const [selectedDays, setSelectedDays] = useState<string[]>([]);
   const [form, setForm] = useState<ScheduleForm>(EMPTY_FORM);
+  const barangayPickerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const unsubscribeSchedules = onValue(ref(db, "schedules"), (snapshot) => {
@@ -284,16 +327,45 @@ export default function SchedulesPage() {
   }, []);
 
   useEffect(() => {
+    if (!barangayPickerOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        barangayPickerRef.current &&
+        !barangayPickerRef.current.contains(event.target as Node)
+      ) {
+        setBarangayPickerOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setBarangayPickerOpen(false);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [barangayPickerOpen]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("source") !== "agency-report") return;
 
     const requestedBarangay = params.get("barangay") || "";
     const requestedPurok = params.get("purok") || "";
-    const recommendedSlots = Math.max(1, Number(params.get("recommendedSlots") || 1));
+    const recommendedSlots = Math.max(
+      1,
+      Number(params.get("recommendedSlots") || 1),
+    );
 
-    const barangay = BARANGAYS.find(
-      (item) => item.toLowerCase() === requestedBarangay.toLowerCase(),
-    ) || requestedBarangay;
+    const barangay =
+      BARANGAYS.find(
+        (item) => item.toLowerCase() === requestedBarangay.toLowerCase(),
+      ) || requestedBarangay;
 
     const normalizedRequestedPurok = normalizePurokLabel(requestedPurok);
     const purok = PUROKS.find(
@@ -302,24 +374,26 @@ export default function SchedulesPage() {
 
     if (!barangay) return;
 
-    setSelectedBarangay(barangay);
+    setSelectedBarangays([barangay]);
     setSelectedPuroks(purok ? [purok] : []);
+    setPurokTimes({});
     setSelectedDays([]);
     setForm({
       ...EMPTY_FORM,
       title: `${barangay}${purok ? ` ${purok}` : ""} — Additional Collection`,
-      notes: `Recommended by Metro Waste Agency Report: consider ${recommendedSlots} additional weekly collection slot${recommendedSlots === 1 ? "" : "s"}. Review route, driver, truck, day, and time before saving.`,
+      notes: `Recommended by MetroWaste Agency Report: consider ${recommendedSlots} additional weekly collection slot${recommendedSlots === 1 ? "" : "s"}. Review route, driver, truck, day, and time before saving.`,
     });
     setShowForm(true);
   }, []);
 
   const compatibleRoutes = useMemo(() => {
-    if (!selectedBarangay || selectedPuroks.length === 0) return [];
+    if (selectedBarangays.length === 0 || selectedPuroks.length === 0)
+      return [];
 
     return routes.filter((route) =>
-      routeCoversSelection(route, selectedBarangay, selectedPuroks),
+      routeCoversSelection(route, selectedBarangays, selectedPuroks),
     );
-  }, [routes, selectedBarangay, selectedPuroks]);
+  }, [routes, selectedBarangays, selectedPuroks]);
 
   const selectedRoute = useMemo(
     () => routes.find((route) => route.id === form.routeId),
@@ -333,7 +407,7 @@ export default function SchedulesPage() {
     return schedules.filter((schedule) => {
       const text = [
         schedule.title,
-        schedule.barangay,
+        getScheduleBarangays(schedule).join(" "),
         getSchedulePuroks(schedule).join(" "),
         schedule.routeName,
         schedule.driverName,
@@ -349,8 +423,10 @@ export default function SchedulesPage() {
   }, [schedules, search]);
 
   const resetForm = () => {
-    setSelectedBarangay("");
+    setSelectedBarangays([]);
+    setBarangayPickerOpen(false);
     setSelectedPuroks([]);
+    setPurokTimes({});
     setSelectedDays([]);
     setForm(EMPTY_FORM);
     setIsSaving(false);
@@ -361,13 +437,7 @@ export default function SchedulesPage() {
     resetForm();
   };
 
-  const togglePurok = (purok: string) => {
-    setSelectedPuroks((current) =>
-      current.includes(purok)
-        ? current.filter((item) => item !== purok)
-        : [...current, purok],
-    );
-
+  const resetSelectedRoute = () => {
     setForm((current) => ({
       ...current,
       routeId: "",
@@ -376,16 +446,55 @@ export default function SchedulesPage() {
     }));
   };
 
-  const selectAllPuroks = () => {
-    setSelectedPuroks((current) =>
-      current.length === PUROKS.length ? [] : [...PUROKS],
+  const toggleBarangay = (barangay: string) => {
+    setSelectedBarangays((current) =>
+      current.includes(barangay)
+        ? current.filter((item) => item !== barangay)
+        : [...current, barangay],
     );
-    setForm((current) => ({
-      ...current,
-      routeId: "",
-      assignedDriverId: "",
-      truckId: "",
-    }));
+    resetSelectedRoute();
+  };
+
+  const selectAllBarangays = () => {
+    setSelectedBarangays((current) =>
+      current.length === BARANGAYS.length ? [] : [...BARANGAYS],
+    );
+    resetSelectedRoute();
+  };
+
+  const togglePurok = (purok: string) => {
+    setSelectedPuroks((current) => {
+      const isRemoving = current.includes(purok);
+
+      if (isRemoving) {
+        setPurokTimes((times) => {
+          const next = { ...times };
+          delete next[purok];
+          return next;
+        });
+        return current.filter((item) => item !== purok);
+      }
+
+      return [...current, purok];
+    });
+
+    resetSelectedRoute();
+  };
+
+  const selectAllPuroks = () => {
+    setSelectedPuroks((current) => {
+      if (current.length === PUROKS.length) {
+        setPurokTimes({});
+        return [];
+      }
+
+      return [...PUROKS];
+    });
+    resetSelectedRoute();
+  };
+
+  const setPurokTime = (purok: string, time: string) => {
+    setPurokTimes((current) => ({ ...current, [purok]: time }));
   };
 
   const toggleDay = (day: string) => {
@@ -407,9 +516,7 @@ export default function SchedulesPage() {
 
   const selectRoute = (routeId: string) => {
     const route = routes.find((item) => item.id === routeId);
-    const driver = drivers.find(
-      (item) => item.id === route?.assignedDriverId,
-    );
+    const driver = drivers.find((item) => item.id === route?.assignedDriverId);
 
     setForm((current) => ({
       ...current,
@@ -422,28 +529,39 @@ export default function SchedulesPage() {
   const createScheduleNotification = async ({
     scheduleId,
     title,
-    barangay,
+    barangays,
     puroks,
+    purokTimes,
     days,
-    startTime,
     status,
     notes,
   }: {
     scheduleId: string;
     title: string;
-    barangay: string;
+    barangays: string[];
     puroks: string[];
+    purokTimes: Record<string, string>;
     days: string[];
-    startTime: string;
     status: "created" | "cancelled";
     notes?: string;
   }) => {
-    const barangayKey = makeBarangayKey(barangay);
+    const normalizedBarangays = Array.from(
+      new Set(barangays.map((item) => item.trim()).filter(Boolean)),
+    );
+    const primaryBarangay = normalizedBarangays[0] || "";
+    const primaryStartTime = purokTimes[puroks[0]] || "";
     const timestamp = Date.now();
     const allPuroks = puroks.length === PUROKS.length;
     const purokLabel = allPuroks ? ALL_PUROKS_LABEL : puroks.join(", ");
     const orderedDays = DAYS.filter((day) => days.includes(day));
     const dayLabel = formatDayList(orderedDays);
+    const areaLabel = normalizedBarangays.join(", ");
+    const timeSummary = puroks
+      .map(
+        (purok) =>
+          `${purok} at ${formatTime(purokTimes[purok] || primaryStartTime)}`,
+      )
+      .join("; ");
 
     const notificationTitle =
       status === "created"
@@ -452,8 +570,8 @@ export default function SchedulesPage() {
 
     const message =
       status === "created"
-        ? `Garbage collection for ${barangay}, ${purokLabel}, is scheduled every ${dayLabel} at ${formatTime(startTime)}.`
-        : `The garbage collection schedule for ${barangay}, ${purokLabel}, has been cancelled.`;
+        ? `Garbage collection for ${areaLabel} is scheduled every ${dayLabel}: ${timeSummary}.`
+        : `The garbage collection schedule for ${areaLabel}, ${purokLabel}, has been cancelled.`;
 
     const notificationData = {
       type: "schedule",
@@ -464,43 +582,85 @@ export default function SchedulesPage() {
       adminNotes: notes || "",
       scheduleId,
       scheduleTitle: title,
-      barangay,
-      barangayKey,
+      barangay: primaryBarangay,
+      barangayKey: makeBarangayKey(primaryBarangay),
+      barangays: normalizedBarangays,
+      barangayKeys: normalizedBarangays.map(makeBarangayKey),
       purok: purokLabel,
       puroks,
       assignedPuroks: puroks,
       purokKeys: puroks.map(makePurokKey),
+      purokTimes,
+      collectionTimesByPurok: puroks.reduce<Record<string, string>>(
+        (result, purok) => {
+          result[makePurokKey(purok)] = purokTimes[purok] || primaryStartTime;
+          return result;
+        },
+        {},
+      ),
       scheduleDay: orderedDays[0] || "",
       scheduleDays: orderedDays,
-      startTime,
+      startTime: primaryStartTime,
       scheduleType: "weekly",
       repeat: "weekly",
       isRecurring: true,
-      targetType: allPuroks
-        ? "barangay_all_purok"
-        : puroks.length > 1
-          ? "barangay_multiple_puroks"
-          : "barangay_purok",
+      targetType:
+        normalizedBarangays.length > 1
+          ? "multiple_barangays_puroks"
+          : allPuroks
+            ? "barangay_all_purok"
+            : puroks.length > 1
+              ? "barangay_multiple_puroks"
+              : "barangay_purok",
       notifyAllPurok: allPuroks,
       seen: false,
       createdAt: timestamp,
       timestamp,
     };
 
-    const writes = [set(push(ref(db, "notifications")), notificationData)];
+    const writes: Array<Promise<void>> = [];
 
-    for (const purok of puroks) {
-      const purokKey = makePurokKey(purok);
-      writes.push(
-        set(
-          push(ref(db, `notificationsByArea/${barangayKey}/${purokKey}`)),
-          {
+    for (const barangay of normalizedBarangays) {
+      const barangayKey = makeBarangayKey(barangay);
+      for (const purok of puroks) {
+        const purokKey = makePurokKey(purok);
+        const areaTime = purokTimes[purok] || primaryStartTime;
+        const areaMessage =
+          status === "created"
+            ? `Garbage collection for ${barangay}, ${purok}, is scheduled every ${dayLabel} at ${formatTime(areaTime)}.`
+            : `The garbage collection schedule for ${barangay}, ${purok}, has been cancelled.`;
+
+        writes.push(
+          set(push(ref(db, "notifications")), {
             ...notificationData,
+            barangay,
+            barangayKey,
+            message: areaMessage,
             purok,
+            puroks: [purok],
+            assignedPuroks: [purok],
             purokKey,
-          },
-        ),
-      );
+            purokKeys: [purokKey],
+            startTime: areaTime,
+            targetType: "barangay_purok",
+            notifyAllPurok: false,
+          }),
+          set(push(ref(db, `notificationsByArea/${barangayKey}/${purokKey}`)), {
+            ...notificationData,
+            barangay,
+            barangayKey,
+            message: areaMessage,
+            purok,
+            puroks: [purok],
+            assignedPuroks: [purok],
+            purokKey,
+            purokKeys: [purokKey],
+            startTime: areaTime,
+            targetType: "barangay_purok",
+            notifyAllPurok: false,
+          }),
+        );
+      }
     }
 
     await Promise.all(writes);
@@ -513,36 +673,58 @@ export default function SchedulesPage() {
       const currentAdmin = auth.currentUser;
 
       if (!currentAdmin) {
-        console.warn("Schedule saved, but FCM was skipped because the admin session is unavailable.");
+        console.warn(
+          "Schedule saved, but FCM was skipped because the admin session is unavailable.",
+        );
         return;
       }
 
       const idToken = await currentAdmin.getIdToken();
 
-      const pushResponse = await fetch("/api/send-alert", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          title: notificationTitle,
-          message,
-          type: "schedule",
-          target: "resident",
-          barangay,
-          puroks,
-          scheduleId,
-          scheduleTitle: title,
-          status,
-        }),
-      });
+      const pushRequests = normalizedBarangays.flatMap((barangay) =>
+        puroks.map(async (purok) => {
+          const areaTime = purokTimes[purok] || primaryStartTime;
+          const areaMessage =
+            status === "created"
+              ? `Garbage collection for ${barangay}, ${purok}, is scheduled every ${dayLabel} at ${formatTime(areaTime)}.`
+              : `The garbage collection schedule for ${barangay}, ${purok}, has been cancelled.`;
 
-      if (!pushResponse.ok) {
-        const result = await pushResponse.json().catch(() => ({}));
+          const response = await fetch("/api/send-alert", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${idToken}`,
+            },
+            body: JSON.stringify({
+              title: notificationTitle,
+              message: areaMessage,
+              type: "schedule",
+              target: "resident",
+              barangay,
+              barangays: normalizedBarangays,
+              puroks: [purok],
+              purokTimes,
+              startTime: areaTime,
+              scheduleId,
+              scheduleTitle: title,
+              status,
+            }),
+          });
+
+          if (!response.ok) {
+            const result = await response.json().catch(() => ({}));
+            throw new Error(
+              `${barangay} ${purok}: ${result?.error || response.statusText}`,
+            );
+          }
+        }),
+      );
+
+      const results = await Promise.allSettled(pushRequests);
+      const failures = results.filter((result) => result.status === "rejected");
+      if (failures.length > 0) {
         console.warn(
-          "Schedule was saved but phone push failed:",
-          result?.error || pushResponse.statusText,
+          `Schedule was saved, but ${failures.length} targeted phone push request(s) failed.`,
         );
       }
     } catch (error) {
@@ -552,48 +734,68 @@ export default function SchedulesPage() {
 
   const hasPotentialConflict = (): boolean =>
     schedules.some((schedule) => {
-      const sameBarangay =
-        makeBarangayKey(schedule.barangay || "") ===
-        makeBarangayKey(selectedBarangay);
+      const existingBarangayKeys = new Set(
+        getScheduleBarangays(schedule).map(makeBarangayKey),
+      );
+      const overlapsBarangay = selectedBarangays.some((barangay) =>
+        existingBarangayKeys.has(makeBarangayKey(barangay)),
+      );
       const existingDays = getScheduleDays(schedule);
       const sameDay = selectedDays.some((day) => existingDays.includes(day));
-      const sameTime = schedule.startTime === form.startTime;
       const existingPuroks = getSchedulePuroks(schedule);
-      const overlaps = selectedPuroks.some((purok) =>
-        existingPuroks.includes(purok),
+      const existingPurokTimes = getSchedulePurokTimes(schedule);
+      const overlapsPurokAtSameTime = selectedPuroks.some(
+        (purok) =>
+          existingPuroks.includes(purok) &&
+          Boolean(purokTimes[purok]) &&
+          existingPurokTimes[purok] === purokTimes[purok],
       );
       const active =
         String(schedule.status || "active").toLowerCase() === "active";
 
-      return sameBarangay && sameDay && sameTime && overlaps && active;
+      return overlapsBarangay && sameDay && overlapsPurokAtSameTime && active;
     });
 
   const saveSchedule = async () => {
     setSuccessMessage("");
 
     if (!form.title.trim()) return alert("Enter a schedule title.");
-    if (!selectedBarangay) return alert("Select a Barangay.");
+    if (selectedBarangays.length === 0) {
+      return alert("Select at least one Barangay.");
+    }
     if (selectedPuroks.length === 0) {
       return alert("Select at least one Purok.");
     }
-    if (selectedDays.length === 0) return alert("Select at least one weekly collection day.");
-    if (!form.startTime) return alert("Select a collection time.");
+    const puroksWithoutTime = selectedPuroks.filter(
+      (purok) => !purokTimes[purok],
+    );
+    if (puroksWithoutTime.length > 0) {
+      return alert(
+        `Set a collection time for ${puroksWithoutTime.join(", ")}.`,
+      );
+    }
+    if (selectedDays.length === 0)
+      return alert("Select at least one weekly collection day.");
     if (!form.routeId) return alert("Select a route assignment.");
 
     const route = routes.find((item) => item.id === form.routeId);
-    if (!route || !routeCoversSelection(route, selectedBarangay, selectedPuroks)) {
+    if (
+      !route ||
+      !routeCoversSelection(route, selectedBarangays, selectedPuroks)
+    ) {
       return alert(
-        "The selected route must match the Barangay, cover every selected Purok, and have an assigned driver.",
+        "The selected route must cover every selected Barangay and Purok, and have an assigned driver.",
       );
     }
 
     const driverId = form.assignedDriverId || route.assignedDriverId || "";
     const driver = drivers.find((item) => item.id === driverId);
-    if (!driver) return alert("The selected route has no valid assigned driver.");
+    if (!driver)
+      return alert("The selected route has no valid assigned driver.");
 
     if (hasPotentialConflict()) {
       const proceed = window.confirm(
-        "A similar active schedule already exists for the same Barangay, Purok, at least one selected day, and time. Continue anyway?",
+        "A similar active schedule already exists for an overlapping Barangay, Purok, day, and time. Continue anyway?",
       );
       if (!proceed) return;
     }
@@ -602,9 +804,16 @@ export default function SchedulesPage() {
     const purokNumbers = selectedPuroks.map((purok) =>
       Number(purok.replace(/\D/g, "")),
     );
-    const purokLabel = allPuroks
-      ? ALL_PUROKS_LABEL
-      : selectedPuroks.join(", ");
+    const purokLabel = allPuroks ? ALL_PUROKS_LABEL : selectedPuroks.join(", ");
+    const barangays = Array.from(new Set(selectedBarangays));
+    const primaryBarangay = barangays[0];
+    const primaryStartTime = purokTimes[selectedPuroks[0]];
+    const collectionTimesByPurok = selectedPuroks.reduce<
+      Record<string, string>
+    >((result, purok) => {
+      result[makePurokKey(purok)] = purokTimes[purok];
+      return result;
+    }, {});
 
     try {
       setIsSaving(true);
@@ -614,16 +823,21 @@ export default function SchedulesPage() {
       if (!scheduleId) throw new Error("Unable to create schedule ID.");
 
       const timestamp = Date.now();
-      const truck = form.truckId.trim() || route.assignedVehicle || driver.truck || "";
+      const truck =
+        form.truckId.trim() || route.assignedVehicle || driver.truck || "";
 
       const payload = {
         title: form.title.trim(),
-        barangay: selectedBarangay,
-        barangayKey: makeBarangayKey(selectedBarangay),
+        barangay: primaryBarangay,
+        barangayKey: makeBarangayKey(primaryBarangay),
+        barangays,
+        barangayKeys: barangays.map(makeBarangayKey),
         purok: purokLabel,
         assignedPuroks: selectedPuroks,
         puroks: purokNumbers,
         purokKeys: selectedPuroks.map(makePurokKey),
+        purokTimes,
+        collectionTimesByPurok,
         purokKey: allPuroks
           ? "all"
           : selectedPuroks.length === 1
@@ -632,7 +846,7 @@ export default function SchedulesPage() {
         targetPurok: purokLabel,
         scheduleDay: selectedDays[0],
         scheduleDays: selectedDays,
-        startTime: form.startTime,
+        startTime: primaryStartTime,
         truckId: truck,
         assignedDriverId: driver.id,
         driverId: driver.id,
@@ -650,14 +864,18 @@ export default function SchedulesPage() {
           frequency: "weekly",
           dayOfWeek: selectedDays[0],
           daysOfWeek: selectedDays,
-          time: form.startTime,
+          time: primaryStartTime,
+          timesByPurok: purokTimes,
         },
         isRecurring: true,
-        targetType: allPuroks
-          ? "barangay_all_purok"
-          : selectedPuroks.length > 1
-            ? "barangay_multiple_puroks"
-            : "barangay_purok",
+        targetType:
+          barangays.length > 1
+            ? "multiple_barangays_puroks"
+            : allPuroks
+              ? "barangay_all_purok"
+              : selectedPuroks.length > 1
+                ? "barangay_multiple_puroks"
+                : "barangay_purok",
         notifyAllPurok: allPuroks,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -668,16 +886,16 @@ export default function SchedulesPage() {
       await createScheduleNotification({
         scheduleId,
         title: form.title.trim(),
-        barangay: selectedBarangay,
+        barangays,
         puroks: selectedPuroks,
+        purokTimes,
         days: selectedDays,
-        startTime: form.startTime,
         status: "created",
         notes: form.notes.trim(),
       });
 
       setSuccessMessage(
-        `Weekly schedule saved for ${selectedBarangay}, ${purokLabel}, every ${formatDayList(selectedDays)} at ${formatTime(form.startTime)}.`,
+        `Weekly schedule saved for ${barangays.join(", ")} with individual collection times for ${selectedPuroks.length} Purok${selectedPuroks.length === 1 ? "" : "s"}.`,
       );
       closeForm();
     } catch (error) {
@@ -688,20 +906,32 @@ export default function SchedulesPage() {
   };
 
   const deleteSchedule = async (schedule: Schedule) => {
-    if (!window.confirm("Delete this schedule and notify affected residents?")) {
+    if (
+      !window.confirm("Delete this schedule and notify affected residents?")
+    ) {
       return;
     }
 
     try {
       await remove(ref(db, `schedules/${schedule.id}`));
 
+      const schedulePuroks = getSchedulePuroks(schedule);
+      const schedulePurokTimes = getSchedulePurokTimes(schedule);
+
       await createScheduleNotification({
         scheduleId: schedule.id,
         title: schedule.title || "Schedule",
-        barangay: schedule.barangay || "",
-        puroks: getSchedulePuroks(schedule),
+        barangays: getScheduleBarangays(schedule),
+        puroks: schedulePuroks,
+        purokTimes: schedulePuroks.reduce<Record<string, string>>(
+          (result, purok) => {
+            result[purok] =
+              schedulePurokTimes[purok] || schedule.startTime || "";
+            return result;
+          },
+          {},
+        ),
         days: getScheduleDays(schedule),
-        startTime: schedule.startTime || "—",
         status: "cancelled",
         notes: schedule.notes || "",
       });
@@ -715,8 +945,8 @@ export default function SchedulesPage() {
 
   return (
     <DashboardShell
-      title="Schedule Management"
-      description="Create weekly collection schedules using Barangay and Purok route assignments. No map or drawn route is required."
+      title="Collection Schedules"
+      description="Schedule multiple Barangays and set the expected time for every Purok."
     >
       <div className="schedule-page">
         {successMessage ? (
@@ -744,7 +974,8 @@ export default function SchedulesPage() {
             value={
               schedules.filter(
                 (schedule) =>
-                  String(schedule.status || "active").toLowerCase() === "active",
+                  String(schedule.status || "active").toLowerCase() ===
+                  "active",
               ).length
             }
             hint="Currently active schedules"
@@ -771,7 +1002,10 @@ export default function SchedulesPage() {
           <div className="toolbar">
             <div className="toolbar-title">
               <h2>Weekly schedules</h2>
-              <p>Schedules are matched using Barangay and Purok coverage.</p>
+              <p>
+                Schedules match route coverage across all selected Barangays and
+                Puroks.
+              </p>
             </div>
 
             <div className="toolbar-actions">
@@ -833,13 +1067,21 @@ export default function SchedulesPage() {
                       </td>
 
                       <td>
-                        <strong>{schedule.barangay || "—"}</strong>
-                        <small>{getSchedulePuroks(schedule).join(", ") || "—"}</small>
+                        <div className="barangay-tags">
+                          {getScheduleBarangays(schedule).map((barangay) => (
+                            <span key={barangay}>{barangay}</span>
+                          ))}
+                        </div>
+                        <small>
+                          {getSchedulePuroks(schedule).join(", ") || "—"}
+                        </small>
                       </td>
 
                       <td>
-                        <strong>{formatDayList(getScheduleDays(schedule))}</strong>
-                        <small>{formatTime(schedule.startTime)}</small>
+                        <strong>
+                          {formatDayList(getScheduleDays(schedule))}
+                        </strong>
+                        <small>{formatScheduleTimeSummary(schedule)}</small>
                       </td>
 
                       <td>{schedule.routeName || "—"}</td>
@@ -908,8 +1150,13 @@ export default function SchedulesPage() {
               <header>
                 <div>
                   <span>NEW WEEKLY SCHEDULE</span>
-                  <h2 id="schedule-form-title">Create garbage collection schedule</h2>
-                  <p>Select one or more recurring collection days for the same service area.</p>
+                  <h2 id="schedule-form-title">
+                    Create garbage collection schedule
+                  </h2>
+                  <p>
+                    Select multiple Barangays, Puroks, days, and a time for each
+                    Purok.
+                  </p>
                 </div>
                 <button type="button" onClick={closeForm} aria-label="Close">
                   ×
@@ -932,36 +1179,102 @@ export default function SchedulesPage() {
                     />
                   </label>
 
-                  <label>
-                    <span>Barangay</span>
-                    <select
-                      value={selectedBarangay}
-                      onChange={(event) => {
-                        setSelectedBarangay(event.target.value);
-                        setSelectedPuroks([]);
-                        setForm((current) => ({
-                          ...current,
-                          routeId: "",
-                          assignedDriverId: "",
-                          truckId: "",
-                        }));
-                      }}
+                  <div
+                    className="field-group barangay-field"
+                    ref={barangayPickerRef}
+                  >
+                    <span className="field-label">Barangays</span>
+                    <button
+                      type="button"
+                      className={`multi-select-trigger ${barangayPickerOpen ? "open" : ""}`}
+                      aria-haspopup="listbox"
+                      aria-expanded={barangayPickerOpen}
+                      onClick={() => setBarangayPickerOpen((open) => !open)}
                     >
-                      <option value="">Select Barangay</option>
-                      {BARANGAYS.map((barangay) => (
-                        <option key={barangay} value={barangay}>
-                          {barangay}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                      <span>
+                        {selectedBarangays.length === 0
+                          ? "Select one or more Barangays"
+                          : selectedBarangays.length === 1
+                            ? selectedBarangays[0]
+                            : `${selectedBarangays.length} Barangays selected`}
+                      </span>
+                      <strong>{selectedBarangays.length || ""}</strong>
+                      <i aria-hidden="true">⌄</i>
+                    </button>
+
+                    {barangayPickerOpen ? (
+                      <div
+                        className="multi-select-menu"
+                        role="listbox"
+                        aria-label="Select schedule Barangays"
+                        aria-multiselectable="true"
+                      >
+                        <div className="multi-select-menu-head">
+                          <span>Service areas</span>
+                          <button type="button" onClick={selectAllBarangays}>
+                            {selectedBarangays.length === BARANGAYS.length
+                              ? "Clear all"
+                              : "Select all"}
+                          </button>
+                        </div>
+
+                        {BARANGAYS.map((barangay) => {
+                          const selected = selectedBarangays.includes(barangay);
+                          return (
+                            <button
+                              key={barangay}
+                              type="button"
+                              className={`multi-select-option ${selected ? "selected" : ""}`}
+                              role="option"
+                              aria-selected={selected}
+                              onClick={() => toggleBarangay(barangay)}
+                            >
+                              <span className="check-box">
+                                {selected ? "✓" : ""}
+                              </span>
+                              <span>{barangay}</span>
+                            </button>
+                          );
+                        })}
+
+                        <button
+                          type="button"
+                          className="multi-select-done"
+                          onClick={() => setBarangayPickerOpen(false)}
+                        >
+                          Done
+                        </button>
+                      </div>
+                    ) : null}
+
+                    {selectedBarangays.length > 0 ? (
+                      <div
+                        className="selected-barangay-chips"
+                        aria-label="Selected Barangays"
+                      >
+                        {selectedBarangays.map((barangay) => (
+                          <button
+                            key={barangay}
+                            type="button"
+                            onClick={() => toggleBarangay(barangay)}
+                            aria-label={`Remove ${barangay}`}
+                          >
+                            {barangay}
+                            <span aria-hidden="true">×</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
 
                 <div className="purok-panel">
                   <div className="panel-heading">
                     <div>
                       <h3>Purok coverage</h3>
-                      <p>Select the Puroks included in this schedule.</p>
+                      <p>
+                        Click a Purok, then set its expected collection time.
+                      </p>
                     </div>
                     <button type="button" onClick={selectAllPuroks}>
                       {selectedPuroks.length === PUROKS.length
@@ -987,6 +1300,38 @@ export default function SchedulesPage() {
                       );
                     })}
                   </div>
+
+                  {selectedPuroks.length > 0 ? (
+                    <div className="purok-time-panel">
+                      <div className="purok-time-heading">
+                        <div>
+                          <h4>Collection time per Purok</h4>
+                          <p>
+                            Times may differ because of traffic and route
+                            conditions.
+                          </p>
+                        </div>
+                        <span>{selectedPuroks.length} selected</span>
+                      </div>
+
+                      <div className="purok-time-grid">
+                        {selectedPuroks.map((purok) => (
+                          <label className="purok-time-field" key={purok}>
+                            <span>{purok}</span>
+                            <input
+                              type="time"
+                              value={purokTimes[purok] || ""}
+                              onChange={(event) =>
+                                setPurokTime(purok, event.target.value)
+                              }
+                              required
+                              aria-label={`Collection time for ${purok}`}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="day-time-grid">
@@ -998,9 +1343,13 @@ export default function SchedulesPage() {
                       </div>
                       <div className="day-actions">
                         <button type="button" onClick={selectWeekdays}>
-                          {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].every(
-                            (day) => selectedDays.includes(day),
-                          )
+                          {[
+                            "Monday",
+                            "Tuesday",
+                            "Wednesday",
+                            "Thursday",
+                            "Friday",
+                          ].every((day) => selectedDays.includes(day))
                             ? "Clear weekdays"
                             : "Select weekdays"}
                         </button>
@@ -1015,7 +1364,11 @@ export default function SchedulesPage() {
                       </div>
                     </div>
 
-                    <div className="day-grid" role="group" aria-label="Weekly collection days">
+                    <div
+                      className="day-grid"
+                      role="group"
+                      aria-label="Weekly collection days"
+                    >
                       {DAYS.map((day) => {
                         const selected = selectedDays.includes(day);
 
@@ -1040,21 +1393,6 @@ export default function SchedulesPage() {
                         : "No collection day selected yet."}
                     </p>
                   </div>
-
-                  <label className="time-field">
-                    <span>Collection time</span>
-                    <input
-                      type="time"
-                      value={form.startTime}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          startTime: event.target.value,
-                        }))
-                      }
-                    />
-                    <small>The same time applies to all selected days.</small>
-                  </label>
                 </div>
 
                 <label>
@@ -1062,11 +1400,14 @@ export default function SchedulesPage() {
                   <select
                     value={form.routeId}
                     onChange={(event) => selectRoute(event.target.value)}
-                    disabled={!selectedBarangay || selectedPuroks.length === 0}
+                    disabled={
+                      selectedBarangays.length === 0 ||
+                      selectedPuroks.length === 0
+                    }
                   >
                     <option value="">
-                      {!selectedBarangay
-                        ? "Select Barangay first"
+                      {selectedBarangays.length === 0
+                        ? "Select Barangays first"
                         : selectedPuroks.length === 0
                           ? "Select at least one Purok first"
                           : compatibleRoutes.length === 0
@@ -1075,15 +1416,18 @@ export default function SchedulesPage() {
                     </option>
                     {compatibleRoutes.map((route) => (
                       <option key={route.id} value={route.id}>
-                        {route.routeName || "Unnamed route"} — {getRoutePuroks(route).join(", ")}
+                        {route.routeName || "Unnamed route"} —{" "}
+                        {getRoutePuroks(route).join(", ")}
                       </option>
                     ))}
                   </select>
                 </label>
 
-                {selectedBarangay && selectedPuroks.length > 0 && compatibleRoutes.length === 0 ? (
+                {selectedBarangays.length > 0 &&
+                selectedPuroks.length > 0 &&
+                compatibleRoutes.length === 0 ? (
                   <div className="warning-card">
-                    No saved route matches this Barangay and every selected Purok.
+                    No saved route covers every selected Barangay and Purok.
                     Create or update the route assignment first.
                   </div>
                 ) : null}
@@ -1093,8 +1437,11 @@ export default function SchedulesPage() {
                     <span>Assigned driver</span>
                     <input
                       value={
-                        drivers.find((driver) => driver.id === form.assignedDriverId)
-                          ?.name || selectedRoute?.assignedDriverName || ""
+                        drivers.find(
+                          (driver) => driver.id === form.assignedDriverId,
+                        )?.name ||
+                        selectedRoute?.assignedDriverName ||
+                        ""
                       }
                       readOnly
                       placeholder="Automatically loaded from route"
@@ -1134,9 +1481,9 @@ export default function SchedulesPage() {
                 <div className="info-card">
                   <strong>Area-based route assignment</strong>
                   <p>
-                    The selected route confirms the Barangay, covered Puroks,
-                    driver, and truck. This schedule repeats on every selected day
-                    at the same collection time.
+                    The selected route must cover every selected Barangay and
+                    Purok. Each Purok keeps its own time, and residents receive
+                    the time for their exact service area.
                   </p>
                 </div>
               </div>
@@ -1171,7 +1518,8 @@ export default function SchedulesPage() {
           .page-reveal {
             opacity: 0;
             transform: translateY(9px);
-            animation: scheduleReveal 380ms cubic-bezier(.2, .75, .25, 1) forwards;
+            animation: scheduleReveal 380ms cubic-bezier(0.2, 0.75, 0.25, 1)
+              forwards;
           }
 
           .reveal-1 {
@@ -1279,7 +1627,7 @@ export default function SchedulesPage() {
 
           .schedule-search:focus-within {
             border-color: #62b881;
-            box-shadow: 0 0 0 3px rgba(22, 138, 74, 0.10);
+            box-shadow: 0 0 0 3px rgba(22, 138, 74, 0.1);
           }
 
           .search-icon {
@@ -1389,6 +1737,23 @@ export default function SchedulesPage() {
             font-size: 11px;
             text-overflow: ellipsis;
             white-space: nowrap;
+          }
+
+          .barangay-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            max-width: 260px;
+          }
+
+          .barangay-tags span {
+            display: inline-flex;
+            border-radius: 999px;
+            padding: 4px 8px;
+            background: #eff6ff;
+            color: #1d4ed8;
+            font-size: 10px;
+            font-weight: 850;
           }
 
           .schedule-row {
@@ -1514,7 +1879,7 @@ export default function SchedulesPage() {
             background: #168a4a;
             color: #ffffff;
             font-weight: 900;
-            box-shadow: 0 6px 14px rgba(22, 138, 74, .14);
+            box-shadow: 0 6px 14px rgba(22, 138, 74, 0.14);
           }
 
           .pagination button :global(svg) {
@@ -1535,7 +1900,7 @@ export default function SchedulesPage() {
           }
 
           .modal {
-            width: min(760px, 100%);
+            width: min(900px, 100%);
             max-height: calc(100dvh - 48px);
             overflow: auto;
             border-radius: 20px;
@@ -1547,7 +1912,7 @@ export default function SchedulesPage() {
           @keyframes modalIn {
             from {
               opacity: 0;
-              transform: translateY(8px) scale(.988);
+              transform: translateY(8px) scale(0.988);
             }
             to {
               opacity: 1;
@@ -1626,6 +1991,192 @@ export default function SchedulesPage() {
             color: #34463c;
             font-size: 12px;
             font-weight: 800;
+          }
+
+          .field-group {
+            position: relative;
+            min-width: 0;
+            display: grid;
+            align-content: start;
+            gap: 7px;
+          }
+
+          .field-label {
+            color: #34463c;
+            font-size: 12px;
+            font-weight: 800;
+          }
+
+          .multi-select-trigger {
+            width: 100%;
+            min-height: 43px;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto auto;
+            align-items: center;
+            gap: 9px;
+            padding: 10px 12px;
+            border: 1px solid #d5dfd9;
+            border-radius: 11px;
+            background: #ffffff;
+            color: #17231d;
+            text-align: left;
+            cursor: pointer;
+          }
+
+          .multi-select-trigger.open,
+          .multi-select-trigger:focus-visible {
+            border-color: #10b981;
+            outline: 0;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
+          }
+
+          .multi-select-trigger > span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .multi-select-trigger strong {
+            min-width: 23px;
+            min-height: 23px;
+            display: grid;
+            place-items: center;
+            border-radius: 999px;
+            background: #e9f8ef;
+            color: #087443;
+            font-size: 11px;
+          }
+
+          .multi-select-trigger strong:empty {
+            display: none;
+          }
+
+          .multi-select-trigger i {
+            color: #52645b;
+            font-size: 18px;
+            font-style: normal;
+            line-height: 1;
+            transition: transform 160ms ease;
+          }
+
+          .multi-select-trigger.open i {
+            transform: rotate(180deg);
+          }
+
+          .multi-select-menu {
+            position: absolute;
+            z-index: 40;
+            top: 69px;
+            left: 0;
+            right: 0;
+            display: grid;
+            gap: 5px;
+            padding: 9px;
+            border: 1px solid #cfddd5;
+            border-radius: 13px;
+            background: #ffffff;
+            box-shadow: 0 18px 45px rgba(15, 40, 29, 0.18);
+          }
+
+          .multi-select-menu-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 4px 5px 7px;
+            border-bottom: 1px solid #edf2ef;
+            color: #40544a;
+            font-size: 11px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+          }
+
+          .multi-select-menu-head button,
+          .multi-select-done {
+            border: 0;
+            background: transparent;
+            color: #078249;
+            font-size: 11px;
+            font-weight: 900;
+            cursor: pointer;
+          }
+
+          .multi-select-option {
+            width: 100%;
+            min-height: 39px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 7px 9px;
+            border: 1px solid transparent;
+            border-radius: 9px;
+            background: #ffffff;
+            color: #25392f;
+            text-align: left;
+            cursor: pointer;
+          }
+
+          .multi-select-option:hover {
+            background: #f5faf7;
+          }
+
+          .multi-select-option.selected {
+            border-color: #a7e6c2;
+            background: #ecfdf5;
+            color: #047857;
+            font-weight: 800;
+          }
+
+          .check-box {
+            width: 20px;
+            height: 20px;
+            flex: 0 0 20px;
+            display: grid;
+            place-items: center;
+            border: 1px solid #bccdc3;
+            border-radius: 6px;
+            background: #ffffff;
+            color: #ffffff;
+            font-size: 12px;
+          }
+
+          .multi-select-option.selected .check-box {
+            border-color: #10b981;
+            background: #10b981;
+          }
+
+          .multi-select-done {
+            min-height: 36px;
+            margin-top: 2px;
+            border-radius: 9px;
+            background: #ecfdf5;
+          }
+
+          .selected-barangay-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+          }
+
+          .selected-barangay-chips button {
+            min-height: 29px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 9px;
+            border: 1px solid #bfdbfe;
+            border-radius: 999px;
+            background: #eff6ff;
+            color: #1d4ed8;
+            font-size: 11px;
+            font-weight: 800;
+            cursor: pointer;
+          }
+
+          .selected-barangay-chips button span {
+            font-size: 15px;
+            line-height: 1;
           }
 
           input,
@@ -1714,9 +2265,74 @@ export default function SchedulesPage() {
             color: #047857;
           }
 
+          .purok-time-panel {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #dce6e0;
+          }
+
+          .purok-time-heading {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 14px;
+          }
+
+          .purok-time-heading h4,
+          .purok-time-heading p {
+            margin: 0;
+          }
+
+          .purok-time-heading h4 {
+            color: #183329;
+            font-size: 14px;
+          }
+
+          .purok-time-heading p {
+            margin-top: 4px;
+            color: #718078;
+            font-size: 12px;
+          }
+
+          .purok-time-heading > span {
+            flex: 0 0 auto;
+            border-radius: 999px;
+            padding: 5px 9px;
+            background: #e9f8ef;
+            color: #087443;
+            font-size: 10px;
+            font-weight: 900;
+          }
+
+          .purok-time-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 9px;
+            margin-top: 13px;
+          }
+
+          .purok-time-field {
+            gap: 6px;
+            padding: 10px;
+            border: 1px solid #dce6e0;
+            border-radius: 11px;
+            background: #ffffff;
+          }
+
+          .purok-time-field > span {
+            color: #176b43;
+            font-size: 11px;
+            font-weight: 900;
+          }
+
+          .purok-time-field input {
+            padding: 9px 10px;
+            background: #f8fcfa;
+          }
+
           .day-time-grid {
             display: grid;
-            grid-template-columns: minmax(0, 1.55fr) minmax(220px, 0.45fr);
+            grid-template-columns: 1fr;
             gap: 14px;
             align-items: stretch;
           }
@@ -1790,20 +2406,6 @@ export default function SchedulesPage() {
             color: #52655a;
             font-size: 12px;
             font-weight: 700;
-          }
-
-          .time-field {
-            align-content: start;
-            border: 1px solid #dce6e0;
-            border-radius: 15px;
-            padding: 16px;
-            background: #fbfdfc;
-          }
-
-          .time-field small {
-            color: #718078;
-            font-size: 11px;
-            line-height: 1.5;
           }
 
           .warning-card {
@@ -1893,6 +2495,14 @@ export default function SchedulesPage() {
 
             .purok-grid {
               grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .purok-time-grid {
+              grid-template-columns: 1fr;
+            }
+
+            .purok-time-heading {
+              flex-direction: column;
             }
 
             .day-grid {

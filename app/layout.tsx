@@ -6,7 +6,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { OfflineRuntime } from "./components/OfflineRuntime";
 
 export const metadata: Metadata = {
-  title: "WasteTrack",
+  title: "MetroWaste Admin",
   description: "Catbalogan City Waste Management System",
   manifest: "/manifest.webmanifest",
   icons: {
@@ -15,7 +15,7 @@ export const metadata: Metadata = {
   },
   appleWebApp: {
     capable: true,
-    title: "WasteTrack",
+    title: "MetroWaste Admin",
     statusBarStyle: "default",
   },
 };

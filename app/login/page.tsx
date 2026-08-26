@@ -134,7 +134,7 @@ function LoginFormPage() {
 
   return (
     <main className="login-page">
-      <section className="brand-panel" aria-label="WasteTrack administration">
+      <section className="brand-panel" aria-label="MetroWaste administration">
         <div className="brand-shade" aria-hidden="true" />
         <div className="brand-grid" aria-hidden="true" />
 
@@ -143,7 +143,7 @@ function LoginFormPage() {
             <LogoMark />
 
             <div>
-              <p className="product-name">WasteTrack</p>
+              <p className="product-name">MetroWaste</p>
               <p className="product-subtitle">
                 Catbalogan City Waste Management
               </p>
@@ -175,7 +175,7 @@ function LoginFormPage() {
           <div className="mobile-brand">
             <LogoMark compact />
             <div>
-              <strong>WasteTrack</strong>
+              <strong>MetroWaste</strong>
               <span>Administration</span>
             </div>
           </div>
@@ -302,7 +302,7 @@ function LoginFormPage() {
           </div>
 
           <footer className="page-footer">
-            <span>© 2026 WasteTrack</span>
+            <span>© 2026 MetroWaste</span>
             <span aria-hidden="true">•</span>
             <span>Catbalogan City Waste Management</span>
           </footer>
@@ -811,9 +811,9 @@ function LoginFormPage() {
 
 function LoginLoading() {
   return (
-    <main aria-label="Loading WasteTrack administration" style={{ minHeight: "100dvh", display: "grid", placeItems: "center", background: "#f8fafc", color: "#0f172a", fontFamily: "Arial, sans-serif" }}>
+    <main aria-label="Loading MetroWaste administration" style={{ minHeight: "100dvh", display: "grid", placeItems: "center", background: "#f8fafc", color: "#0f172a", fontFamily: "Arial, sans-serif" }}>
       <div style={{ textAlign: "center" }}>
-        <strong style={{ display: "block", fontSize: 22 }}>WasteTrack</strong>
+        <strong style={{ display: "block", fontSize: 22 }}>MetroWaste</strong>
         <span style={{ display: "block", marginTop: 8, color: "#64748b" }}>Preparing secure sign-in…</span>
       </div>
     </main>

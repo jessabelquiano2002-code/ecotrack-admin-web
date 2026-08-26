@@ -561,8 +561,8 @@ export default function UsersPage() {
 
   return (
     <DashboardShell
-      title="User Management"
-      description="Manage drivers and monitor registered residents in realtime"
+      title="Accounts & Drivers"
+      description="Create driver accounts and review registered residents."
     >
       <div className="users-page">
         {/* STATS */}
@@ -946,7 +946,7 @@ export default function UsersPage() {
                       <div className="licence-placeholder">
                         <span className="mini-spinner" />
                         <strong>Loading secure image</strong>
-                        <span>Please wait while WasteTrack retrieves the licence.</span>
+                        <span>Please wait while MetroWaste retrieves the licence.</span>
                       </div>
                     ) : profileLicenseUrl ? (
                       <img

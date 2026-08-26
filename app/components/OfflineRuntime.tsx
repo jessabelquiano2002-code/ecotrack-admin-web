@@ -122,7 +122,7 @@ export function OfflineRuntime() {
     <aside
       role="status"
       aria-live="polite"
-      aria-label={offline ? "WasteTrack offline status" : "WasteTrack synchronization status"}
+      aria-label={offline ? "MetroWaste offline status" : "MetroWaste synchronization status"}
       style={{
         position: "fixed",
         right: 16,

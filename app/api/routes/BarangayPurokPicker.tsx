@@ -241,7 +241,7 @@ export function BarangayPurokPicker({
           name: purok,
           verified: false,
           sourceType: "existing-route",
-          sourceLabel: "Existing WasteTrack route — verify before reuse",
+          sourceLabel: "Existing MetroWaste route — verify before reuse",
         });
       });
     });

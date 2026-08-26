@@ -643,7 +643,7 @@ export default function DashboardPage() {
   return (
     <DashboardShell
       title="Dashboard"
-      description="Realtime overview of WasteTrack operations"
+      description="Live overview of MetroWaste operations"
       hidePageHeader
     >
       <section className="dashboard-page">
@@ -653,29 +653,29 @@ export default function DashboardPage() {
           <div className="hero-copy">
             <span className="hero-kicker">
               <span className="hero-kicker-dot" />
-              Operations Command Center
+              Administrator Starting Point
             </span>
 
-            <h1>Waste collection overview</h1>
+            <h1>Today’s collection overview</h1>
 
             <p>
-              Monitor drivers, residents, schedules, route activity, and
-              reported issues from one realtime dashboard.
+              Begin with today’s schedule, confirm the assigned route and driver,
+              then monitor collection work and resident concerns.
             </p>
 
             <div className="hero-actions">
-              <Link href="/live-map" className="hero-primary">
+              <Link href="/schedules" className="hero-primary">
+                <IconWrap>
+                  <CalendarIcon />
+                </IconWrap>
+                Start: Check Schedules
+              </Link>
+
+              <Link href="/live-map" className="hero-secondary">
                 <IconWrap>
                   <MapIcon />
                 </IconWrap>
-                Open Live Map
-              </Link>
-
-              <Link href="/routes" className="hero-secondary">
-                <IconWrap>
-                  <RouteIcon />
-                </IconWrap>
-                Manage Routes
+                Track Trucks Live
               </Link>
             </div>
           </div>
@@ -689,7 +689,7 @@ export default function DashboardPage() {
               <span />
             </span>
             <div>
-              <strong>Live database</strong>
+              <strong>System connected</strong>
               <small>Updated {formatRelativeTime(lastUpdated)}</small>
             </div>
           </div>
@@ -734,38 +734,50 @@ export default function DashboardPage() {
           />
         </section>
 
-        <section className="flow-grid reveal reveal-3">
-          <FlowCard
-            index="1"
-            label="Route planning"
-            helper={`${assignedRoutes} active route${assignedRoutes === 1 ? "" : "s"}`}
-            tone="green"
-            icon={<RouteIcon />}
-          />
+        <section className="workflow-section reveal reveal-3" aria-labelledby="daily-workflow-title">
+          <div className="flow-heading">
+            <span>DAILY ADMIN FLOW</span>
+            <h2 id="daily-workflow-title">Follow these steps from left to right</h2>
+            <p>Select a step to open the correct page.</p>
+          </div>
 
-          <FlowCard
-            index="2"
-            label="Driver tracking"
-            helper={`${activeTrucks} truck${activeTrucks === 1 ? "" : "s"} reporting live`}
-            tone="blue"
-            icon={<MapIcon />}
-          />
+          <div className="flow-grid">
+            <FlowCard
+              href="/schedules"
+              index="1"
+              label="Review schedules"
+              helper={`${upcomingSchedules} upcoming or active schedule${upcomingSchedules === 1 ? "" : "s"}`}
+              tone="amber"
+              icon={<CalendarIcon />}
+            />
 
-          <FlowCard
-            index="3"
-            label="Collection schedules"
-            helper={`${upcomingSchedules} upcoming or active schedule${upcomingSchedules === 1 ? "" : "s"}`}
-            tone="amber"
-            icon={<CalendarIcon />}
-          />
+            <FlowCard
+              href="/routes"
+              index="2"
+              label="Confirm route & driver"
+              helper={`${assignedRoutes} active route${assignedRoutes === 1 ? "" : "s"}`}
+              tone="green"
+              icon={<RouteIcon />}
+            />
 
-          <FlowCard
-            index="4"
-            label="Resident support"
-            helper={`${openIssues} open issue${openIssues === 1 ? "" : "s"}`}
-            tone="red"
-            icon={<SupportIcon />}
-          />
+            <FlowCard
+              href="/live-map"
+              index="3"
+              label="Track live collection"
+              helper={`${activeTrucks} truck${activeTrucks === 1 ? "" : "s"} reporting live`}
+              tone="blue"
+              icon={<MapIcon />}
+            />
+
+            <FlowCard
+              href="/issues"
+              index="4"
+              label="Resolve resident reports"
+              helper={`${openIssues} open issue${openIssues === 1 ? "" : "s"}`}
+              tone="red"
+              icon={<SupportIcon />}
+            />
+          </div>
         </section>
 
         <section className="dashboard-content-grid reveal reveal-4">
@@ -775,7 +787,7 @@ export default function DashboardPage() {
                 <span>Last 7 Days</span>
                 <h2>Weekly activity</h2>
                 <p>
-                  Realtime operational events recorded across WasteTrack.
+                  Live operational events recorded across MetroWaste.
                 </p>
               </div>
 
@@ -859,9 +871,9 @@ export default function DashboardPage() {
           <section className="dashboard-panel realtime-panel">
             <div className="panel-header realtime-head">
               <div>
-                <span>Realtime Feed</span>
+                <span>Latest Updates</span>
                 <h2>Recent activity</h2>
-                <p>Latest operational updates from Firebase.</p>
+                <p>Newest driver, schedule, route, and resident updates.</p>
               </div>
 
               <Link href="/notifications" className="view-all-link">
@@ -1522,6 +1534,40 @@ export default function DashboardPage() {
         /* =========================
            WORKFLOW CARDS
            ========================= */
+        .workflow-section {
+          padding: 18px;
+          border: 1px solid var(--mw-border);
+          border-radius: 20px;
+          background: rgba(255, 255, 255, .76);
+          box-shadow: 0 9px 24px rgba(16, 35, 27, .045);
+        }
+
+        .flow-heading {
+          margin-bottom: 13px;
+        }
+
+        .flow-heading > span {
+          color: #168a4a;
+          font-size: 12px;
+          font-weight: 900;
+          letter-spacing: .09em;
+        }
+
+        .flow-heading h2 {
+          margin: 5px 0 0;
+          color: var(--mw-text);
+          font-size: 20px;
+          line-height: 1.25;
+          letter-spacing: -.02em;
+        }
+
+        .flow-heading p {
+          margin: 4px 0 0;
+          color: var(--mw-text-soft);
+          font-size: 14px;
+          line-height: 1.45;
+        }
+
         .flow-grid {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1540,6 +1586,8 @@ export default function DashboardPage() {
           border: 1px solid var(--mw-border);
           border-radius: 17px;
           background: #ffffff;
+          color: var(--mw-text);
+          text-decoration: none;
           box-shadow: 0 7px 20px rgba(16, 35, 27, .045);
           transition:
             transform 150ms ease,
@@ -1551,6 +1599,11 @@ export default function DashboardPage() {
           transform: translateY(-2px);
           border-color: #bbd2c4;
           box-shadow: 0 11px 24px rgba(16, 35, 27, .075);
+        }
+
+        .flow-card:focus-visible {
+          outline: 3px solid rgba(22, 138, 74, .3);
+          outline-offset: 3px;
         }
 
         .flow-card.green {
@@ -1594,6 +1647,13 @@ export default function DashboardPage() {
           display: grid;
           place-items: center;
           color: var(--flow-color);
+        }
+
+        .flow-arrow {
+          margin-left: auto;
+          color: var(--flow-color);
+          font-size: 19px;
+          font-weight: 900;
         }
 
         .flow-icon svg {
@@ -2249,12 +2309,14 @@ function MetricCard({
 }
 
 function FlowCard({
+  href,
   index,
   label,
   helper,
   tone,
   icon,
 }: {
+  href: string;
   index: string;
   label: string;
   helper: string;
@@ -2262,14 +2324,19 @@ function FlowCard({
   icon: ReactNode;
 }) {
   return (
-    <article className={`flow-card ${tone}`}>
+    <Link
+      href={href}
+      className={`flow-card ${tone}`}
+      aria-label={`Step ${index}: ${label}. ${helper}`}
+    >
       <div className="flow-step">{index}</div>
       <div className="flow-icon">{icon}</div>
       <div className="flow-copy">
         <strong>{label}</strong>
         <span>{helper}</span>
       </div>
-    </article>
+      <span className="flow-arrow" aria-hidden="true">→</span>
+    </Link>
   );
 }
 
