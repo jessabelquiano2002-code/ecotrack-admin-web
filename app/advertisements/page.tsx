@@ -4,19 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { onValue, ref } from "@/lib/offlineFirebaseDatabase";
 import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
-
-const BARANGAYS = [
-  "Mercedes",
-  "Canlapwas",
-  "Maulong",
-  "Poblacion 13",
-  "San Andres",
-] as const;
-
-const PUROKS = Array.from(
-  { length: 10 },
-  (_, index) => `Purok ${index + 1}`,
-);
+import { findOfficialBarangay } from "../service-areas/catalog";
 
 type Audience =
   | "all_residents"
@@ -65,6 +53,12 @@ type ApiResponse = {
   error?: string;
 };
 
+type ServiceBarangay = {
+  barangay?: string;
+  active?: boolean;
+  puroks?: Record<string, { purok?: string; active?: boolean; verified?: boolean; lat?: number; lng?: number }>;
+};
+
 const MAX_SOURCE_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_DATABASE_IMAGE_BYTES = 600 * 1024;
 const MAX_IMAGE_WIDTH = 1280;
@@ -86,6 +80,15 @@ const EMPTY_FORM: AdvertisementForm = {
   startAt: "",
   endAt: "",
 };
+
+function makeBarangayKey(value: string): string {
+  const key = String(value || "").toLowerCase().replace(/\s*\(.*?\)/g, "")
+    .replace(/barangay|brgy/g, "").replace(/[^a-z0-9ñ\s]/g, "")
+    .trim().replace(/\s+/g, "_");
+  if (["13", "poblacion13"].includes(key)) return "poblacion_13";
+  if (["guindapunan", "gundaponan"].includes(key)) return "guindaponan";
+  return key;
+}
 
 function toDateTimeLocal(value?: number): string {
   if (!value) return "";
@@ -139,6 +142,7 @@ function isCurrentlyLive(ad: AdvertisementRow): boolean {
 export default function AdvertisementsPage() {
   const [rows, setRows] = useState<AdvertisementRow[]>([]);
   const [form, setForm] = useState<AdvertisementForm>(EMPTY_FORM);
+  const [serviceRegistry, setServiceRegistry] = useState<Record<string, ServiceBarangay>>({});
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState("");
   const [showComposer, setShowComposer] = useState(false);
@@ -170,6 +174,29 @@ export default function AdvertisementsPage() {
 
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => onValue(ref(db, "service_areas"), (snapshot) => {
+    setServiceRegistry(snapshot.val() || {});
+  }), []);
+
+  const availableBarangays = useMemo(() => Object.entries(serviceRegistry)
+    .filter(([, record]) => record.active !== false)
+    .filter(([, record]) => Object.values(record.puroks || {}).some((purok) =>
+      purok.active !== false && purok.verified === true &&
+      Number.isFinite(Number(purok.lat)) && Number.isFinite(Number(purok.lng))))
+    .map(([key, record]) => findOfficialBarangay(record.barangay || key)?.name || record.barangay || key)
+    .sort((left, right) => left.localeCompare(right)), [serviceRegistry]);
+
+  const availablePuroks = useMemo(() => Object.values(
+    serviceRegistry[makeBarangayKey(form.barangay)]?.puroks || {},
+  ).filter((purok) => purok.active !== false && purok.verified === true &&
+      Number.isFinite(Number(purok.lat)) && Number.isFinite(Number(purok.lng)))
+    .map((purok) => {
+      const number = String(purok.purok || "").match(/\d+/)?.[0];
+      return number ? `Purok ${Number(number)}` : "";
+    }).filter(Boolean)
+    .sort((left, right) => Number(left.match(/\d+/)?.[0] || 0) - Number(right.match(/\d+/)?.[0] || 0)),
+  [form.barangay, serviceRegistry]);
 
   useEffect(() => {
     return () => {
@@ -284,6 +311,12 @@ export default function AdvertisementsPage() {
       !form.barangay
     ) {
       setError("Select the target barangay.");
+      return false;
+    }
+
+    if (form.audience !== "all_residents" &&
+        (!availableBarangays.includes(form.barangay) || availablePuroks.length === 0)) {
+      setError("The selected Barangay has no active verified Purok service area.");
       return false;
     }
 
@@ -794,7 +827,7 @@ export default function AdvertisementsPage() {
                         }
                       >
                         <option value="">Select barangay</option>
-                        {BARANGAYS.map((barangay) => (
+                        {availableBarangays.map((barangay) => (
                           <option key={barangay} value={barangay}>
                             {barangay}
                           </option>
@@ -818,7 +851,7 @@ export default function AdvertisementsPage() {
                         }
                       >
                         <option value="">Select Purok</option>
-                        {PUROKS.map((purok) => (
+                        {availablePuroks.map((purok) => (
                           <option key={purok} value={purok}>
                             {purok}
                           </option>

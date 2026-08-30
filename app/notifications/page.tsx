@@ -4,16 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { onValue, push, ref, remove, set } from "@/lib/offlineFirebaseDatabase";
 import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
-
-const BARANGAYS = [
-  "Mercedes",
-  "Canlapwas",
-  "Maulong",
-  "Poblacion 13",
-  "San Andres",
-] as const;
-
-const PUROKS = Array.from({ length: 10 }, (_, index) => `Purok ${index + 1}`);
+import { findOfficialBarangay } from "../service-areas/catalog";
 const ALL_PUROK_LABEL = "All Purok";
 
 type NotificationType = "info" | "alert" | "emergency" | "schedule";
@@ -50,6 +41,7 @@ type NotificationRow = {
   seen?: boolean;
   createdAt?: number;
   timestamp?: number;
+  adminVisible?: boolean;
 };
 
 type Resident = {
@@ -62,6 +54,12 @@ type Resident = {
   accountStatus?: string;
 };
 
+type ServiceBarangay = {
+  barangay?: string;
+  active?: boolean;
+  puroks?: Record<string, { purok?: string; active?: boolean; verified?: boolean; lat?: number; lng?: number }>;
+};
+
 const EMPTY_FORM: NotificationForm = {
   title: "",
   message: "",
@@ -71,14 +69,18 @@ const EMPTY_FORM: NotificationForm = {
   type: "info",
 };
 
-const makeBarangayKey = (value?: string) =>
-  String(value || "")
+const makeBarangayKey = (value?: string) => {
+  const key = String(value || "")
     .toLowerCase()
     .replace(/\s*\(.*?\)/g, "")
     .replace(/barangay/g, "")
     .replace(/[^a-z0-9ñ\s]/g, "")
     .trim()
     .replace(/\s+/g, "_");
+  if (["13", "poblacion13"].includes(key)) return "poblacion_13";
+  if (["guindapunan", "gundaponan"].includes(key)) return "guindaponan";
+  return key;
+};
 
 const makePurokKey = (value?: string) => {
   const raw = String(value || "").toLowerCase().trim();
@@ -174,6 +176,7 @@ export default function NotificationsPage() {
   const [form, setForm] = useState<NotificationForm>(EMPTY_FORM);
   const [rows, setRows] = useState<NotificationRow[]>([]);
   const [residents, setResidents] = useState<Resident[]>([]);
+  const [serviceRegistry, setServiceRegistry] = useState<Record<string, ServiceBarangay>>({});
   const [sending, setSending] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -197,14 +200,39 @@ export default function NotificationsPage() {
     };
   }, []);
 
+  useEffect(() => onValue(ref(db, "service_areas"), (snapshot) => {
+    setServiceRegistry(snapshot.val() || {});
+  }), []);
+
+  const availableBarangays = useMemo(() => Object.entries(serviceRegistry)
+    .filter(([, record]) => record.active !== false)
+    .filter(([, record]) => Object.values(record.puroks || {}).some((purok) =>
+      purok.active !== false && purok.verified === true &&
+      Number.isFinite(Number(purok.lat)) && Number.isFinite(Number(purok.lng))))
+    .map(([key, record]) => findOfficialBarangay(record.barangay || key)?.name || record.barangay || key)
+    .sort((left, right) => left.localeCompare(right)), [serviceRegistry]);
+
+  const availablePuroks = useMemo(() => Object.values(
+    serviceRegistry[makeBarangayKey(form.barangay)]?.puroks || {},
+  ).filter((purok) => purok.active !== false && purok.verified === true &&
+      Number.isFinite(Number(purok.lat)) && Number.isFinite(Number(purok.lng)))
+    .map((purok) => {
+      const number = String(purok.purok || "").match(/\d+/)?.[0];
+      return number ? `Purok ${Number(number)}` : "";
+    }).filter(Boolean)
+    .sort((left, right) => Number(left.match(/\d+/)?.[0] || 0) - Number(right.match(/\d+/)?.[0] || 0)),
+  [form.barangay, serviceRegistry]);
+
   useEffect(() => {
     const unsubscribe = onValue(ref(db, "notifications"), (snapshot) => {
       const value = snapshot.val() || {};
 
-      const list: NotificationRow[] = Object.entries(value).map(([id, data]) => ({
-        id,
-        ...(data as Omit<NotificationRow, "id">),
-      }));
+      const list: NotificationRow[] = Object.entries(value)
+        .map(([id, data]) => ({
+          id,
+          ...(data as Omit<NotificationRow, "id">),
+        }))
+        .filter((item) => item.adminVisible !== false);
 
       list.sort((a, b) => {
         const timeA = a.timestamp || a.createdAt || 0;
@@ -359,6 +387,10 @@ export default function NotificationsPage() {
       alert("Please select one barangay.");
       return false;
     }
+    if (!availableBarangays.includes(form.barangay) || availablePuroks.length === 0) {
+      alert("This Barangay has no active verified Purok service area.");
+      return false;
+    }
 
     if (form.targetMode === "single_purok" && !form.purok) {
       alert("Please select one purok or choose Notify All Purok.");
@@ -420,7 +452,7 @@ export default function NotificationsPage() {
       );
 
       await Promise.all(
-        PUROKS.map((purok) => {
+        availablePuroks.map((purok) => {
           const purokKey = makePurokKey(purok);
           const purokTargetCount = countTargetResidents(payload.barangay, purok);
 
@@ -554,7 +586,7 @@ export default function NotificationsPage() {
     try {
       setSending(true);
 
-      const targetPuroks = form.targetMode === "all_purok" ? PUROKS : [form.purok];
+      const targetPuroks = form.targetMode === "all_purok" ? availablePuroks : [form.purok];
       let deliveredRecipients = 0;
       const failedPuroks: string[] = [];
       const warnings: string[] = [];
@@ -729,7 +761,7 @@ export default function NotificationsPage() {
                         }
                       >
                         <option value="">Select barangay</option>
-                        {BARANGAYS.map((barangay) => (
+                        {availableBarangays.map((barangay) => (
                           <option key={barangay} value={barangay}>
                             {barangay}
                           </option>
@@ -771,7 +803,7 @@ export default function NotificationsPage() {
                               ? "All Purok selected"
                               : "Select purok"}
                         </option>
-                        {PUROKS.map((purok) => (
+                        {availablePuroks.map((purok) => (
                           <option key={purok} value={purok}>
                             {purok}
                           </option>
@@ -804,7 +836,7 @@ export default function NotificationsPage() {
                   </div>
                   <div>
                     <span>Coverage</span>
-                    <strong>{formIsAllPurok ? "10 puroks" : form.purok ? "1 purok" : "Not ready"}</strong>
+                    <strong>{formIsAllPurok ? `${availablePuroks.length} puroks` : form.purok ? "1 purok" : "Not ready"}</strong>
                   </div>
                   <div>
                     <span>Database path</span>
@@ -902,7 +934,7 @@ export default function NotificationsPage() {
 
             <select value={barangayFilter} onChange={(event) => setBarangayFilter(event.target.value)}>
               <option value="all">All barangays</option>
-              {BARANGAYS.map((barangay) => (
+              {availableBarangays.map((barangay) => (
                 <option key={barangay} value={barangay}>
                   {barangay}
                 </option>

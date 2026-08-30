@@ -19,8 +19,143 @@ type RoutePointPayload = {
   speed?: number;
   heading?: number;
   timestamp?: number;
-  event?: "point" | "finish";
+  event?: "start" | "point" | "finish";
 };
+
+type RouteCoordinate = { lat: number; lng: number };
+type ServiceStop = RouteCoordinate & {
+  areaKey: string;
+  barangay: string;
+  purok: string;
+  order: number;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function normalizeBarangayKey(value: unknown): string {
+  const key = String(value || "")
+    .toLowerCase()
+    .replace(/\s*\(.*?\)/g, "")
+    .replace(/barangay|brgy/g, "")
+    .replace(/[^a-z0-9ñ\s]/g, "")
+    .trim()
+    .replace(/\s+/g, "_");
+  if (["13", "poblacion13", "poblacion_13"].includes(key)) return "poblacion_13";
+  if (["guindapunan", "gundaponan"].includes(key)) return "guindaponan";
+  return key;
+}
+
+function normalizePurokKey(value: unknown): string {
+  const text = String(value || "").trim();
+  const digits = text.match(/\d+/)?.[0];
+  return digits ? `purok_${Number(digits)}` : "all";
+}
+
+function orderedValues(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.filter(Boolean).map(asRecord);
+  }
+  return Object.values(asRecord(value))
+    .filter(Boolean)
+    .map(asRecord)
+    .sort((left, right) => Number(left.order || 0) - Number(right.order || 0));
+}
+
+function readRouteCoordinates(route: Record<string, unknown>): RouteCoordinate[] {
+  const direct = Array.isArray(route.coordinates)
+    ? route.coordinates
+    : Array.isArray(asRecord(route.geometry).coordinates)
+      ? (asRecord(route.geometry).coordinates as unknown[])
+      : [];
+
+  const coordinates = direct.flatMap<RouteCoordinate>((value) => {
+    if (!Array.isArray(value) || value.length < 2) return [];
+    const lng = Number(value[0]);
+    const lat = Number(value[1]);
+    return Number.isFinite(lat) && Number.isFinite(lng) ? [{lat, lng}] : [];
+  });
+
+  if (coordinates.length > 0) return coordinates;
+
+  return orderedValues(route.routePoints).flatMap<RouteCoordinate>((point) => {
+    const lat = Number(point.lat ?? point.latitude);
+    const lng = Number(point.lng ?? point.longitude);
+    return Number.isFinite(lat) && Number.isFinite(lng) ? [{lat, lng}] : [];
+  });
+}
+
+function readServiceStops(route: Record<string, unknown>): ServiceStop[] {
+  const rawStops = orderedValues(route.checkpoints).length > 0
+    ? orderedValues(route.checkpoints)
+    : orderedValues(route.routePoints).filter((point) => point.type === "service");
+
+  return rawStops.flatMap<ServiceStop>((stop, index) => {
+    const lat = Number(stop.lat ?? stop.latitude);
+    const lng = Number(stop.lng ?? stop.longitude);
+    const barangay = String(stop.barangay || "").trim();
+    const purok = String(stop.purok || "").trim();
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !barangay) return [];
+    const areaKey = String(stop.areaKey ||
+      `${normalizeBarangayKey(barangay)}|${normalizePurokKey(purok)}`);
+    return [{lat, lng, barangay, purok, areaKey, order: Number(stop.order ?? index)}];
+  });
+}
+
+function isVerifiedRoute(route: Record<string, unknown>, coordinates: RouteCoordinate[], stops: ServiceStop[]) {
+  const validation = asRecord(route.routeValidation || route.validation);
+  const withinCatbalogan = coordinates.every((point) =>
+    point.lat >= 11.68 && point.lat <= 11.86 &&
+    point.lng >= 124.80 && point.lng <= 124.97);
+  return route.verified === true &&
+    String(validation.status || "").toLowerCase() === "verified" &&
+    coordinates.length >= 2 &&
+    stops.length >= 2 &&
+    withinCatbalogan;
+}
+
+function routePosition(point: RouteCoordinate, route: RouteCoordinate[]) {
+  if (route.length < 2) return {distanceMeters: Number.POSITIVE_INFINITY, progress: 0};
+
+  const latitudeRadians = point.lat * Math.PI / 180;
+  const xScale = 111_320 * Math.cos(latitudeRadians);
+  const yScale = 110_540;
+  const segments = route.slice(1).map((end, index) => {
+    const start = route[index];
+    const ax = (start.lng - point.lng) * xScale;
+    const ay = (start.lat - point.lat) * yScale;
+    const bx = (end.lng - point.lng) * xScale;
+    const by = (end.lat - point.lat) * yScale;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const length = Math.hypot(dx, dy);
+    const denominator = dx * dx + dy * dy;
+    const t = denominator === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / denominator));
+    return {
+      distance: Math.hypot(ax + t * dx, ay + t * dy),
+      length,
+      t,
+    };
+  });
+  const totalLength = segments.reduce((sum, segment) => sum + segment.length, 0);
+  let completedLength = 0;
+  let best = {distanceMeters: Number.POSITIVE_INFINITY, progress: 0};
+  segments.forEach((segment) => {
+    if (segment.distance < best.distanceMeters) {
+      best = {
+        distanceMeters: segment.distance,
+        progress: totalLength > 0
+          ? Math.round(((completedLength + segment.length * segment.t) / totalLength) * 100)
+          : 0,
+      };
+    }
+    completedLength += segment.length;
+  });
+  return best;
+}
 
 function normalizeStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {
@@ -65,7 +200,8 @@ export async function POST(request: NextRequest) {
     const scheduleId = String(body.scheduleId || "").trim();
     const lat = Number(body.latitude);
     const lng = Number(body.longitude);
-    const accuracy = Math.max(0, Number(body.accuracy || 0));
+    const rawAccuracy = Number(body.accuracy || 0);
+    const accuracy = Number.isFinite(rawAccuracy) ? Math.max(0, rawAccuracy) : 0;
     const timestamp = Number.isFinite(Number(body.timestamp))
       ? Number(body.timestamp)
       : Date.now();
@@ -136,6 +272,19 @@ export async function POST(request: NextRequest) {
     }
 
     const route = routeSnapshot.val() as Record<string, unknown>;
+    const routeCoordinates = readRouteCoordinates(route);
+    const serviceStops = readServiceStops(route);
+
+    if (!isVerifiedRoute(route, routeCoordinates, serviceStops)) {
+      return NextResponse.json(
+        {
+          error:
+            "This route is not ready. An administrator must confirm an ordered road path and every service-stop pin before collection can start.",
+        },
+        { status: 409 },
+      );
+    }
+
     const routeBarangay = String(
       route.barangay ||
         (Array.isArray(route.barangays) ? route.barangays[0] : "") ||
@@ -146,6 +295,19 @@ export async function POST(request: NextRequest) {
     const assignedPuroks = normalizeStringArray(
       schedule.assignedPuroks || schedule.puroks || route.puroks,
     );
+    const assignedBarangays = normalizeStringArray(
+      schedule.barangays || route.barangays || routeBarangay,
+    );
+    const assignedAreas = orderedValues(schedule.areas).length > 0
+      ? orderedValues(schedule.areas)
+      : serviceStops.map((stop) => ({
+          areaKey: stop.areaKey,
+          barangay: stop.barangay,
+          barangayKey: normalizeBarangayKey(stop.barangay),
+          purok: stop.purok,
+          purokKey: normalizePurokKey(stop.purok),
+          order: stop.order,
+        }));
 
     const activeReference = adminDb.ref(
       `active_route_sessions/${driver.uid}`,
@@ -157,6 +319,16 @@ export async function POST(request: NextRequest) {
       startedAt?: number;
     } | null;
 
+    if (active?.scheduleId && active.scheduleId !== scheduleId) {
+      return NextResponse.json(
+        {
+          error:
+            "Another collection session is already active for this driver. Finish it before starting a different route.",
+        },
+        { status: 409 },
+      );
+    }
+
     let sessionId =
       active?.scheduleId === scheduleId
         ? String(active.sessionId || "")
@@ -164,7 +336,8 @@ export async function POST(request: NextRequest) {
 
     const now = Date.now();
 
-    if (!sessionId) {
+    const isNewSession = !sessionId;
+    if (isNewSession) {
       sessionId =
         adminDb.ref(`route_sessions/${scheduleId}`).push().key ||
         `session-${now}`;
@@ -174,13 +347,17 @@ export async function POST(request: NextRequest) {
         scheduleId,
         routeId,
         routeName: route.routeName || schedule.routeName || "Collection route",
-        routeType: "service-area",
-        trackingMode: "barangay-purok",
+        routeType: "verified-road-route",
+        trackingMode: "verified-polyline",
         driverId: driver.uid,
         driverName: schedule.driverName || route.assignedDriverName || "",
         truckId: schedule.truckId || route.assignedVehicle || "",
         barangay: routeBarangay,
+        barangays: assignedBarangays,
         assignedPuroks,
+        areas: assignedAreas,
+        serviceStopCount: serviceStops.length,
+        visitedAreas: {},
         status: "Ongoing",
         progress: 0,
         startTime: timestamp,
@@ -194,6 +371,28 @@ export async function POST(request: NextRequest) {
         routeId,
         startedAt: timestamp,
       });
+
+      const statusKey = adminDb.ref("route_status_updates").push().key;
+      if (statusKey) {
+        await adminDb.ref(`route_status_updates/${statusKey}`).set({
+          event: "collection_started",
+          status: "Ongoing",
+          sessionId,
+          scheduleId,
+          routeId,
+          routeName: route.routeName || schedule.routeName || "Collection route",
+          driverId: driver.uid,
+          driverName: schedule.driverName || route.assignedDriverName || "",
+          truckId: schedule.truckId || route.assignedVehicle || "",
+          barangay: routeBarangay,
+          barangays: assignedBarangays,
+          assignedPuroks,
+          areas: assignedAreas,
+          message: "Driver started the verified collection route.",
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
     }
 
     const refreshedActiveSnapshot = await activeReference.get();
@@ -220,6 +419,63 @@ export async function POST(request: NextRequest) {
       accuracy,
     };
 
+    const accurateEnough =
+      accuracy === 0 || accuracy <= MAX_ACCEPTED_ACCURACY_METERS;
+
+    const currentRoutePosition = routePosition(point, routeCoordinates);
+    const allowedDeviationMeters = Math.max(75, Math.min(150, accuracy * 1.5));
+    const onVerifiedRoute = accurateEnough &&
+      currentRoutePosition.distanceMeters <= allowedDeviationMeters;
+    const previousProgress = Math.max(
+      0,
+      Math.min(100, Number(session.progress || session.routeProgress || 0)),
+    );
+    const liveProgress = Math.max(
+      previousProgress,
+      onVerifiedRoute ? currentRoutePosition.progress : 0,
+    );
+
+    const visitedAreas = {
+      ...asRecord(session.visitedAreas),
+    };
+    const serviceStopRadiusMeters = Math.max(60, Math.min(120, accuracy + 50));
+    if (accurateEnough) {
+      serviceStops.forEach((stop) => {
+        if (distanceMeters(point, {
+          lat: stop.lat,
+          lng: stop.lng,
+          timestamp,
+          accuracy: 0,
+        }) <= serviceStopRadiusMeters) {
+          visitedAreas[stop.areaKey] = true;
+        }
+      });
+    }
+    const visitedAreaKeys = new Set(
+      Object.entries(visitedAreas)
+        .filter(([, visited]) => visited === true)
+        .map(([key]) => key),
+    );
+    const visitedPuroks = Array.from(new Set(
+      serviceStops
+        .filter((stop) => visitedAreaKeys.has(stop.areaKey) && stop.purok)
+        .map((stop) => stop.purok),
+    ));
+    const allServiceStopsVisited = serviceStops.every((stop) =>
+      visitedAreaKeys.has(stop.areaKey),
+    );
+    const routePassed = allServiceStopsVisited && liveProgress >= 90;
+    const status = finishRequested
+      ? routePassed
+        ? "Completed"
+        : "Partially Completed"
+      : onVerifiedRoute
+        ? "On Route"
+        : accurateEnough
+          ? "Deviated from Route"
+          : "Ongoing";
+    const progress = finishRequested && routePassed ? 100 : liveProgress;
+
     const lastRecorded = session.lastRecordedPoint as GpsPoint | undefined;
     const distanceFromLast = lastRecorded
       ? distanceMeters(lastRecorded, point)
@@ -227,8 +483,6 @@ export async function POST(request: NextRequest) {
     const timeFromLast = lastRecorded?.timestamp
       ? timestamp - lastRecorded.timestamp
       : Number.POSITIVE_INFINITY;
-    const accurateEnough =
-      accuracy === 0 || accuracy <= MAX_ACCEPTED_ACCURACY_METERS;
     const shouldRecord =
       accurateEnough &&
       (distanceFromLast >= HISTORY_MIN_DISTANCE_METERS ||
@@ -248,8 +502,8 @@ export async function POST(request: NextRequest) {
       lat,
       lng,
       accuracy,
-      speed: Number(body.speed || 0),
-      heading: Number(body.heading || 0),
+      speed: Number.isFinite(Number(body.speed)) ? Number(body.speed) : 0,
+      heading: Number.isFinite(Number(body.heading)) ? Number(body.heading) : 0,
       timestamp,
       lastUpdated: now,
       scheduleId,
@@ -257,12 +511,22 @@ export async function POST(request: NextRequest) {
       sessionId,
       startedAt: activeSessionStartedAt,
       barangay: routeBarangay,
+      barangays: assignedBarangays,
       puroks: assignedPuroks,
+      assignedPuroks,
+      areas: assignedAreas,
 
       // Resident apps use this as the authoritative switch:
       // true from Start Collection until the driver presses Finish & Verify.
       trackingActive: !finishRequested,
-      routeStatus: finishRequested ? "Completed" : "Ongoing",
+      routeStatus: status,
+      status,
+      routeProgress: progress,
+      progress,
+      routeDeviationMeters: Math.round(currentRoutePosition.distanceMeters),
+      onVerifiedRoute,
+      visitedAreas,
+      visitedPuroks,
       finishedAt: finishRequested ? timestamp : null,
 
       locationQuality: accurateEnough ? "accepted" : "inaccurate",
@@ -318,24 +582,24 @@ export async function POST(request: NextRequest) {
       );
 
     const startTime = Number(session.startTime || timestamp);
-    const status = finishRequested ? "Completed" : "Ongoing";
-    const progress = finishRequested ? 100 : 0;
-    const visitedPuroks = finishRequested ? assignedPuroks : [];
 
     const updates: Record<string, unknown> = {
       status,
       routeStatus: status,
       progress,
       routeProgress: progress,
-      routeType: "service-area",
-      trackingMode: "barangay-purok",
+      routeType: "verified-road-route",
+      trackingMode: "verified-polyline",
       barangay: routeBarangay,
+      barangays: assignedBarangays,
+      areas: assignedAreas,
       assignedPuroks,
-      visitedPuroks: Object.fromEntries(
-        visitedPuroks.map((purok) => [purok, true]),
-      ),
-      routePassed: finishRequested,
-      allPuroksVisited: finishRequested,
+      visitedAreas,
+      visitedPuroks: Object.fromEntries(visitedPuroks.map((purok) => [purok, true])),
+      routePassed,
+      allPuroksVisited: allServiceStopsVisited,
+      routeDeviationMeters: Math.round(currentRoutePosition.distanceMeters),
+      onVerifiedRoute,
       distanceTravelledMeters: Math.round(travelledDistance),
       durationSeconds: Math.max(
         0,
@@ -403,6 +667,7 @@ export async function POST(request: NextRequest) {
         pendingSummary.collectionCondition || "Normal collection",
       );
       const collectionStatus =
+        !routePassed ||
         unclaimedPuroks.length > 0 ||
         completionReason.toLowerCase().includes("partial") ||
         completionReason.toLowerCase().includes("truck_full")
@@ -417,8 +682,8 @@ export async function POST(request: NextRequest) {
         routeName:
           route.routeName || schedule.routeName || "Collection route",
         scheduleName: schedule.title || "Collection schedule",
-        routeType: "service-area",
-        trackingMode: "barangay-purok",
+        routeType: "verified-road-route",
+        trackingMode: "verified-polyline",
         driverId: driver.uid,
         driverName:
           String(pendingSummary.driverName || "") ||
@@ -439,9 +704,9 @@ export async function POST(request: NextRequest) {
         status: collectionStatus,
         collectionStatus,
         source: "driver_gps_session",
-        routeProgress: 100,
-        routePassed: true,
-        allPuroksVisited: unclaimedPuroks.length === 0,
+        routeProgress: progress,
+        routePassed,
+        allPuroksVisited: allServiceStopsVisited && unclaimedPuroks.length === 0,
         wasteType: String(pendingSummary.wasteType || ""),
         truckLoadFraction: String(pendingSummary.truckLoadFraction || ""),
         truckLoadLabel: String(pendingSummary.truckLoadLabel || ""),
@@ -469,9 +734,9 @@ export async function POST(request: NextRequest) {
           lastCompletedAt: timestamp,
           lastCompletedDate: dateKey,
           lastCollectionReportId: sessionId,
-          routeProgress: 100,
+          routeProgress: progress,
           routeStatus:
-            collectionStatus === "partially_completed"
+            collectionStatus === "partially_completed" || !routePassed
               ? "Partially Completed"
               : "Completed",
           updatedAt: now,
@@ -491,7 +756,7 @@ export async function POST(request: NextRequest) {
       sessionId,
       routeStatus: status,
       routeProgress: progress,
-      routePassed: finishRequested,
+      routePassed,
       visitedPuroks,
       distanceTravelledMeters: Math.round(travelledDistance),
     });

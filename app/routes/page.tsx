@@ -1,63 +1,99 @@
 "use client";
 
 import { onValue, push, ref, update } from "@/lib/offlineFirebaseDatabase";
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { Map as MapLibreMap, Marker as MapLibreMarker } from "maplibre-gl";
-import { db } from "../../lib/firebase";
-import { getWasteTrackMapStyle } from "../../lib/mapStyle";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
-
-const BARANGAYS = [
-  "Mercedes",
-  "Canlapwas",
-  "Maulong",
-  "San Andres",
-  "Poblacion 13",
-];
-
-type BarangayMapLocation = {
-  center: [number, number];
-  zoom: number;
-};
-
-// Approximate barangay center points used only to focus the preview map.
-// The map is not used to draw or validate a collection route.
-const BARANGAY_MAP_LOCATIONS: Record<string, BarangayMapLocation> = {
-  Mercedes: { center: [124.8768, 11.7836], zoom: 15 },
-  Canlapwas: { center: [124.8874, 11.7818], zoom: 15 },
-  Maulong: { center: [124.8661, 11.7908], zoom: 15 },
-  "San Andres": { center: [124.8972, 11.7874], zoom: 15 },
-  "Poblacion 13": { center: [124.8861, 11.7783], zoom: 16 },
-};
-
-const CATBALOGAN_MAP_LOCATION: BarangayMapLocation = {
-  center: [124.8829, 11.7753],
-  zoom: 12.5,
-};
-
-const PUROKS = Array.from({ length: 10 }, (_, index) => `Purok ${index + 1}`);
+import {
+  CATBALOGAN_BOUNDARY_SOURCE,
+  findOfficialBarangay,
+  normalizePurokLabel as normalizeCatalogPurok,
+} from "../service-areas/catalog";
 
 type Driver = {
   id: string;
   name?: string;
   truck?: string;
   status?: string;
-  assignedRouteId?: string;
+};
+
+type RouteArea = {
+  areaKey?: string;
+  barangay?: string;
+  barangayKey?: string;
+  purok?: string;
+  purokKey?: string;
+  order?: number;
+};
+
+type ServicePurok = {
+  name?: string;
+  label?: string;
+  purok?: string;
+  purokKey?: string;
+  configured?: boolean;
+  active?: boolean;
+  lat?: number;
+  lng?: number;
+};
+
+type ServiceBarangay = {
+  barangay?: string;
+  barangayKey?: string;
+  psgcCode?: string;
+  centerLatitude?: number | string;
+  centerLongitude?: number | string;
+  latitude?: number | string;
+  longitude?: number | string;
+  lat?: number | string;
+  lng?: number | string;
+  coordinateType?: string;
+  coordinateSource?: string;
+  purok?: string;
+  purokKey?: string;
+  configured?: boolean;
+  active?: boolean;
+  puroks?: Record<string, ServicePurok>;
+};
+
+type PurokLocationRecord = ServicePurok & {
+  barangay?: string;
+  barangayKey?: string;
+};
+
+type ConfiguredServiceArea = {
+  id: string;
+  barangay: string;
+  barangayKey: string;
+  purok: string;
+  purokKey: string;
+  psgcCode: string;
+  centerLatitude: number;
+  centerLongitude: number;
+  coordinateSource: "service-areas" | "verified-catalog" | "catalog-fallback";
+};
+
+type BarangayMapPoint = {
+  barangay: string;
+  barangayKey: string;
+  psgcCode: string;
+  latitude: number;
+  longitude: number;
+  coordinateSource: "service-areas" | "verified-catalog" | "catalog-fallback";
 };
 
 type RouteRecord = {
   id: string;
   routeName?: string;
   barangay?: string;
-  barangayKey?: string;
-  barangayKeys?: string[] | Record<string, string | boolean>;
   barangays?: string[] | Record<string, string | boolean>;
   puroks?: string[] | Record<string, string | boolean>;
+  areas?: RouteArea[] | Record<string, RouteArea>;
   assignedDriverId?: string;
   assignedDriverName?: string;
   assignedVehicle?: string;
-  routeType?: string;
-  trackingMode?: string;
+  verified?: boolean;
+  routeValidation?: { status?: string; verifiedAt?: number };
   status?: string;
   createdAt?: number;
   updatedAt?: number;
@@ -72,153 +108,286 @@ type ScheduleRecord = {
 
 type RouteForm = {
   routeName: string;
-  barangay: string;
   assignedDriverId: string;
   assignedVehicle: string;
 };
 
 const EMPTY_FORM: RouteForm = {
   routeName: "",
-  barangay: "",
   assignedDriverId: "",
   assignedVehicle: "",
 };
 
+function isValidMapCoordinate(latitude: number, longitude: number): boolean {
+  return (
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180
+  );
+}
+
 function normalizeArray(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return value
-      .map(String)
-      .map((item) => item.trim())
-      .filter(Boolean);
+    return value.map(String).map((item) => item.trim()).filter(Boolean);
   }
-
   if (value && typeof value === "object") {
     return Object.entries(value as Record<string, unknown>)
-      .map(([key, item]) => {
-        if (item === true) return key;
-        if (typeof item === "string" || typeof item === "number") {
-          return String(item);
-        }
-        return "";
-      })
+      .map(([key, item]) =>
+        item === true ? key : typeof item === "string" ? item : "",
+      )
       .map((item) => item.trim())
       .filter(Boolean);
   }
-
   return value ? [String(value).trim()].filter(Boolean) : [];
 }
 
+function orderedValues<T extends { order?: number }>(value: unknown): T[] {
+  const list = Array.isArray(value)
+    ? value.filter(Boolean)
+    : Object.values(
+        (value && typeof value === "object" ? value : {}) as Record<string, T>,
+      );
+  return (list as T[]).sort(
+    (left, right) => Number(left.order || 0) - Number(right.order || 0),
+  );
+}
+
 function makeBarangayKey(value: string): string {
-  return String(value || "")
+  const key = value
     .toLowerCase()
     .replace(/\s*\(.*?\)/g, "")
-    .replace(/barangay/g, "")
+    .replace(/barangay|brgy/g, "")
     .replace(/[^a-z0-9ñ\s]/g, "")
     .trim()
     .replace(/\s+/g, "_");
+  if (["13", "poblacion13"].includes(key)) return "poblacion_13";
+  if (["guindapunan", "gundaponan"].includes(key)) return "guindaponan";
+  return key;
 }
 
-function getRouteBarangays(route: RouteRecord): string[] {
-  const values = [route.barangay, ...normalizeArray(route.barangays)]
-    .map((item) => String(item || "").trim())
-    .filter(Boolean);
-
-  return Array.from(new Set(values));
+function makePurokKey(value: string): string {
+  const number = value.match(/\d+/)?.[0];
+  return number ? `purok_${Number(number)}` : "all";
 }
 
-function getRoutePuroks(route: RouteRecord): string[] {
-  return normalizeArray(route.puroks);
+function makeAreaKey(barangay: string, purok: string): string {
+  return `${makeBarangayKey(barangay)}|${makePurokKey(purok)}`;
+}
+
+function getRouteAreas(route: RouteRecord): RouteArea[] {
+  const explicit = orderedValues<RouteArea>(route.areas).filter(
+    (area) => area.barangay && area.purok,
+  );
+  if (explicit.length) return explicit;
+
+  const barangays = Array.from(
+    new Set([route.barangay, ...normalizeArray(route.barangays)].filter(Boolean)),
+  ) as string[];
+  const puroks = normalizeArray(route.puroks);
+  return barangays.flatMap((barangay) =>
+    puroks.map((purok, order) => ({
+      areaKey: makeAreaKey(barangay, purok),
+      barangay,
+      barangayKey: makeBarangayKey(barangay),
+      purok,
+      purokKey: makePurokKey(purok),
+      order,
+    })),
+  );
+}
+
+function isAssignmentReady(route: RouteRecord): boolean {
+  const status = String(route.status || "ready").toLowerCase();
+  return (
+    route.verified === true &&
+    route.routeValidation?.status === "verified" &&
+    Boolean(route.assignedDriverId) &&
+    getRouteAreas(route).length > 0 &&
+    !["disabled", "inactive", "archived"].includes(status)
+  );
 }
 
 function formatDate(value?: number): string {
-  if (!value) return "—";
-
-  return new Date(value).toLocaleString("en-PH", {
-    month: "short",
-    day: "2-digit",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return value
+    ? new Date(value).toLocaleString("en-PH", {
+        month: "short",
+        day: "2-digit",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : "—";
 }
 
-function SearchIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M10.7 4a6.7 6.7 0 1 0 0 13.4A6.7 6.7 0 0 0 10.7 4Zm0 2a4.7 4.7 0 1 1 0 9.4 4.7 4.7 0 0 1 0-9.4Zm5.8 9.1 4.5 4.5-1.4 1.4-4.5-4.5 1.4-1.4Z" />
-    </svg>
-  );
-}
+const PUROK_OPTIONS = Array.from({ length: 10 }, (_, index) => ({
+  key: `purok_${index + 1}`,
+  label: `Purok ${index + 1}`,
+}));
 
-function RouteIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M7 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm10 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6ZM8.6 13.3l5-3.1a1 1 0 0 1 1.3.24l1.8 2.31-1.58 1.23-1.26-1.62-4.25 2.64L8.6 13.3Z" />
-    </svg>
-  );
-}
+type RouteMapPreviewProps = {
+  points: BarangayMapPoint[];
+  selectedBarangayCount: number;
+};
 
-function ReadyIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm-1.1 14.2-4-4 1.4-1.4 2.6 2.6 4.9-5 1.4 1.4Z" />
-    </svg>
-  );
-}
+function RouteMapPreview({
+  points,
+  selectedBarangayCount,
+}: RouteMapPreviewProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<any>(null);
+  const maplibreRef = useRef<any>(null);
+  const markersRef = useRef<any[]>([]);
+  const [ready, setReady] = useState(false);
 
-function DriverIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M8 5a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm8.5 2a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7ZM2 19c0-3.1 3.1-5 6-5s6 1.9 6 5v1H2v-1Zm12.5 1v-1c0-1.1-.3-2.1-.9-3 2.3.3 5.4 1.6 5.4 4v0h-4.5Z" />
-    </svg>
-  );
-}
+  const fitToPoints = useCallback(() => {
+    const map = mapRef.current;
+    const maplibregl = maplibreRef.current;
+    if (!map || !maplibregl) return;
+    map.resize();
 
-function CalendarIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M7 2h2v3H7V2Zm8 0h2v3h-2V2ZM4 5h16a1 1 0 0 1 1 1v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1Zm0 5v10h16V10H4Zm3 3h3v3H7v-3Z" />
-    </svg>
-  );
-}
+    if (!points.length) {
+      map.easeTo({ center: [124.886, 11.78], zoom: 12, duration: 450 });
+      return;
+    }
 
-function TruckIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M3 5h11v10H3V5Zm12 4h3.8l3.2 3.4V15h-2a3 3 0 0 0-6 0h-1V9h2Zm-8 8a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm13 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM15 11v2h4.2l-1.7-2H15Z" />
-    </svg>
-  );
-}
+    if (points.length === 1) {
+      map.easeTo({
+        center: [points[0].longitude, points[0].latitude],
+        zoom: 15,
+        duration: 450,
+      });
+      return;
+    }
 
-function PencilIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m4 16.9 10.3-10.3 2.8 2.8L6.8 19.7 4 20l.3-3.1ZM15 5.9l1.6-1.6a1.8 1.8 0 0 1 2.5 0l.6.6a1.8 1.8 0 0 1 0 2.5L18 9l-3-3.1Z" />
-    </svg>
-  );
-}
+    const bounds = new maplibregl.LngLatBounds();
+    points.forEach((point) =>
+      bounds.extend([point.longitude, point.latitude]),
+    );
+    map.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: 450 });
+  }, [points]);
 
-function TrashIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M8 4h8l1 2h4v2H3V6h4l1-2Zm1 6h2v7H9v-7Zm4 0h2v7h-2v-7ZM6 9h12l-1 11a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 9Z" />
-    </svg>
-  );
-}
+  useEffect(() => {
+    let cancelled = false;
 
-function PrevIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M15.4 5.4 9 11.8l6.4 6.4-1.4 1.4L6.2 12l7.8-7.8 1.4 1.2Z" />
-    </svg>
-  );
-}
+    void import("maplibre-gl").then((maplibregl) => {
+      if (cancelled || !containerRef.current || mapRef.current) return;
+      maplibreRef.current = maplibregl;
 
-function NextIcon() {
+      const map = new maplibregl.Map({
+        container: containerRef.current,
+        style: {
+          version: 8,
+          sources: {
+            osm: {
+              type: "raster",
+              tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+              tileSize: 256,
+              attribution: "© OpenStreetMap contributors",
+            },
+          },
+          layers: [{ id: "osm", type: "raster", source: "osm" }],
+        } as any,
+        center: [124.886, 11.78],
+        zoom: 12,
+        attributionControl: { compact: true },
+      });
+
+      map.addControl(
+        new maplibregl.NavigationControl({ showCompass: false }),
+        "top-left",
+      );
+      map.on("load", () => {
+        if (!cancelled) setReady(true);
+      });
+      mapRef.current = map;
+    });
+
+    return () => {
+      cancelled = true;
+      markersRef.current.forEach((marker) => marker.remove());
+      markersRef.current = [];
+      mapRef.current?.remove();
+      mapRef.current = null;
+      maplibreRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!ready || !mapRef.current || !maplibreRef.current) return;
+
+    markersRef.current.forEach((marker) => marker.remove());
+    markersRef.current = [];
+
+    points.forEach((point, index) => {
+      const markerElement = document.createElement("div");
+      markerElement.className =
+        index === 0
+          ? "route-preview-marker route-preview-marker--primary"
+          : "route-preview-marker";
+      markerElement.setAttribute("aria-label", point.barangay);
+      markerElement.innerHTML = `<span>${index + 1}</span>`;
+
+      const sourceLabel =
+        point.coordinateSource === "service-areas"
+          ? "Service Areas"
+          : point.coordinateSource === "verified-catalog"
+            ? "OpenStreetMap verified locality"
+            : "catalog fallback";
+      const popup = new maplibreRef.current.Popup({
+        offset: 22,
+        closeButton: false,
+      }).setText(
+        `${point.barangay} • ${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)} • ${sourceLabel}`,
+      );
+
+      const marker = new maplibreRef.current.Marker({
+        element: markerElement,
+        anchor: "bottom",
+      })
+        .setLngLat([point.longitude, point.latitude])
+        .setPopup(popup)
+        .addTo(mapRef.current);
+
+      markersRef.current.push(marker);
+    });
+
+    fitToPoints();
+  }, [ready, points, fitToPoints]);
+
+  const serviceCoordinateCount = points.filter(
+    (point) => point.coordinateSource === "service-areas",
+  ).length;
+  const verifiedCoordinateCount = points.filter(
+    (point) =>
+      point.coordinateSource === "service-areas" ||
+      point.coordinateSource === "verified-catalog",
+  ).length;
+
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m8.6 18.6 6.4-6.4-6.4-6.4L10 4.4l7.8 7.8-7.8 7.8-1.4-1.4Z" />
-    </svg>
+    <section className="route-map-preview">
+      <header>
+        <div>
+          <h3>Barangay map preview</h3>
+          <p>
+            {selectedBarangayCount
+              ? `Showing ${points.length} selected Barangay pin${points.length === 1 ? "" : "s"}. Coordinates are read from Service Areas.`
+              : "Select one or more Barangays to preview the coordinates saved in Service Areas."}
+          </p>
+          {points.length > 0 && verifiedCoordinateCount !== points.length ? (
+            <small>
+              {verifiedCoordinateCount} of {points.length} pin{points.length === 1 ? "" : "s"} use verified Service Area/OpenStreetMap coordinates; remaining legacy entries use the boundary fallback.
+            </small>
+          ) : null}
+        </div>
+        <button type="button" onClick={fitToPoints} disabled={!ready}>
+          Recenter map
+        </button>
+      </header>
+      <div className="route-map-canvas" ref={containerRef} />
+    </section>
   );
 }
 
@@ -226,308 +395,418 @@ export default function RoutesPage() {
   const [routes, setRoutes] = useState<RouteRecord[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [schedules, setSchedules] = useState<ScheduleRecord[]>([]);
-
+  const [serviceRegistry, setServiceRegistry] = useState<
+    Record<string, ServiceBarangay>
+  >({});
+  const [purokRegistry, setPurokRegistry] = useState<
+    Record<string, Record<string, ServicePurok>>
+  >({});
+  const [purokLocations, setPurokLocations] = useState<
+    Record<string, Record<string, PurokLocationRecord>>
+  >({});
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
   const [form, setForm] = useState<RouteForm>(EMPTY_FORM);
   const [selectedBarangays, setSelectedBarangays] = useState<string[]>([]);
-  const [barangayPickerOpen, setBarangayPickerOpen] = useState(false);
-  const [selectedPuroks, setSelectedPuroks] = useState<string[]>([]);
+  const [selectedPurokKeys, setSelectedPurokKeys] = useState<string[]>([]);
+  const [barangayMenuOpen, setBarangayMenuOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
-  const [successMessage, setSuccessMessage] = useState("");
-  const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<MapLibreMap | null>(null);
-  const markerRefs = useRef<MapLibreMarker[]>([]);
+  const [notice, setNotice] = useState("");
   const barangayPickerRef = useRef<HTMLDivElement | null>(null);
-  const [mapReady, setMapReady] = useState(false);
 
   useEffect(() => {
     const unsubscribeRoutes = onValue(ref(db, "routes"), (snapshot) => {
       const value = snapshot.val() || {};
-      const list = Object.entries(value)
-        .map(([id, raw]) => ({
-          id,
-          ...(raw as Omit<RouteRecord, "id">),
-        }))
-        .sort(
-          (left, right) =>
-            Number(right.updatedAt || right.createdAt || 0) -
-            Number(left.updatedAt || left.createdAt || 0),
-        );
-      setRoutes(list);
+      setRoutes(
+        Object.entries(value)
+          .map(([id, raw]) => ({ id, ...(raw as Omit<RouteRecord, "id">) }))
+          .sort(
+            (left, right) =>
+              Number(right.updatedAt || 0) - Number(left.updatedAt || 0),
+          ),
+      );
     });
-
     const unsubscribeDrivers = onValue(ref(db, "drivers"), (snapshot) => {
       const value = snapshot.val() || {};
-      const list = Object.entries(value).map(([id, raw]) => ({
-        id,
-        ...(raw as Omit<Driver, "id">),
-      }));
-      setDrivers(list);
+      setDrivers(
+        Object.entries(value).map(([id, raw]) => ({
+          id,
+          ...(raw as Omit<Driver, "id">),
+        })),
+      );
     });
-
     const unsubscribeSchedules = onValue(ref(db, "schedules"), (snapshot) => {
       const value = snapshot.val() || {};
-      const list = Object.entries(value).map(([id, raw]) => ({
-        id,
-        ...(raw as Omit<ScheduleRecord, "id">),
-      }));
-      setSchedules(list);
+      setSchedules(
+        Object.entries(value).map(([id, raw]) => ({
+          id,
+          ...(raw as Omit<ScheduleRecord, "id">),
+        })),
+      );
     });
+    const unsubscribeServiceAreas = onValue(
+      ref(db, "service_areas"),
+      (snapshot) => setServiceRegistry(snapshot.val() || {}),
+    );
+    const unsubscribePurokRegistry = onValue(
+      ref(db, "purok_registry"),
+      (snapshot) => setPurokRegistry(snapshot.val() || {}),
+    );
+    const unsubscribePurokLocations = onValue(
+      ref(db, "purok_locations"),
+      (snapshot) => setPurokLocations(snapshot.val() || {}),
+    );
 
     return () => {
       unsubscribeRoutes();
       unsubscribeDrivers();
       unsubscribeSchedules();
+      unsubscribeServiceAreas();
+      unsubscribePurokRegistry();
+      unsubscribePurokLocations();
     };
   }, []);
 
-  useEffect(() => {
-    if (!barangayPickerOpen) return;
+  const configuredServiceAreas = useMemo<ConfiguredServiceArea[]>(() => {
+    const byId = new Map<string, ConfiguredServiceArea>();
 
-    const handlePointerDown = (event: PointerEvent) => {
-      if (
-        barangayPickerRef.current &&
-        !barangayPickerRef.current.contains(event.target as Node)
-      ) {
-        setBarangayPickerOpen(false);
-      }
-    };
+    const addArea = (options: {
+      rawBarangay: string;
+      rawBarangayKey?: string;
+      rawPurok: string;
+      rawPurokKey?: string;
+      psgcCode?: string;
+      centerLatitude?: number | string;
+      centerLongitude?: number | string;
+      coordinateType?: string;
+      coordinateSource?: string;
+      active?: boolean;
+    }) => {
+      if (options.active === false) return;
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setBarangayPickerOpen(false);
-      }
-    };
+      const barangayCandidate = String(
+        options.rawBarangay || options.rawBarangayKey || "",
+      )
+        .replace(/_/g, " ")
+        .trim();
+      const official = findOfficialBarangay(barangayCandidate);
+      const barangay = official?.name || barangayCandidate;
+      if (!barangay) return;
 
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [barangayPickerOpen]);
-
-  useEffect(() => {
-    if (!editorOpen || !mapContainerRef.current || mapRef.current) return;
-
-    let disposed = false;
-
-    void import("maplibre-gl").then((maplibregl) => {
-      if (disposed || !mapContainerRef.current) return;
-
-      const map = new maplibregl.Map({
-        container: mapContainerRef.current,
-        style: getWasteTrackMapStyle(
-          "https://tiles.openfreemap.org/styles/bright",
-        ),
-        center: CATBALOGAN_MAP_LOCATION.center,
-        zoom: CATBALOGAN_MAP_LOCATION.zoom,
-        attributionControl: { compact: true },
-      });
-
-      map.addControl(
-        new maplibregl.NavigationControl({
-          showCompass: false,
-          showZoom: true,
-        }),
-        "top-left",
+      const barangayKey = makeBarangayKey(barangay);
+      const purok = normalizeCatalogPurok(
+        options.rawPurok ||
+          String(options.rawPurokKey || "").replace(/_/g, " "),
       );
+      const purokKey = makePurokKey(purok);
+      if (!/^purok_(?:[1-9]|10)$/.test(purokKey)) return;
 
-      map.addControl(
-        new maplibregl.ScaleControl({
-          maxWidth: 120,
-          unit: "metric",
-        }),
-        "bottom-right",
+      const id = `${barangayKey}|${purokKey}`;
+      if (byId.has(id)) return;
+
+      const storedLatitude = Number(options.centerLatitude);
+      const storedLongitude = Number(options.centerLongitude);
+      const hasStoredCoordinates = isValidMapCoordinate(
+        storedLatitude,
+        storedLongitude,
       );
+      const fallbackLatitude = Number(official?.centerLatitude);
+      const fallbackLongitude = Number(official?.centerLongitude);
+      const hasVerifiedCatalogCoordinate =
+        official?.coordinateType === "openstreetmap-locality" &&
+        isValidMapCoordinate(fallbackLatitude, fallbackLongitude);
+      const storedCoordinateIsVerified =
+        options.coordinateType === "openstreetmap-locality";
+      const preferVerifiedCatalog =
+        hasVerifiedCatalogCoordinate && !storedCoordinateIsVerified;
 
-      map.on("load", () => {
-        if (disposed) return;
-        map.resize();
-        setMapReady(true);
-      });
+      const resolvedLatitude = preferVerifiedCatalog
+        ? fallbackLatitude
+        : hasStoredCoordinates
+          ? storedLatitude
+          : fallbackLatitude;
+      const resolvedLongitude = preferVerifiedCatalog
+        ? fallbackLongitude
+        : hasStoredCoordinates
+          ? storedLongitude
+          : fallbackLongitude;
+      const coordinateSource: ConfiguredServiceArea["coordinateSource"] =
+        preferVerifiedCatalog
+          ? "verified-catalog"
+          : hasStoredCoordinates
+            ? "service-areas"
+            : "catalog-fallback";
 
-      mapRef.current = map;
-    });
-
-    return () => {
-      disposed = true;
-      setMapReady(false);
-      markerRefs.current.forEach((marker) => marker.remove());
-      markerRefs.current = [];
-      mapRef.current?.remove();
-      mapRef.current = null;
-    };
-  }, [editorOpen]);
-
-  useEffect(() => {
-    if (!editorOpen || !mapReady || !mapRef.current) return;
-
-    markerRefs.current.forEach((marker) => marker.remove());
-    markerRefs.current = [];
-
-    let cancelled = false;
-    const selectedLocations = selectedBarangays
-      .map((barangay) => ({
+      byId.set(id, {
+        id,
         barangay,
-        location: BARANGAY_MAP_LOCATIONS[barangay],
-      }))
-      .filter(
-        (item): item is { barangay: string; location: BarangayMapLocation } =>
-          Boolean(item.location),
-      );
-
-    if (selectedLocations.length === 0) {
-      mapRef.current.flyTo({
-        center: CATBALOGAN_MAP_LOCATION.center,
-        zoom: CATBALOGAN_MAP_LOCATION.zoom,
-        speed: 1.2,
-        curve: 1.35,
-        essential: true,
+        barangayKey,
+        purok,
+        purokKey,
+        psgcCode: options.psgcCode || official?.psgcCode || "",
+        centerLatitude: resolvedLatitude,
+        centerLongitude: resolvedLongitude,
+        coordinateSource,
       });
-      return;
-    }
+    };
 
-    void import("maplibre-gl").then((maplibregl) => {
-      if (cancelled || !mapRef.current) return;
-      const activeMap = mapRef.current;
+    // Primary source: Service Areas. Supports both the current nested shape
+    // service_areas/{barangayKey}/puroks/{purokKey} and older flat records.
+    Object.entries(serviceRegistry).forEach(([registryKey, rawRecord]) => {
+      if (!rawRecord || typeof rawRecord !== "object") return;
+      const barangayRecord = rawRecord as ServiceBarangay;
+      if (barangayRecord.active === false) return;
 
-      markerRefs.current = selectedLocations.map(
-        ({ barangay, location }, index) =>
-          new maplibregl.Marker({
-            color: index === 0 ? "#0f9f5b" : "#2563eb",
-            scale: index === 0 ? 0.96 : 0.88,
-          })
-            .setLngLat(location.center)
-            .setPopup(
-              new maplibregl.Popup({ offset: 20 }).setText(
-                `${barangay}, Catbalogan City`,
-              ),
-            )
-            .addTo(activeMap),
-      );
-
-      if (selectedLocations.length === 1) {
-        const [{ location }] = selectedLocations;
-        activeMap.flyTo({
-          center: location.center,
-          zoom: location.zoom,
-          speed: 1.2,
-          curve: 1.35,
-          essential: true,
+      const nestedPuroks = Object.entries(barangayRecord.puroks || {});
+      if (nestedPuroks.length) {
+        nestedPuroks.forEach(([registryPurokKey, rawPurok]) => {
+          if (!rawPurok || typeof rawPurok !== "object") return;
+          const purokRecord = rawPurok as ServicePurok;
+          addArea({
+            rawBarangay: barangayRecord.barangay || registryKey,
+            rawBarangayKey: barangayRecord.barangayKey || registryKey,
+            rawPurok:
+              purokRecord.purok ||
+              purokRecord.name ||
+              purokRecord.label ||
+              registryPurokKey,
+            rawPurokKey: purokRecord.purokKey || registryPurokKey,
+            psgcCode: barangayRecord.psgcCode,
+            centerLatitude:
+              barangayRecord.centerLatitude ??
+              barangayRecord.latitude ??
+              barangayRecord.lat ??
+              purokRecord.lat,
+            centerLongitude:
+              barangayRecord.centerLongitude ??
+              barangayRecord.longitude ??
+              barangayRecord.lng ??
+              purokRecord.lng,
+            coordinateType: barangayRecord.coordinateType,
+            coordinateSource: barangayRecord.coordinateSource,
+            active: purokRecord.active,
+          });
         });
         return;
       }
 
-      const bounds = new maplibregl.LngLatBounds();
-      selectedLocations.forEach(({ location }) =>
-        bounds.extend(location.center),
+      if (barangayRecord.purok || barangayRecord.purokKey) {
+        addArea({
+          rawBarangay: barangayRecord.barangay || registryKey,
+          rawBarangayKey: barangayRecord.barangayKey || registryKey,
+          rawPurok: barangayRecord.purok || barangayRecord.purokKey || "",
+          rawPurokKey: barangayRecord.purokKey,
+          psgcCode: barangayRecord.psgcCode,
+          centerLatitude:
+            barangayRecord.centerLatitude ??
+            barangayRecord.latitude ??
+            barangayRecord.lat,
+          centerLongitude:
+            barangayRecord.centerLongitude ??
+            barangayRecord.longitude ??
+            barangayRecord.lng,
+          coordinateType: barangayRecord.coordinateType,
+          coordinateSource: barangayRecord.coordinateSource,
+          active: barangayRecord.active,
+        });
+      }
+    });
+
+    // Compatibility fallback for databases created by earlier MetroWaste patches.
+    // Service Areas mirrors configured entries into purok_registry. We only use
+    // this source when service_areas itself produced no usable rows.
+    if (byId.size === 0) {
+      Object.entries(purokRegistry).forEach(([registryBarangayKey, rawPuroks]) => {
+        if (!rawPuroks || typeof rawPuroks !== "object") return;
+        Object.entries(rawPuroks).forEach(([registryPurokKey, rawPurok]) => {
+          if (!rawPurok || typeof rawPurok !== "object") return;
+          const purokRecord = rawPurok as ServicePurok;
+          addArea({
+            rawBarangay:
+              findOfficialBarangay(registryBarangayKey.replace(/_/g, " "))
+                ?.name || registryBarangayKey.replace(/_/g, " "),
+            rawBarangayKey: registryBarangayKey,
+            rawPurok:
+              purokRecord.purok ||
+              purokRecord.name ||
+              purokRecord.label ||
+              registryPurokKey,
+            rawPurokKey: purokRecord.purokKey || registryPurokKey,
+            active: purokRecord.active,
+          });
+        });
+      });
+    }
+
+    // Last compatibility fallback: configured records mirrored to purok_locations.
+    if (byId.size === 0) {
+      Object.entries(purokLocations).forEach(
+        ([registryBarangayKey, rawPuroks]) => {
+          if (!rawPuroks || typeof rawPuroks !== "object") return;
+          Object.entries(rawPuroks).forEach(
+            ([registryPurokKey, rawPurok]) => {
+              if (!rawPurok || typeof rawPurok !== "object") return;
+              const purokRecord = rawPurok as PurokLocationRecord;
+              if (purokRecord.configured !== true) return;
+              addArea({
+                rawBarangay:
+                  purokRecord.barangay ||
+                  findOfficialBarangay(
+                    String(
+                      purokRecord.barangayKey || registryBarangayKey,
+                    ).replace(/_/g, " "),
+                  )?.name ||
+                  registryBarangayKey.replace(/_/g, " "),
+                rawBarangayKey:
+                  purokRecord.barangayKey || registryBarangayKey,
+                rawPurok: purokRecord.purok || registryPurokKey,
+                rawPurokKey: purokRecord.purokKey || registryPurokKey,
+                active: purokRecord.active,
+              });
+            },
+          );
+        },
       );
-      activeMap.fitBounds(bounds, {
-        padding: 72,
-        maxZoom: 14.5,
-        duration: 850,
-      });
-    });
+    }
 
-    return () => {
-      cancelled = true;
+    return [...byId.values()].sort(
+      (left, right) =>
+        left.barangay.localeCompare(right.barangay) ||
+        Number(left.purok.match(/\d+/)?.[0] || 0) -
+          Number(right.purok.match(/\d+/)?.[0] || 0),
+    );
+  }, [purokLocations, purokRegistry, serviceRegistry]);
+
+  const configuredBarangays = useMemo<string[]>(() => {
+    const names: string[] = configuredServiceAreas.map(
+      (area: ConfiguredServiceArea) => area.barangay,
+    );
+    return Array.from(new Set<string>(names)).sort((left, right) =>
+      left.localeCompare(right),
+    );
+  }, [configuredServiceAreas]);
+
+  const selectedBarangayMapPoints = useMemo<BarangayMapPoint[]>(() => {
+    return selectedBarangays.flatMap((barangay) => {
+      const barangayKey = makeBarangayKey(barangay);
+      const candidates = configuredServiceAreas.filter(
+        (area) => area.barangayKey === barangayKey,
+      );
+      const areaWithStoredCoordinates = candidates.find(
+        (area) =>
+          area.coordinateSource === "service-areas" &&
+          isValidMapCoordinate(area.centerLatitude, area.centerLongitude),
+      );
+      const areaWithFallbackCoordinates = candidates.find((area) =>
+        isValidMapCoordinate(area.centerLatitude, area.centerLongitude),
+      );
+      const point = areaWithStoredCoordinates || areaWithFallbackCoordinates;
+      if (!point) return [];
+
+      return [
+        {
+          barangay: point.barangay,
+          barangayKey: point.barangayKey,
+          psgcCode: point.psgcCode,
+          latitude: point.centerLatitude,
+          longitude: point.centerLongitude,
+          coordinateSource: point.coordinateSource,
+        },
+      ];
+    });
+  }, [configuredServiceAreas, selectedBarangays]);
+
+  const availablePurokKeys = useMemo(() => {
+    if (!selectedBarangays.length) return [] as string[];
+
+    const sets = selectedBarangays.map((barangay) =>
+      new Set(
+        configuredServiceAreas
+          .filter((area) => area.barangayKey === makeBarangayKey(barangay))
+          .map((area) => area.purokKey),
+      ),
+    );
+
+    return PUROK_OPTIONS.map((option) => option.key).filter((purokKey) =>
+      sets.every((set) => set.has(purokKey)),
+    );
+  }, [configuredServiceAreas, selectedBarangays]);
+
+  const selectedServiceAreas = useMemo<ConfiguredServiceArea[]>(() => {
+    const configuredById = new Map(
+      configuredServiceAreas.map((area) => [area.id, area]),
+    );
+
+    return selectedBarangays.flatMap((barangay) => {
+      const barangayKey = makeBarangayKey(barangay);
+      return selectedPurokKeys
+        .map((purokKey) => configuredById.get(`${barangayKey}|${purokKey}`))
+        .filter((area): area is ConfiguredServiceArea => Boolean(area));
+    });
+  }, [configuredServiceAreas, selectedBarangays, selectedPurokKeys]);
+
+  useEffect(() => {
+    if (!configuredBarangays.length) {
+      setSelectedBarangays([]);
+      return;
+    }
+    setSelectedBarangays((current) =>
+      current.filter((barangay) => configuredBarangays.includes(barangay)),
+    );
+  }, [configuredBarangays]);
+
+  useEffect(() => {
+    setSelectedPurokKeys((current) =>
+      current.filter((purokKey) => availablePurokKeys.includes(purokKey)),
+    );
+  }, [availablePurokKeys]);
+
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (
+        target &&
+        barangayPickerRef.current &&
+        !barangayPickerRef.current.contains(target)
+      ) {
+        setBarangayMenuOpen(false);
+      }
     };
-  }, [editorOpen, mapReady, selectedBarangays]);
 
-  const focusSelectedBarangays = async () => {
-    if (!mapRef.current) return;
-
-    const selectedLocations = selectedBarangays
-      .map((barangay) => BARANGAY_MAP_LOCATIONS[barangay])
-      .filter((location): location is BarangayMapLocation => Boolean(location));
-
-    if (selectedLocations.length === 0) {
-      mapRef.current.flyTo({
-        center: CATBALOGAN_MAP_LOCATION.center,
-        zoom: CATBALOGAN_MAP_LOCATION.zoom,
-        speed: 1.2,
-        curve: 1.35,
-        essential: true,
-      });
-      return;
-    }
-
-    if (selectedLocations.length === 1) {
-      mapRef.current.flyTo({
-        center: selectedLocations[0].center,
-        zoom: selectedLocations[0].zoom,
-        speed: 1.2,
-        curve: 1.35,
-        essential: true,
-      });
-      return;
-    }
-
-    const maplibregl = await import("maplibre-gl");
-    if (!mapRef.current) return;
-    const activeMap = mapRef.current;
-    const bounds = new maplibregl.LngLatBounds();
-    selectedLocations.forEach((location) => bounds.extend(location.center));
-    activeMap.fitBounds(bounds, {
-      padding: 72,
-      maxZoom: 14.5,
-      duration: 850,
-    });
-  };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, []);
 
   const activeDrivers = useMemo(
     () =>
-      drivers.filter((driver) => {
-        const status = String(driver.status || "active").toLowerCase();
-        return !["disabled", "inactive", "suspended"].includes(status);
-      }),
+      drivers.filter(
+        (driver) =>
+          !["disabled", "inactive", "suspended"].includes(
+            String(driver.status || "active").toLowerCase(),
+          ),
+      ),
     [drivers],
   );
 
   const filteredRoutes = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return routes;
-
-    return routes.filter((route) => {
-      const text = [
-        route.routeName,
-        getRouteBarangays(route).join(" "),
-        getRoutePuroks(route).join(" "),
-        route.assignedDriverName,
-        route.assignedVehicle,
-      ]
+    return routes.filter((route) =>
+      [route.routeName, route.assignedDriverName, ...normalizeArray(route.barangays)]
         .filter(Boolean)
         .join(" ")
-        .toLowerCase();
-
-      return text.includes(query);
-    });
-  }, [routes, search]);
-
-  const routesWithSchedules = useMemo(() => {
-    const routeIds = new Set(
-      schedules
-        .filter(
-          (schedule) =>
-            String(schedule.status || "active").toLowerCase() !== "cancelled",
-        )
-        .map((schedule) => schedule.routeId || schedule.assignedRouteId)
-        .filter(Boolean),
+        .toLowerCase()
+        .includes(query),
     );
-
-    return routeIds.size;
-  }, [schedules]);
+  }, [routes, search]);
 
   const resetEditor = () => {
     setEditingRouteId(null);
     setForm(EMPTY_FORM);
     setSelectedBarangays([]);
-    setBarangayPickerOpen(false);
-    setSelectedPuroks([]);
+    setSelectedPurokKeys([]);
+    setBarangayMenuOpen(false);
     setSaving(false);
   };
 
@@ -537,483 +816,403 @@ export default function RoutesPage() {
   };
 
   const openCreateEditor = () => {
-    setSuccessMessage("");
+    setNotice("");
     resetEditor();
     setEditorOpen(true);
   };
 
   const openEditEditor = (route: RouteRecord) => {
-    setSuccessMessage("");
+    const routeAreas = getRouteAreas(route);
+    const routeBarangays = Array.from(
+      new Set(
+        [
+          ...routeAreas.map((area) => area.barangay || ""),
+          ...normalizeArray(route.barangays),
+          route.barangay || "",
+        ].filter(Boolean),
+      ),
+    );
+    const routePurokKeys = Array.from(
+      new Set(
+        [
+          ...routeAreas.map((area) => makePurokKey(area.purok || "")),
+          ...normalizeArray(route.puroks).map(makePurokKey),
+        ].filter((key) => /^purok_(?:[1-9]|10)$/.test(key)),
+      ),
+    );
+
+    setNotice("");
     setEditingRouteId(route.id);
-    const routeBarangays = getRouteBarangays(route);
     setForm({
       routeName: route.routeName || "",
-      barangay: routeBarangays[0] || "",
       assignedDriverId: route.assignedDriverId || "",
       assignedVehicle: route.assignedVehicle || "",
     });
     setSelectedBarangays(routeBarangays);
-    setBarangayPickerOpen(false);
-    setSelectedPuroks(getRoutePuroks(route));
+    setSelectedPurokKeys(routePurokKeys);
+    setBarangayMenuOpen(false);
     setEditorOpen(true);
   };
 
   const toggleBarangay = (barangay: string) => {
-    setSelectedBarangays((current) => {
-      const next = current.includes(barangay)
+    setSelectedBarangays((current) =>
+      current.includes(barangay)
         ? current.filter((item) => item !== barangay)
-        : [...current, barangay];
-
-      setForm((currentForm) => ({
-        ...currentForm,
-        barangay: next[0] || "",
-      }));
-
-      return next;
-    });
-  };
-
-  const selectAllBarangays = () => {
-    const next =
-      selectedBarangays.length === BARANGAYS.length ? [] : [...BARANGAYS];
-    setSelectedBarangays(next);
-    setForm((current) => ({ ...current, barangay: next[0] || "" }));
-  };
-
-  const togglePurok = (purok: string) => {
-    setSelectedPuroks((current) =>
-      current.includes(purok)
-        ? current.filter((item) => item !== purok)
-        : [...current, purok],
+        : [...current, barangay],
     );
   };
 
-  const selectAllPuroks = () => {
-    setSelectedPuroks(
-      selectedPuroks.length === PUROKS.length ? [] : [...PUROKS],
+  const toggleAllBarangays = () => {
+    setSelectedBarangays((current) =>
+      current.length === configuredBarangays.length
+        ? []
+        : [...configuredBarangays],
+    );
+  };
+
+  const togglePurok = (purokKey: string) => {
+    if (!availablePurokKeys.includes(purokKey)) return;
+    setSelectedPurokKeys((current) =>
+      current.includes(purokKey)
+        ? current.filter((key) => key !== purokKey)
+        : [...current, purokKey],
+    );
+  };
+
+  const toggleAllPuroks = () => {
+    if (!availablePurokKeys.length) return;
+    setSelectedPurokKeys((current) =>
+      current.length === availablePurokKeys.length &&
+      availablePurokKeys.every((key) => current.includes(key))
+        ? []
+        : [...availablePurokKeys],
     );
   };
 
   const saveRoute = async () => {
     const routeName = form.routeName.trim();
-    const barangays = Array.from(
-      new Set(selectedBarangays.map((item) => item.trim()).filter(Boolean)),
-    );
-    const primaryBarangay = barangays[0] || "";
-    const assignedDriver = drivers.find(
-      (driver) => driver.id === form.assignedDriverId,
+    const driver = activeDrivers.find(
+      (item) => item.id === form.assignedDriverId,
     );
 
     if (!routeName) return alert("Enter a route name.");
-    if (barangays.length === 0) return alert("Select at least one Barangay.");
-    if (selectedPuroks.length === 0) {
-      return alert("Select at least one Purok.");
+    if (!selectedBarangays.length) {
+      return alert("Select at least one Barangay for this route.");
     }
-    if (!assignedDriver) return alert("Assign a valid driver.");
+    if (!selectedPurokKeys.length) {
+      return alert("Select at least one Purok for route coverage.");
+    }
+    if (!driver) return alert("Assign an active driver.");
+    if (!selectedServiceAreas.length) {
+      return alert("Unable to build the selected route coverage from Service Areas.");
+    }
+    if (
+      selectedServiceAreas.length !==
+      selectedBarangays.length * selectedPurokKeys.length
+    ) {
+      return alert(
+        "One or more selected Barangay/Purok combinations are no longer active in Service Areas. Refresh the selection and try again.",
+      );
+    }
 
-    const existingRoute = editingRouteId
+    const areas = selectedServiceAreas.map((area, order) => ({
+      areaKey: area.id,
+      barangay: area.barangay,
+      barangayKey: area.barangayKey,
+      purok: area.purok,
+      purokKey: area.purokKey,
+      order,
+    }));
+    const barangays: string[] = Array.from(
+      new Set(areas.map((area) => area.barangay).filter(Boolean)),
+    );
+    const puroks: string[] = Array.from(
+      new Set(areas.map((area) => area.purok).filter(Boolean)),
+    );
+    const mapPointByBarangayKey = new Map(
+      selectedBarangayMapPoints.map((point) => [point.barangayKey, point]),
+    );
+    const missingCoordinateBarangays = barangays.filter(
+      (barangay) => !mapPointByBarangayKey.has(makeBarangayKey(barangay)),
+    );
+    if (missingCoordinateBarangays.length) {
+      return alert(
+        `Missing Service Area coordinates for: ${missingCoordinateBarangays.join(
+          ", ",
+        )}. Open Service Areas and re-add or update these Barangays first.`,
+      );
+    }
+
+    const barangayDestinations = barangays.map((barangay, order) => {
+      const barangayKey = makeBarangayKey(barangay);
+      const point = mapPointByBarangayKey.get(barangayKey)!;
+      const official = findOfficialBarangay(barangay);
+      return {
+        barangay: point.barangay,
+        barangayKey: point.barangayKey,
+        psgcCode: point.psgcCode,
+        latitude: point.latitude,
+        longitude: point.longitude,
+        order,
+        coordinateType:
+          official?.coordinateType || "service-area-barangay-reference",
+        coordinateSource:
+          point.coordinateSource === "service-areas"
+            ? "service_areas"
+            : official?.coordinateSource || CATBALOGAN_BOUNDARY_SOURCE,
+      };
+    });
+    const existing = editingRouteId
       ? routes.find((route) => route.id === editingRouteId)
       : undefined;
-
     const routeReference = editingRouteId
       ? ref(db, `routes/${editingRouteId}`)
       : push(ref(db, "routes"));
-
     const routeId = editingRouteId || routeReference.key;
-    if (!routeId) return alert("Unable to generate a route ID.");
+    if (!routeId) return alert("Unable to create a route ID.");
 
     const now = Date.now();
-    const vehicle = form.assignedVehicle.trim() || assignedDriver.truck || "";
-
+    const vehicle = form.assignedVehicle.trim() || driver.truck || "";
     const payload = {
       routeName,
-      barangay: primaryBarangay,
-      barangayKey: makeBarangayKey(primaryBarangay),
+      barangay: barangays[0],
+      barangayKey: makeBarangayKey(barangays[0]),
       barangays,
       barangayKeys: barangays.map(makeBarangayKey),
-      puroks: selectedPuroks,
-      assignedDriverId: assignedDriver.id,
-      assignedDriverName: assignedDriver.name || "Driver",
+      puroks,
+      purokKeys: puroks.map(makePurokKey),
+      areas,
+      barangayDestinations,
+      checkpoints: [],
+      assignedDriverId: driver.id,
+      assignedDriverName: driver.name || "Driver",
       assignedVehicle: vehicle,
-      routeType: "service-area",
-      trackingMode: "barangay-purok",
+      routeType: "service-area-route",
+      trackingMode: "live-gps",
       requiresDrawnPath: false,
+      coverageOnly: true,
+      roadPointOnly: false,
+      servicePinMode: "disabled",
+      verified: true,
+      routeValidation: {
+        status: "verified",
+        method: "admin-confirmed-coverage",
+        verifiedBy: auth.currentUser?.uid || "admin",
+        verifiedAt: now,
+        coordinateCount: 0,
+        roadPointCount: 0,
+        serviceStopCount: 0,
+        barangayPinCount: barangayDestinations.length,
+        coverageAreaCount: areas.length,
+      },
       status: "ready",
-      createdAt: existingRoute?.createdAt || now,
+      createdAt: existing?.createdAt || now,
       updatedAt: now,
     };
 
-    const routeStatusKey = push(ref(db, "route_status_updates")).key;
     const rootUpdates: Record<string, unknown> = {
       [`routes/${routeId}`]: payload,
-      [`drivers/${assignedDriver.id}/assignedRouteId`]: routeId,
-      [`drivers/${assignedDriver.id}/assignedRouteName`]: routeName,
-      [`drivers/${assignedDriver.id}/assignedVehicle`]: vehicle,
+      [`drivers/${driver.id}/assignedRouteId`]: routeId,
+      [`drivers/${driver.id}/assignedRouteName`]: routeName,
+      [`drivers/${driver.id}/assignedVehicle`]: vehicle,
     };
 
     barangays.forEach((barangay) => {
       const barangayKey = makeBarangayKey(barangay);
+      const barangayAreas = areas.filter(
+        (area) => area.barangayKey === barangayKey,
+      );
       rootUpdates[`barangay_assignments/${barangayKey}/${routeId}`] = {
         routeId,
         routeName,
+        driverId: driver.id,
+        driverName: driver.name || "Driver",
+        assignedVehicle: vehicle,
         barangay,
         barangayKey,
-        barangays,
-        barangayKeys: barangays.map(makeBarangayKey),
-        puroks: selectedPuroks,
-        driverId: assignedDriver.id,
-        driverName: assignedDriver.name || "Driver",
-        assignedVehicle: vehicle,
-        routeType: "service-area",
+        areas: barangayAreas,
+        destination: barangayDestinations.find(
+          (destination) => destination.barangayKey === barangayKey,
+        ),
+        puroks: barangayAreas.map((area) => area.purok).filter(Boolean),
+        coverageOnly: true,
+        verified: true,
         updatedAt: now,
       };
     });
 
-    if (routeStatusKey) {
-      rootUpdates[`route_status_updates/${routeStatusKey}`] = {
-        routeId,
-        routeName,
-        driverId: assignedDriver.id,
-        driverName: assignedDriver.name || "Driver",
-        barangay: primaryBarangay,
-        barangays,
-        puroks: selectedPuroks,
-        status: editingRouteId ? "updated" : "ready",
-        routeType: "service-area",
-        createdAt: now,
-      };
+    if (existing?.assignedDriverId && existing.assignedDriverId !== driver.id) {
+      rootUpdates[`drivers/${existing.assignedDriverId}/assignedRouteId`] = null;
+      rootUpdates[`drivers/${existing.assignedDriverId}/assignedRouteName`] = null;
     }
-
-    if (
-      existingRoute?.assignedDriverId &&
-      existingRoute.assignedDriverId !== assignedDriver.id
-    ) {
-      rootUpdates[`drivers/${existingRoute.assignedDriverId}/assignedRouteId`] =
-        null;
-      rootUpdates[
-        `drivers/${existingRoute.assignedDriverId}/assignedRouteName`
-      ] = null;
-    }
-
-    const selectedBarangayKeys = new Set(barangays.map(makeBarangayKey));
-    const previousBarangays = existingRoute
-      ? getRouteBarangays(existingRoute)
-      : [];
-
-    previousBarangays.forEach((barangay) => {
-      const barangayKey = makeBarangayKey(barangay);
-      if (!selectedBarangayKeys.has(barangayKey)) {
-        rootUpdates[`barangay_assignments/${barangayKey}/${routeId}`] = null;
+    normalizeArray(existing?.barangays).forEach((barangay) => {
+      if (!barangays.includes(barangay)) {
+        rootUpdates[
+          `barangay_assignments/${makeBarangayKey(barangay)}/${routeId}`
+        ] = null;
       }
     });
 
     try {
       setSaving(true);
       await update(ref(db), rootUpdates);
-      setSuccessMessage(
-        editingRouteId
-          ? "Route assignment updated successfully."
-          : "Route assignment created successfully.",
+      setNotice(
+        "Route assignment saved. The Driver can start collection using live phone GPS.",
       );
       closeEditor();
     } catch (error) {
-      console.error("Unable to save route assignment", error);
+      console.error(error);
       alert(
-        "Unable to save the route. Check Firebase permissions and try again.",
+        "Unable to save the route assignment. Check Firebase permissions and try again.",
       );
       setSaving(false);
     }
   };
 
   const deleteRoute = async (route: RouteRecord) => {
-    const activeSchedules = schedules.filter((schedule) => {
-      const routeId = schedule.routeId || schedule.assignedRouteId;
-      return (
-        routeId === route.id &&
-        String(schedule.status || "active").toLowerCase() !== "cancelled"
+    const used = schedules.some(
+      (schedule) =>
+        (schedule.routeId || schedule.assignedRouteId) === route.id &&
+        String(schedule.status || "active").toLowerCase() !== "cancelled",
+    );
+    if (used) {
+      return alert(
+        "This route is used by an active schedule. Reassign or cancel that schedule first.",
       );
-    });
-
-    if (activeSchedules.length > 0) {
-      alert(
-        `This route is used by ${activeSchedules.length} schedule(s). Delete or reassign those schedules first.`,
-      );
-      return;
     }
+    if (!window.confirm(`Delete “${route.routeName || "this route"}”?`)) return;
 
-    if (!window.confirm(`Delete “${route.routeName || "this route"}”?`)) {
-      return;
-    }
-
-    const rootUpdates: Record<string, unknown> = {
+    const updates: Record<string, unknown> = {
       [`routes/${route.id}`]: null,
     };
-
     if (route.assignedDriverId) {
-      rootUpdates[`drivers/${route.assignedDriverId}/assignedRouteId`] = null;
-      rootUpdates[`drivers/${route.assignedDriverId}/assignedRouteName`] = null;
+      updates[`drivers/${route.assignedDriverId}/assignedRouteId`] = null;
+      updates[`drivers/${route.assignedDriverId}/assignedRouteName`] = null;
     }
-
-    getRouteBarangays(route).forEach((barangay) => {
-      rootUpdates[
+    normalizeArray(route.barangays).forEach((barangay) => {
+      updates[
         `barangay_assignments/${makeBarangayKey(barangay)}/${route.id}`
       ] = null;
     });
 
-    try {
-      await update(ref(db), rootUpdates);
-      setSuccessMessage("Route deleted successfully.");
-    } catch (error) {
-      console.error("Unable to delete route", error);
-      alert("Unable to delete the route.");
-    }
+    await update(ref(db), updates);
+    setNotice("Route assignment deleted.");
   };
 
   return (
     <DashboardShell
       title="Routes & Assignments"
-      description="Choose one or more Barangays and Puroks, then assign the responsible driver."
+      description="Assign a driver and truck to selected Barangays and Puroks. No map points are required."
     >
-      <div className="route-page">
-        {successMessage ? (
-          <div className="success-banner reveal reveal-2">
-            <span>{successMessage}</span>
-            <button type="button" onClick={() => setSuccessMessage("")}>
-              ×
-            </button>
+      <main className="route-page">
+        {notice ? (
+          <div className="notice">
+            <span>✓ {notice}</span>
+            <button type="button" onClick={() => setNotice("")}>×</button>
           </div>
         ) : null}
 
-        <section className="metrics-grid reveal reveal-2">
-          <Metric
-            icon={<RouteIcon />}
-            tone="green"
-            label="Total routes"
-            value={routes.length}
-            hint="Saved service areas"
-          />
-          <Metric
-            icon={<ReadyIcon />}
-            tone="blue"
-            label="Ready"
-            value={
-              routes.filter((route) => getRoutePuroks(route).length > 0).length
-            }
-            hint="Barangays and Puroks configured"
-          />
-          <Metric
-            icon={<DriverIcon />}
-            tone="amber"
-            label="Drivers assigned"
-            value={routes.filter((route) => route.assignedDriverId).length}
-            hint="Operational ownership"
-          />
-          <Metric
-            icon={<CalendarIcon />}
-            tone="purple"
-            label="Used by schedules"
-            value={routesWithSchedules}
-            hint="Linked weekly schedules"
-          />
+        <section className="route-summary">
+          <div><span>Total assignments</span><strong>{routes.length}</strong></div>
+          <div><span>Ready</span><strong>{routes.filter(isAssignmentReady).length}</strong></div>
+          <div><span>Needs review</span><strong>{routes.filter((route) => !isAssignmentReady(route)).length}</strong></div>
         </section>
 
-        <section className="route-card reveal reveal-3">
-          <div className="table-toolbar">
+        <section className="route-card">
+          <header className="toolbar">
             <div>
-              <h3>Route assignments</h3>
-              <p>No drawn path is required.</p>
+              <h2>Route assignments</h2>
+              <p>Coverage is based only on the selected Barangays and Puroks.</p>
             </div>
-
             <div className="toolbar-actions">
-              <div className="search-wrap">
-                <span className="search-icon">
-                  <SearchIcon />
-                </span>
-                <input
-                  type="search"
-                  placeholder="Search route, Barangay, Purok, driver..."
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                />
-              </div>
-
-              <button
-                type="button"
-                className="create-route-btn"
-                onClick={openCreateEditor}
-              >
-                <span aria-hidden="true">＋</span>
-                Create Route
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search route or driver"
+              />
+              <button className="primary" type="button" onClick={openCreateEditor}>
+                ＋ Create assignment
               </button>
             </div>
-          </div>
+          </header>
 
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Route</th>
-                  <th>Barangays</th>
-                  <th>Purok coverage</th>
-                  <th>Driver / Truck</th>
+                  <th>Assignment</th>
+                  <th>Coverage</th>
+                  <th>Driver / truck</th>
                   <th>Status</th>
                   <th>Updated</th>
-                  <th>Actions</th>
+                  <th />
                 </tr>
               </thead>
-
               <tbody>
-                {filteredRoutes.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="empty-state">
-                      No route assignments found.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredRoutes.map((route, index) => {
-                    const puroks = getRoutePuroks(route);
-
+                {filteredRoutes.length ? (
+                  filteredRoutes.map((route) => {
+                    const areas = getRouteAreas(route);
                     return (
-                      <tr
-                        key={route.id}
-                        className="row-fade"
-                        style={{ animationDelay: `${index * 40}ms` }}
-                      >
-                        <td>
-                          <div className="route-info">
-                            <span className="route-symbol">
-                              <RouteIcon />
-                            </span>
-                            <div>
-                              <strong>
-                                {route.routeName || "Unnamed route"}
-                              </strong>
-                              <small>{route.id}</small>
-                            </div>
-                          </div>
-                        </td>
-
-                        <td>
-                          <div className="barangay-list">
-                            {getRouteBarangays(route).map((barangay) => (
-                              <span key={barangay}>{barangay}</span>
-                            ))}
-                          </div>
-                        </td>
-
-                        <td>
-                          <div className="purok-list">
-                            {puroks.map((purok) => (
-                              <span key={purok}>{purok}</span>
-                            ))}
-                          </div>
-                        </td>
-
-                        <td>
-                          <div className="driver-cell">
-                            <span className="truck-symbol">
-                              <TruckIcon />
-                            </span>
-                            <div>
-                              <strong>
-                                {route.assignedDriverName || "Unassigned"}
-                              </strong>
-                              <small>
-                                {route.assignedVehicle || "No truck assigned"}
-                              </small>
-                            </div>
-                          </div>
-                        </td>
-
-                        <td>
-                          <span className="status-pill">
-                            <i />
-                            {String(route.status || "ready")}
-                          </span>
-                        </td>
-
-                        <td>
-                          {formatDate(route.updatedAt || route.createdAt)}
-                        </td>
-
-                        <td>
-                          <div className="table-actions">
-                            <button
-                              type="button"
-                              onClick={() => openEditEditor(route)}
-                            >
-                              <PencilIcon />
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              className="danger"
-                              onClick={() => deleteRoute(route)}
-                            >
-                              <TrashIcon />
-                              Delete
-                            </button>
-                          </div>
-                        </td>
+                      <tr key={route.id}>
+                        <td><strong>{route.routeName || "Unnamed assignment"}</strong><small>{route.id}</small></td>
+                        <td><span>{areas.length} Barangay/Purok area{areas.length === 1 ? "" : "s"}</span><small>{normalizeArray(route.barangays).join(" • ") || route.barangay || "No coverage"}</small></td>
+                        <td><strong>{route.assignedDriverName || "Unassigned"}</strong><small>{route.assignedVehicle || "No truck"}</small></td>
+                        <td><span className={isAssignmentReady(route) ? "status ready" : "status review"}>{isAssignmentReady(route) ? "Ready" : "Needs review"}</span></td>
+                        <td>{formatDate(route.updatedAt || route.createdAt)}</td>
+                        <td><div className="row-actions"><button type="button" onClick={() => openEditEditor(route)}>Edit</button><button type="button" className="danger" onClick={() => void deleteRoute(route)}>Delete</button></div></td>
                       </tr>
                     );
                   })
+                ) : (
+                  <tr><td colSpan={6} className="empty">No route assignments found.</td></tr>
                 )}
               </tbody>
             </table>
           </div>
-
-          <div className="table-footer">
-            <p>
-              Showing {filteredRoutes.length === 0 ? 0 : 1} to{" "}
-              {filteredRoutes.length} of {filteredRoutes.length} routes
-            </p>
-
-            <div className="pagination">
-              <button type="button" disabled aria-label="Previous page">
-                <PrevIcon />
-              </button>
-              <button type="button" className="current" aria-current="page">
-                1
-              </button>
-              <button type="button" disabled aria-label="Next page">
-                <NextIcon />
-              </button>
-            </div>
-          </div>
         </section>
 
         {editorOpen ? (
-          <div className="modal-backdrop" role="presentation">
+          <div
+            className="modal"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) closeEditor();
+            }}
+          >
             <section
               className="editor"
               role="dialog"
               aria-modal="true"
-              aria-labelledby="route-editor-title"
+              aria-label="Route assignment editor"
             >
-              <header className="editor-header">
+              <header className="editor-head">
                 <div>
-                  <span className="editor-kicker">
-                    {editingRouteId ? "EDIT ROUTE" : "NEW ROUTE"}
-                  </span>
-                  <h2 id="route-editor-title">
+                  <span>{editingRouteId ? "EDIT ROUTE" : "NEW ROUTE"}</span>
+                  <h2>
                     {editingRouteId
-                      ? "Update service area route"
+                      ? "Edit service area route"
                       : "Create service area route"}
                   </h2>
                   <p>
-                    Select one or more Barangays, the covered Puroks, and the
-                    assigned driver. The map previews every selected area.
+                    Barangays and Puroks load directly from Service Areas. Select
+                    the coverage, assign a driver, then verify it on the larger map.
                   </p>
                 </div>
-                <button type="button" onClick={closeEditor} aria-label="Close">
+                <button
+                  className="editor-close"
+                  type="button"
+                  onClick={closeEditor}
+                  aria-label="Close route editor"
+                >
                   ×
                 </button>
               </header>
 
               <div className="editor-body">
-                <div className="form-grid">
-                  <label>
+                <div className="editor-form-column">
+                  <div className="assignment-grid">
+                  <label className="field route-name-field">
                     <span>Route name</span>
                     <input
                       value={form.routeName}
@@ -1027,106 +1226,92 @@ export default function RoutesPage() {
                     />
                   </label>
 
-                  <div
-                    className="field-group barangay-field"
-                    ref={barangayPickerRef}
-                  >
-                    <span className="field-label">Barangays</span>
-                    <button
-                      type="button"
-                      className={`multi-select-trigger ${barangayPickerOpen ? "open" : ""}`}
-                      aria-haspopup="listbox"
-                      aria-expanded={barangayPickerOpen}
-                      onClick={() => setBarangayPickerOpen((open) => !open)}
-                    >
-                      <span>
-                        {selectedBarangays.length === 0
-                          ? "Select one or more Barangays"
-                          : selectedBarangays.length === 1
-                            ? selectedBarangays[0]
-                            : `${selectedBarangays.length} Barangays selected`}
-                      </span>
-                      <strong>{selectedBarangays.length || ""}</strong>
-                      <i aria-hidden="true">⌄</i>
-                    </button>
-
-                    {barangayPickerOpen ? (
-                      <div
-                        className="multi-select-menu"
-                        role="listbox"
-                        aria-label="Select route Barangays"
-                        aria-multiselectable="true"
+                  <div className="field barangay-field">
+                    <span>Barangays</span>
+                    <div className="barangay-picker" ref={barangayPickerRef}>
+                      <button
+                        className="picker-trigger"
+                        type="button"
+                        onClick={() =>
+                          setBarangayMenuOpen((current) => !current)
+                        }
+                        aria-expanded={barangayMenuOpen}
+                        disabled={!configuredBarangays.length}
                       >
-                        <div className="multi-select-menu-head">
-                          <span>Service areas</span>
-                          <button type="button" onClick={selectAllBarangays}>
-                            {selectedBarangays.length === BARANGAYS.length
-                              ? "Clear all"
-                              : "Select all"}
-                          </button>
-                        </div>
+                        <strong>
+                          {selectedBarangays.length
+                            ? `${selectedBarangays.length} Barangay${selectedBarangays.length === 1 ? "" : "s"} selected`
+                            : configuredBarangays.length
+                              ? "Select Barangays"
+                              : "No active Service Areas"}
+                        </strong>
+                        <span className="picker-meta">
+                          {selectedBarangays.length ? (
+                            <b>{selectedBarangays.length}</b>
+                          ) : null}
+                          <i>{barangayMenuOpen ? "⌃" : "⌄"}</i>
+                        </span>
+                      </button>
 
-                        {BARANGAYS.map((barangay) => {
-                          const selected = selectedBarangays.includes(barangay);
-                          return (
+                      {selectedBarangays.length ? (
+                        <div className="barangay-chips">
+                          {selectedBarangays.map((barangay) => (
                             <button
-                              key={barangay}
                               type="button"
-                              className={`multi-select-option ${selected ? "selected" : ""}`}
-                              role="option"
-                              aria-selected={selected}
+                              key={barangay}
                               onClick={() => toggleBarangay(barangay)}
+                              title={`Remove ${barangay}`}
                             >
-                              <span className="check-box">
-                                {selected ? "✓" : ""}
-                              </span>
-                              <span>{barangay}</span>
+                              {barangay} <span>×</span>
                             </button>
-                          );
-                        })}
+                          ))}
+                        </div>
+                      ) : null}
 
-                        <button
-                          type="button"
-                          className="multi-select-done"
-                          onClick={() => setBarangayPickerOpen(false)}
-                        >
-                          Done
-                        </button>
-                      </div>
-                    ) : null}
-
-                    {selectedBarangays.length > 0 ? (
-                      <div
-                        className="selected-barangay-chips"
-                        aria-label="Selected Barangays"
-                      >
-                        {selectedBarangays.map((barangay) => (
-                          <button
-                            key={barangay}
-                            type="button"
-                            onClick={() => toggleBarangay(barangay)}
-                            aria-label={`Remove ${barangay}`}
-                          >
-                            {barangay}
-                            <span aria-hidden="true">×</span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
+                      {barangayMenuOpen ? (
+                        <div className="barangay-menu">
+                          <div className="barangay-menu-head">
+                            <span>{configuredBarangays.length} from Service Areas</span>
+                            <button type="button" onClick={toggleAllBarangays}>
+                              {selectedBarangays.length === configuredBarangays.length
+                                ? "Clear all"
+                                : "Select all"}
+                            </button>
+                          </div>
+                          <div className="barangay-options">
+                            {configuredBarangays.map((barangay) => {
+                              const selected = selectedBarangays.includes(barangay);
+                              return (
+                                <button
+                                  type="button"
+                                  className={selected ? "selected" : ""}
+                                  key={barangay}
+                                  onClick={() => toggleBarangay(barangay)}
+                                >
+                                  <span className="picker-check">
+                                    {selected ? "✓" : ""}
+                                  </span>
+                                  <strong>{barangay}</strong>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
 
-                  <label>
+                  <label className="field">
                     <span>Assigned driver</span>
                     <select
                       value={form.assignedDriverId}
                       onChange={(event) => {
-                        const driverId = event.target.value;
                         const driver = drivers.find(
-                          (item) => item.id === driverId,
+                          (item) => item.id === event.target.value,
                         );
                         setForm((current) => ({
                           ...current,
-                          assignedDriverId: driverId,
+                          assignedDriverId: event.target.value,
                           assignedVehicle:
                             current.assignedVehicle || driver?.truck || "",
                         }));
@@ -1136,13 +1321,12 @@ export default function RoutesPage() {
                       {activeDrivers.map((driver) => (
                         <option key={driver.id} value={driver.id}>
                           {driver.name || driver.id}
-                          {driver.truck ? ` — ${driver.truck}` : ""}
                         </option>
                       ))}
                     </select>
                   </label>
 
-                  <label>
+                  <label className="field">
                     <span>Truck / plate number</span>
                     <input
                       value={form.assignedVehicle}
@@ -1157,1213 +1341,980 @@ export default function RoutesPage() {
                   </label>
                 </div>
 
-                <div className="purok-panel">
-                  <div className="panel-heading">
+                  <section className="purok-panel">
+                    <header>
+                      <div>
+                        <h3>Purok coverage</h3>
+                        <p>
+                          {!selectedBarangays.length
+                            ? "Select Barangays first. Puroks are loaded from Service Areas."
+                            : availablePurokKeys.length
+                              ? "Only Puroks active in every selected Barangay can be assigned."
+                              : "The selected Barangays do not share an active Purok in Service Areas."}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={toggleAllPuroks}
+                        disabled={!availablePurokKeys.length}
+                      >
+                        {availablePurokKeys.length > 0 &&
+                        selectedPurokKeys.length === availablePurokKeys.length
+                          ? "Clear all"
+                          : "Select all"}
+                      </button>
+                    </header>
+                    <div className="purok-grid">
+                      {PUROK_OPTIONS.map((option) => {
+                        const selected = selectedPurokKeys.includes(option.key);
+                        const available = availablePurokKeys.includes(option.key);
+                        return (
+                          <button
+                            type="button"
+                            className={`${selected ? "selected" : ""} ${
+                              !available ? "unavailable" : ""
+                            }`}
+                            key={option.key}
+                            onClick={() => togglePurok(option.key)}
+                            disabled={!available}
+                            title={
+                              available
+                                ? `${option.label} is active in every selected Barangay`
+                                : `${option.label} is not available for all selected Barangays`
+                            }
+                          >
+                            <span>{selected ? "✓" : available ? "+" : "–"}</span>
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+
+                  <div className="service-area-source">
+                    <span>✓</span>
                     <div>
-                      <h3>Purok coverage</h3>
+                      <strong>Coverage source: Service Areas</strong>
                       <p>
-                        Select Purok 1 to Purok 10. This coverage applies to
-                        every selected Barangay.
+                        Route Assignment does not create new Barangays or Puroks.
+                        Add or activate them in Service Areas first.
                       </p>
                     </div>
-                    <button type="button" onClick={selectAllPuroks}>
-                      {selectedPuroks.length === PUROKS.length
-                        ? "Clear all"
-                        : "Select all"}
-                    </button>
-                  </div>
-
-                  <div className="purok-grid">
-                    {PUROKS.map((purok) => {
-                      const selected = selectedPuroks.includes(purok);
-                      return (
-                        <button
-                          key={purok}
-                          type="button"
-                          className={selected ? "selected" : ""}
-                          aria-pressed={selected}
-                          onClick={() => togglePurok(purok)}
-                        >
-                          <span>{selected ? "✓" : "+"}</span>
-                          {purok}
-                        </button>
-                      );
-                    })}
                   </div>
                 </div>
 
-                <div className="map-panel">
-                  <div className="map-heading">
-                    <div>
-                      <h3>Barangay map preview</h3>
-                      <p>
-                        {selectedBarangays.length > 0
-                          ? `Showing ${selectedBarangays.length} selected Barangay${selectedBarangays.length === 1 ? "" : "s"}.`
-                          : "Select at least one Barangay to focus the map."}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={focusSelectedBarangays}
-                      disabled={!mapReady}
-                    >
-                      Recenter map
-                    </button>
-                  </div>
-
-                  <div
-                    ref={mapContainerRef}
-                    className="barangay-map"
-                    aria-label={
-                      selectedBarangays.length > 0
-                        ? `Map showing ${selectedBarangays.join(", ")}`
-                        : "Catbalogan City map"
-                    }
-                  />
-
-                  <p className="map-disclaimer">
-                    This map is for visual reference only. It does not require
-                    route drawing, checkpoints, or Purok pins.
-                  </p>
-                </div>
-
-                <div className="info-card">
-                  <strong>Area-based route assignment</strong>
-                  <p>
-                    Saving records all selected Barangays, the shared Purok
-                    coverage, driver, and truck. The first Barangay is also kept
-                    as the legacy primary area for older app versions.
-                  </p>
-                </div>
+                <RouteMapPreview
+                  points={selectedBarangayMapPoints}
+                  selectedBarangayCount={selectedBarangays.length}
+                />
               </div>
 
-              <footer className="editor-footer">
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={closeEditor}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="primary"
-                  disabled={saving}
-                  onClick={saveRoute}
-                >
-                  {saving
-                    ? "Saving..."
-                    : editingRouteId
-                      ? "Save Changes"
-                      : "Create Route"}
-                </button>
+              <footer className="editor-foot">
+                <div className="editor-selection-summary">
+                  <strong>{selectedBarangays.length}</strong> Barangay
+                  {selectedBarangays.length === 1 ? "" : "s"} ·{` `}
+                  <strong>{selectedPurokKeys.length}</strong> Purok
+                  {selectedPurokKeys.length === 1 ? "" : "s"} ·{` `}
+                  <strong>{selectedServiceAreas.length}</strong> coverage area
+                  {selectedServiceAreas.length === 1 ? "" : "s"}
+                </div>
+                <div>
+                  <button type="button" onClick={closeEditor}>
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={
+                      saving ||
+                      !form.routeName.trim() ||
+                      !form.assignedDriverId ||
+                      !selectedServiceAreas.length
+                    }
+                    onClick={() => void saveRoute()}
+                  >
+                    {saving ? "Saving…" : "Save route assignment"}
+                  </button>
+                </div>
               </footer>
             </section>
           </div>
         ) : null}
+      </main>
 
-        <style jsx global>{`
-          .route-page {
-            width: 100%;
-            max-width: 1680px;
-            margin: 0 auto;
-            display: grid;
-            gap: 16px;
-            color: #16291f;
-          }
+      <style jsx global>{`
+        .route-page {
+          max-width: 1500px;
+          margin: 0 auto;
+          display: grid;
+          gap: 16px;
+          color: #172a20;
+        }
 
-          .reveal {
-            opacity: 0;
-            transform: translateY(10px);
-            animation: revealIn 0.42s cubic-bezier(0.2, 0.75, 0.25, 1) forwards;
-          }
+        .notice {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 13px 15px;
+          border: 1px solid #a7dfbd;
+          border-radius: 12px;
+          background: #f0fdf4;
+          color: #166534;
+        }
 
-          .reveal-1 {
-            animation-delay: 20ms;
-          }
-          .reveal-2 {
-            animation-delay: 80ms;
-          }
-          .reveal-3 {
-            animation-delay: 140ms;
-          }
+        .notice button {
+          border: 0;
+          background: transparent;
+          font-size: 22px;
+          cursor: pointer;
+        }
 
-          @keyframes revealIn {
-            to {
-              opacity: 1;
-              transform: translateY(0);
-            }
-          }
-          .success-banner {
-            display: flex;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 14px 16px;
-            border: 1px solid #b8e7c4;
-            border-radius: 14px;
-            background: #f0fdf4;
-            color: #166534;
-          }
+        .route-summary {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 14px;
+        }
 
-          .success-banner button {
-            border: 0;
-            background: transparent;
-            color: inherit;
-            font-size: 20px;
-            cursor: pointer;
-          }
+        .route-summary div {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 18px;
+          border: 1px solid #dce7e0;
+          border-radius: 15px;
+          background: #fff;
+        }
 
-          .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 14px;
-          }
+        .route-summary span {
+          color: #64776c;
+          font-size: 12px;
+          font-weight: 800;
+        }
 
-          .metric-card {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            min-height: 102px;
-            padding: 17px 18px;
-            border: 1px solid #dfe8e2;
-            border-radius: 16px;
-            background: #ffffff;
-            box-shadow: 0 6px 18px rgba(16, 35, 27, 0.045);
-            transition:
-              transform 0.16s ease,
-              box-shadow 0.16s ease;
-          }
+        .route-summary strong {
+          order: -1;
+          color: #168a4a;
+          font-size: 27px;
+        }
 
-          .metric-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 12px 26px rgba(16, 35, 27, 0.08);
-          }
+        .route-card {
+          overflow: hidden;
+          border: 1px solid #dce7e0;
+          border-radius: 17px;
+          background: #fff;
+        }
 
-          .metric-icon {
-            width: 54px;
-            height: 54px;
-            flex: 0 0 54px;
-            display: grid;
-            place-items: center;
-            border-radius: 16px;
-          }
+        .toolbar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 18px;
+          padding: 18px;
+          border-bottom: 1px solid #e4ece7;
+        }
 
-          .metric-icon.green {
-            background: #eaf5ee;
-            color: #1b9656;
-          }
+        .toolbar h2,
+        .toolbar p {
+          margin: 0;
+        }
 
-          .metric-icon.blue {
-            background: #e8f1fb;
-            color: #2276b7;
-          }
+        .toolbar p {
+          margin-top: 5px;
+          color: #718078;
+          font-size: 13px;
+        }
 
-          .metric-icon.amber {
-            background: #fff3da;
-            color: #c28411;
-          }
+        .toolbar-actions {
+          display: flex;
+          gap: 10px;
+        }
 
-          .metric-icon.purple {
-            background: #f0e8fb;
-            color: #7960c9;
-          }
+        .toolbar input {
+          min-height: 44px;
+          border: 1px solid #cedbd3;
+          border-radius: 10px;
+          padding: 0 12px;
+          background: #fff;
+          color: #16291f;
+        }
 
-          .metric-icon svg {
-            width: 26px !important;
-            height: 26px !important;
-            fill: currentColor;
-          }
+        .primary {
+          border: 1px solid #168a4a !important;
+          background: #168a4a !important;
+          color: #fff !important;
+          font-weight: 850;
+        }
 
-          .metric-copy {
-            min-width: 0;
-            display: grid;
-            gap: 4px;
-          }
+        .toolbar button,
+        .editor-foot button {
+          min-height: 44px;
+          border: 1px solid #d4dfd8;
+          border-radius: 10px;
+          padding: 0 15px;
+          background: #fff;
+          cursor: pointer;
+        }
 
-          .metric-copy span {
-            color: #4e6258;
-            font-size: 14px;
-            font-weight: 800;
-          }
+        .primary:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
 
-          .metric-copy strong {
-            color: #13261d;
-            font-size: 22px;
-            line-height: 1;
-          }
+        .table-wrap {
+          overflow: auto;
+        }
 
-          .metric-copy small {
-            color: #75857c;
-            font-size: 12px;
-          }
+        .route-card table {
+          width: 100%;
+          border-collapse: collapse;
+        }
 
-          .route-card {
-            overflow: hidden;
-            border: 1px solid #dfe7e2;
-            border-radius: 18px;
-            background: #ffffff;
-            box-shadow: 0 8px 24px rgba(16, 35, 27, 0.045);
-          }
+        .route-card th,
+        .route-card td {
+          padding: 14px 16px;
+          border-bottom: 1px solid #e8eeea;
+          text-align: left;
+          font-size: 13px;
+        }
 
-          .table-toolbar {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 16px;
-            padding: 16px 18px;
-            border-bottom: 1px solid #e7ede9;
-          }
+        .route-card th {
+          color: #62736a;
+          background: #f8fbf9;
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+        }
 
-          .table-toolbar h3,
-          .table-toolbar p {
-            margin: 0;
-          }
+        .route-card td strong,
+        .route-card td small {
+          display: block;
+        }
 
-          .table-toolbar h3 {
-            color: #16291f;
-            font-size: 24px;
-            line-height: 1.2;
-          }
+        .route-card td small {
+          margin-top: 4px;
+          color: #718078;
+        }
 
-          .table-toolbar p {
-            margin-top: 6px;
-            color: #71827a;
-            font-size: 13px;
-          }
+        .status {
+          display: inline-flex;
+          padding: 6px 9px;
+          border-radius: 999px;
+          font-weight: 850;
+        }
 
-          .search-wrap {
-            width: min(360px, 100%);
-            height: 42px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 0 13px;
-            border: 1px solid #d5dfd9;
-            border-radius: 12px;
-            background: #ffffff;
-          }
+        .status.ready {
+          background: #e8f7ee;
+          color: #137744;
+        }
 
-          .search-icon {
-            width: 18px;
-            height: 18px;
-            color: #85928b;
-            flex: 0 0 18px;
-          }
+        .status.review {
+          background: #fff0e6;
+          color: #b45309;
+        }
 
-          .search-icon svg {
-            width: 18px !important;
-            height: 18px !important;
-            fill: currentColor;
-          }
+        .row-actions {
+          display: flex;
+          gap: 7px;
+        }
 
-          .search-wrap input {
-            width: 100%;
-            border: 0;
-            outline: 0;
-            color: #1a2f25;
-            background: transparent;
-            font-size: 14px;
-          }
+        .row-actions button {
+          border: 1px solid #d4dfd8;
+          border-radius: 8px;
+          padding: 7px 9px;
+          background: #fff;
+          cursor: pointer;
+        }
 
-          .search-wrap input::placeholder {
-            color: #87968e;
-          }
+        .danger {
+          color: #b42318 !important;
+        }
 
-          .toolbar-actions {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-          }
+        .empty {
+          padding: 28px !important;
+          color: #718078;
+          text-align: center !important;
+        }
 
-          .create-route-btn {
-            min-height: 42px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 7px;
-            padding: 0 15px;
-            border: 1px solid #168a4a;
-            border-radius: 11px;
-            background: #168a4a;
-            color: #ffffff;
-            font-size: 13px;
-            font-weight: 900;
-            white-space: nowrap;
-            cursor: pointer;
-            box-shadow: 0 7px 16px rgba(22, 138, 74, 0.14);
-            transition:
-              transform 0.15s ease,
-              background 0.15s ease,
-              box-shadow 0.15s ease;
-          }
+        .modal {
+          position: fixed;
+          inset: 0;
+          z-index: 5000;
+          display: grid;
+          place-items: center;
+          padding: 18px;
+          background: rgba(15, 27, 21, 0.58);
+          backdrop-filter: blur(5px);
+        }
 
-          .create-route-btn:hover {
-            transform: translateY(-1px);
-            background: #117a42;
-            box-shadow: 0 10px 19px rgba(22, 138, 74, 0.2);
-          }
+        .editor {
+          width: min(1320px, calc(100vw - 42px));
+          height: min(840px, calc(100vh - 36px));
+          max-height: 96vh;
+          display: grid;
+          grid-template-rows: auto minmax(0, 1fr) auto;
+          overflow: hidden;
+          border: 1px solid #d6e2da;
+          border-radius: 20px;
+          background: #f8fbf9;
+          box-shadow: 0 28px 90px rgba(7, 20, 13, 0.34);
+        }
 
-          .table-wrap {
-            overflow-x: auto;
-          }
+        .editor-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 18px;
+          padding: 18px 22px 16px;
+          border-bottom: 1px solid #e2ebe5;
+          background: #fff;
+        }
 
-          table {
-            width: 100%;
-            border-collapse: collapse;
-            min-width: 1020px;
-          }
+        .editor-head > div {
+          min-width: 0;
+        }
 
-          th,
-          td {
-            padding: 15px 16px;
-            border-bottom: 1px solid #edf1ee;
-            text-align: left;
-            vertical-align: middle;
-            font-size: 14px;
-          }
+        .editor-head > div > span {
+          display: block;
+          color: #168a4a;
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: 0.16em;
+        }
 
-          th {
-            color: #4f705c;
-            background: #f7faf8;
-            font-size: 11px;
-            font-weight: 900;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-          }
+        .editor-head h2,
+        .editor-head p {
+          margin: 0;
+        }
 
-          td strong,
-          td small {
-            display: block;
-          }
+        .editor-head h2 {
+          margin-top: 5px;
+          color: #102b1d;
+          font-size: 22px;
+          line-height: 1.2;
+        }
 
-          td small {
-            margin-top: 4px;
-            color: #7b8a82;
-            font-size: 12px;
-          }
+        .editor-head p {
+          max-width: 900px;
+          margin-top: 7px;
+          color: #65776d;
+          font-size: 13px;
+          line-height: 1.45;
+        }
 
-          .row-fade {
-            opacity: 0;
-            transform: translateY(6px);
-            animation: rowFade 0.3s ease forwards;
-          }
+        .editor-close {
+          width: 38px;
+          height: 38px;
+          display: grid;
+          place-items: center;
+          flex: 0 0 auto;
+          border: 0;
+          border-radius: 50%;
+          background: #f1f5f2;
+          color: #56665d;
+          font-size: 20px;
+          cursor: pointer;
+        }
 
-          @keyframes rowFade {
-            to {
-              opacity: 1;
-              transform: translateY(0);
-            }
-          }
+        .editor-close:hover {
+          background: #e9efeb;
+          color: #21362a;
+        }
 
-          .route-info,
-          .driver-cell {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-          }
+        .editor-body {
+          min-height: 0;
+          overflow: hidden;
+          display: grid;
+          grid-template-columns: minmax(500px, 0.9fr) minmax(0, 1.25fr);
+          gap: 18px;
+          padding: 18px;
+          background: #f8fbf9;
+        }
 
-          .route-symbol,
-          .truck-symbol {
-            width: 34px;
-            height: 34px;
-            flex: 0 0 34px;
-            display: grid;
-            place-items: center;
-            border-radius: 12px;
-            background: #eaf5ee;
-            color: #1b9656;
-          }
+        .editor-form-column {
+          min-width: 0;
+          min-height: 0;
+          overflow: auto;
+          display: grid;
+          align-content: start;
+          gap: 15px;
+          padding: 1px 2px 1px 1px;
+        }
 
-          .truck-symbol {
-            background: #edf5ee;
-            border-radius: 11px;
-          }
+        .assignment-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          gap: 13px;
+          align-items: start;
+          padding: 16px;
+          border: 1px solid #d9e5dd;
+          border-radius: 15px;
+          background: #fff;
+        }
 
-          .route-symbol svg,
-          .truck-symbol svg {
-            width: 20px !important;
-            height: 20px !important;
-            fill: currentColor;
-          }
+        .field {
+          min-width: 0;
+          display: grid;
+          gap: 7px;
+          color: #253d30;
+          font-size: 11px;
+          font-weight: 850;
+        }
 
-          .barangay-list,
-          .purok-list {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            max-width: 320px;
-          }
+        .field > span {
+          line-height: 1.2;
+        }
 
-          .barangay-list span,
-          .purok-list span {
-            display: inline-flex;
-            border-radius: 999px;
-            padding: 5px 10px;
-            background: #ecf8ef;
-            color: #158d4d;
-            font-size: 12px;
-            font-weight: 800;
-          }
+        .field input,
+        .field select,
+        .picker-trigger {
+          width: 100%;
+          min-height: 45px;
+          border: 1px solid #cbd9d1;
+          border-radius: 10px;
+          padding: 0 12px;
+          outline: none;
+          background: #fff;
+          color: #172a20;
+          font: inherit;
+          font-size: 13px;
+          font-weight: 500;
+          transition: border-color 0.16s ease, box-shadow 0.16s ease;
+        }
 
-          .barangay-list span {
-            background: #eff6ff;
-            color: #1d4ed8;
-          }
+        .field input::placeholder {
+          color: #73827a;
+        }
 
-          .status-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 10px;
-            border-radius: 999px;
-            background: #eef8f0;
-            color: #1b9756;
-            font-size: 12px;
-            font-weight: 800;
-            text-transform: lowercase;
-          }
+        .field input:focus,
+        .field select:focus,
+        .picker-trigger:focus-visible {
+          border-color: #168a4a;
+          box-shadow: 0 0 0 3px rgba(22, 138, 74, 0.1);
+        }
 
-          .status-pill i {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: currentColor;
-          }
+        .route-name-field input {
+          min-height: 45px;
+          padding: 0 13px;
+        }
 
-          .table-actions {
-            display: flex;
-            gap: 9px;
-          }
+        .barangay-picker {
+          position: relative;
+          min-width: 0;
+          display: grid;
+          gap: 7px;
+        }
 
-          .table-actions button {
-            min-height: 34px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 7px;
-            padding: 0 12px;
-            border: 1px solid #c9ddd0;
-            border-radius: 10px;
-            background: #ffffff;
-            color: #168446;
-            font-size: 14px;
-            font-weight: 800;
-            cursor: pointer;
-          }
+        .picker-trigger {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          cursor: pointer;
+        }
 
-          .table-actions button svg {
-            width: 16px !important;
-            height: 16px !important;
-            fill: currentColor;
-          }
+        .picker-trigger:disabled {
+          cursor: not-allowed;
+          background: #f7f9f8;
+          color: #87958d;
+        }
 
-          .table-actions .danger {
-            border-color: #efc1ba;
-            color: #df3e35;
-          }
+        .picker-trigger > strong {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          font-size: 13px;
+        }
 
-          .empty-state {
-            padding: 56px;
-            text-align: center;
-            color: #77867e;
-          }
+        .picker-meta {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          flex: 0 0 auto;
+        }
 
-          .table-footer {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 20px;
-            padding: 12px 18px;
-          }
+        .picker-meta b {
+          min-width: 22px;
+          height: 22px;
+          display: grid;
+          place-items: center;
+          border-radius: 999px;
+          background: #eaf7ef;
+          color: #168a4a;
+          font-size: 10px;
+        }
 
-          .table-footer p {
-            margin: 0;
-            color: #6e7f76;
-            font-size: 13px;
-          }
+        .picker-meta i {
+          color: #53665b;
+          font-size: 14px;
+          font-style: normal;
+        }
 
-          .pagination {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-          }
+        .barangay-chips {
+          min-height: 27px;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
 
-          .pagination button {
-            width: 34px;
-            height: 34px;
-            border: 1px solid #d9e4dd;
-            border-radius: 10px;
-            background: #ffffff;
-            color: #9aa7a1;
-            display: grid;
-            place-items: center;
-            font-weight: 800;
-          }
+        .barangay-chips button {
+          min-height: 27px;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          border: 1px solid #b9d4ff;
+          border-radius: 999px;
+          padding: 3px 9px;
+          background: #edf5ff;
+          color: #1752c5;
+          font-size: 11px;
+          font-weight: 800;
+          cursor: pointer;
+        }
 
-          .pagination button svg {
-            width: 16px !important;
-            height: 16px !important;
-            fill: currentColor;
-          }
+        .barangay-chips button span {
+          font-size: 14px;
+          line-height: 1;
+        }
 
-          .pagination .current {
-            background: #1b9656;
-            color: #ffffff;
-            border-color: #1b9656;
-          }
+        .barangay-menu {
+          position: absolute;
+          top: 51px;
+          left: 0;
+          right: 0;
+          z-index: 30;
+          overflow: hidden;
+          border: 1px solid #cbd9d1;
+          border-radius: 12px;
+          background: #fff;
+          box-shadow: 0 16px 40px rgba(18, 46, 31, 0.18);
+        }
 
-          .modal-backdrop {
-            position: fixed;
-            inset: 0;
-            z-index: 1000;
-            display: grid;
-            place-items: center;
-            padding: 24px;
-            background: rgba(15, 23, 42, 0.5);
-            backdrop-filter: blur(5px);
-          }
+        .barangay-menu-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 10px 11px;
+          border-bottom: 1px solid #e7ede9;
+          background: #f8fbf9;
+        }
 
+        .barangay-menu-head span {
+          color: #718078;
+          font-size: 10px;
+          font-weight: 800;
+        }
+
+        .barangay-menu-head button {
+          border: 0;
+          background: transparent;
+          color: #168a4a;
+          font-size: 10px;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .barangay-options {
+          max-height: 235px;
+          overflow: auto;
+          padding: 6px;
+        }
+
+        .barangay-options > button {
+          width: 100%;
+          min-height: 38px;
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          border: 0;
+          border-radius: 8px;
+          padding: 0 8px;
+          background: #fff;
+          color: #2f4338;
+          text-align: left;
+          cursor: pointer;
+        }
+
+        .barangay-options > button:hover,
+        .barangay-options > button.selected {
+          background: #f0f8f3;
+          color: #126b3e;
+        }
+
+        .barangay-options > button strong {
+          font-size: 12px;
+        }
+
+        .picker-check {
+          width: 18px;
+          height: 18px;
+          display: grid;
+          place-items: center;
+          flex: 0 0 auto;
+          border: 1px solid #bfd0c6;
+          border-radius: 5px;
+          color: #fff;
+          font-size: 11px;
+        }
+
+        .barangay-options > button.selected .picker-check {
+          border-color: #168a4a;
+          background: #168a4a;
+        }
+
+        .purok-panel,
+        .route-map-preview {
+          overflow: hidden;
+          border: 1px solid #d9e5dd;
+          border-radius: 15px;
+          background: #fff;
+        }
+
+        .purok-panel {
+          padding: 15px;
+          background: #fff;
+        }
+
+        .purok-panel > header,
+        .route-map-preview > header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 14px;
+        }
+
+        .purok-panel h3,
+        .purok-panel p,
+        .route-map-preview h3,
+        .route-map-preview p {
+          margin: 0;
+        }
+
+        .purok-panel h3,
+        .route-map-preview h3 {
+          color: #163124;
+          font-size: 15px;
+        }
+
+        .purok-panel p,
+        .route-map-preview p {
+          margin-top: 5px;
+          color: #6d7c74;
+          font-size: 11px;
+          line-height: 1.4;
+        }
+
+        .purok-panel > header > button,
+        .route-map-preview > header > button {
+          min-height: 38px;
+          flex: 0 0 auto;
+          border: 1px solid #d4dfd8;
+          border-radius: 9px;
+          padding: 0 12px;
+          background: #fff;
+          color: #253c30;
+          font-size: 11px;
+          font-weight: 850;
+          cursor: pointer;
+        }
+
+        .route-map-preview > header > button:disabled,
+        .purok-panel > header > button:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .purok-grid {
+          display: grid;
+          grid-template-columns: repeat(5, minmax(0, 1fr));
+          gap: 8px;
+          margin-top: 14px;
+        }
+
+        .purok-grid > button {
+          min-height: 40px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 7px;
+          border: 1px solid #d5e0d9;
+          border-radius: 9px;
+          background: #fff;
+          color: #243a2e;
+          font-size: 11px;
+          font-weight: 800;
+          cursor: pointer;
+        }
+
+        .purok-grid > button:hover {
+          border-color: #a8c9b5;
+          background: #f7fbf8;
+        }
+
+        .purok-grid > button.selected {
+          border-color: #4ba976;
+          background: #eaf7ef;
+          color: #116b3d;
+          box-shadow: inset 0 0 0 1px rgba(22, 138, 74, 0.08);
+        }
+
+        .purok-grid > button.unavailable,
+        .purok-grid > button:disabled {
+          border-style: dashed;
+          border-color: #dfe6e1;
+          background: #f7f9f8;
+          color: #9aa69f;
+          cursor: not-allowed;
+          box-shadow: none;
+        }
+
+        .purok-grid > button span {
+          font-size: 12px;
+          line-height: 1;
+        }
+
+        .route-map-preview {
+          min-width: 0;
+          min-height: 0;
+          display: grid;
+          grid-template-rows: auto minmax(0, 1fr);
+          box-shadow: 0 8px 28px rgba(22, 52, 35, 0.06);
+        }
+
+        .route-map-preview > header {
+          padding: 16px 18px;
+          background: #fff;
+        }
+
+        .route-map-preview h3 {
+          font-size: 16px;
+        }
+
+        .route-map-canvas {
+          width: 100%;
+          height: 100%;
+          min-height: 500px;
+          border-top: 1px solid #e4ebe6;
+          background: #edf3ef;
+        }
+
+        .route-preview-marker {
+          position: relative;
+          width: 30px;
+          height: 30px;
+          display: grid;
+          place-items: center;
+          border: 3px solid #fff;
+          border-radius: 50%;
+          background: #2868df;
+          color: #fff;
+          box-shadow: 0 3px 10px rgba(18, 55, 122, 0.34);
+          cursor: pointer;
+        }
+
+        .route-preview-marker::after {
+          content: "";
+          position: absolute;
+          left: 50%;
+          bottom: -7px;
+          width: 0;
+          height: 0;
+          border-left: 6px solid transparent;
+          border-right: 6px solid transparent;
+          border-top: 8px solid #2868df;
+          transform: translateX(-50%);
+        }
+
+        .route-preview-marker--primary {
+          background: #18a85c;
+          box-shadow: 0 3px 10px rgba(16, 113, 61, 0.34);
+        }
+
+        .route-preview-marker--primary::after {
+          border-top-color: #18a85c;
+        }
+
+        .route-preview-marker span {
+          position: relative;
+          z-index: 1;
+          font-size: 10px;
+          font-weight: 900;
+          line-height: 1;
+        }
+
+        .route-map-preview .maplibregl-ctrl-top-left {
+          top: 8px;
+          left: 8px;
+        }
+
+        .route-map-preview .maplibregl-ctrl-group {
+          overflow: hidden;
+          border-radius: 7px;
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+        }
+
+        .service-area-source {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          padding: 12px 13px;
+          border: 1px solid #bcdcc8;
+          border-radius: 12px;
+          background: #f2fbf5;
+        }
+
+        .service-area-source > span {
+          width: 24px;
+          height: 24px;
+          display: grid;
+          place-items: center;
+          flex: 0 0 auto;
+          border-radius: 7px;
+          background: #168a4a;
+          color: #fff;
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .service-area-source strong {
+          display: block;
+          color: #1a3b2a;
+          font-size: 11px;
+        }
+
+        .service-area-source p {
+          margin: 3px 0 0;
+          color: #63766b;
+          font-size: 10px;
+          line-height: 1.4;
+        }
+
+        .editor-foot {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          padding: 13px 22px;
+          border-top: 1px solid #dfe8e2;
+          background: #fff;
+        }
+
+        .editor-foot > div:last-child {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+        }
+
+        .editor-selection-summary {
+          color: #738078;
+          font-size: 11px;
+        }
+
+        .editor-selection-summary strong {
+          color: #244032;
+        }
+
+        @media (max-height: 720px) and (min-width: 1121px) {
           .editor {
-            width: min(980px, 100%);
-            max-height: calc(100dvh - 48px);
-            overflow: auto;
-            border-radius: 22px;
-            background: #ffffff;
-            box-shadow: 0 28px 90px rgba(15, 23, 42, 0.28);
-            animation: modalIn 0.28s ease;
+            height: calc(100vh - 24px);
           }
 
-          @keyframes modalIn {
-            from {
-              opacity: 0;
-              transform: translateY(10px) scale(0.985);
-            }
-            to {
-              opacity: 1;
-              transform: translateY(0) scale(1);
-            }
+          .route-map-canvas {
+            min-height: 360px;
           }
+        }
 
-          .editor-header,
-          .editor-footer {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            padding: 20px 22px;
-          }
-
-          .editor-header {
-            border-bottom: 1px solid #e8eeea;
-          }
-
-          .editor-footer {
-            justify-content: flex-end;
-            border-top: 1px solid #e8eeea;
-          }
-
-          .editor-kicker {
-            color: #209657;
-            font-size: 11px;
-            font-weight: 900;
-            letter-spacing: 0.12em;
-          }
-
-          .editor-header h2,
-          .editor-header p {
-            margin: 0;
-          }
-
-          .editor-header h2 {
-            margin-top: 7px;
-            color: #173026;
-            font-size: 24px;
-          }
-
-          .editor-header p {
-            margin-top: 7px;
-            color: #6b7b72;
-            line-height: 1.5;
-          }
-
-          .editor-header > button {
-            width: 38px;
-            height: 38px;
-            border: 0;
-            border-radius: 50%;
-            background: #f1f5f3;
-            color: #2f4138;
-            font-size: 22px;
-            cursor: pointer;
+        @media (max-width: 1120px) {
+          .editor {
+            width: min(980px, calc(100vw - 24px));
+            height: auto;
+            max-height: 97vh;
           }
 
           .editor-body {
-            display: grid;
-            gap: 20px;
-            padding: 22px;
+            overflow: auto;
+            grid-template-columns: 1fr;
           }
 
-          .form-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 14px;
+          .editor-form-column {
+            overflow: visible;
           }
 
-          label {
-            display: grid;
-            gap: 7px;
+          .route-map-canvas {
+            height: 420px;
+            min-height: 420px;
+          }
+        }
+
+        @media (max-width: 900px) {
+          .route-summary,
+          .assignment-grid {
+            grid-template-columns: 1fr;
           }
 
-          label > span {
-            color: #34463c;
-            font-size: 12px;
-            font-weight: 800;
-          }
-
-          .field-group {
-            position: relative;
-            min-width: 0;
-            display: grid;
-            align-content: start;
-            gap: 7px;
-          }
-
-          .field-label {
-            color: #34463c;
-            font-size: 12px;
-            font-weight: 800;
-          }
-
-          .multi-select-trigger {
-            width: 100%;
-            min-height: 43px;
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto auto;
-            align-items: center;
-            gap: 9px;
-            padding: 10px 12px;
-            border: 1px solid #d5dfd9;
-            border-radius: 11px;
-            background: #ffffff;
-            color: #17231d;
-            text-align: left;
-            cursor: pointer;
-          }
-
-          .multi-select-trigger.open,
-          .multi-select-trigger:focus-visible {
-            border-color: #10b981;
-            outline: 0;
-            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
-          }
-
-          .multi-select-trigger > span {
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-          }
-
-          .multi-select-trigger strong {
-            min-width: 23px;
-            min-height: 23px;
-            display: grid;
-            place-items: center;
-            border-radius: 999px;
-            background: #e9f8ef;
-            color: #087443;
-            font-size: 11px;
-          }
-
-          .multi-select-trigger strong:empty {
-            display: none;
-          }
-
-          .multi-select-trigger i {
-            color: #52645b;
-            font-size: 18px;
-            font-style: normal;
-            line-height: 1;
-            transition: transform 160ms ease;
-          }
-
-          .multi-select-trigger.open i {
-            transform: rotate(180deg);
-          }
-
-          .multi-select-menu {
-            position: absolute;
-            z-index: 40;
-            top: 69px;
-            left: 0;
-            right: 0;
-            display: grid;
-            gap: 5px;
-            padding: 9px;
-            border: 1px solid #cfddd5;
-            border-radius: 13px;
-            background: #ffffff;
-            box-shadow: 0 18px 45px rgba(15, 40, 29, 0.18);
-          }
-
-          .multi-select-menu-head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 4px 5px 7px;
-            border-bottom: 1px solid #edf2ef;
-            color: #40544a;
-            font-size: 11px;
-            font-weight: 900;
-            text-transform: uppercase;
-            letter-spacing: 0.07em;
-          }
-
-          .multi-select-menu-head button,
-          .multi-select-done {
-            border: 0;
-            background: transparent;
-            color: #078249;
-            font-size: 11px;
-            font-weight: 900;
-            cursor: pointer;
-          }
-
-          .multi-select-option {
-            width: 100%;
-            min-height: 39px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 7px 9px;
-            border: 1px solid transparent;
-            border-radius: 9px;
-            background: #ffffff;
-            color: #25392f;
-            text-align: left;
-            cursor: pointer;
-          }
-
-          .multi-select-option:hover {
-            background: #f5faf7;
-          }
-
-          .multi-select-option.selected {
-            border-color: #a7e6c2;
-            background: #ecfdf5;
-            color: #047857;
-            font-weight: 800;
-          }
-
-          .check-box {
-            width: 20px;
-            height: 20px;
-            flex: 0 0 20px;
-            display: grid;
-            place-items: center;
-            border: 1px solid #bccdc3;
-            border-radius: 6px;
-            background: #ffffff;
-            color: #ffffff;
-            font-size: 12px;
-          }
-
-          .multi-select-option.selected .check-box {
-            border-color: #10b981;
-            background: #10b981;
-          }
-
-          .multi-select-done {
-            min-height: 36px;
-            margin-top: 2px;
-            border-radius: 9px;
-            background: #ecfdf5;
-          }
-
-          .selected-barangay-chips {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-          }
-
-          .selected-barangay-chips button {
-            min-height: 29px;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 4px 9px;
-            border: 1px solid #bfdbfe;
-            border-radius: 999px;
-            background: #eff6ff;
-            color: #1d4ed8;
-            font-size: 11px;
-            font-weight: 800;
-            cursor: pointer;
-          }
-
-          .selected-barangay-chips button span {
-            font-size: 15px;
-            line-height: 1;
-          }
-
-          input,
-          select {
-            width: 100%;
-            border: 1px solid #d5dfd9;
-            border-radius: 11px;
-            padding: 11px 12px;
-            background: #fff;
-            color: #17231d;
-            outline: 0;
-          }
-
-          input:focus,
-          select:focus {
-            border-color: #10b981;
-            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
-          }
-
-          .purok-panel {
-            border: 1px solid #dce6e0;
-            border-radius: 15px;
-            padding: 16px;
-            background: #fbfdfc;
-          }
-
-          .panel-heading {
-            display: flex;
-            justify-content: space-between;
-            gap: 16px;
-            align-items: flex-start;
-          }
-
-          .panel-heading h3,
-          .panel-heading p {
-            margin: 0;
-          }
-
-          .panel-heading p {
-            margin-top: 4px;
-            color: #718078;
-            font-size: 13px;
-          }
-
-          .panel-heading button,
-          .secondary {
-            border: 1px solid #d7e1db;
-            border-radius: 10px;
-            padding: 10px 12px;
-            background: #ffffff;
-            color: #33443b;
-            font-weight: 700;
-            cursor: pointer;
+          .toolbar,
+          .toolbar-actions {
+            align-items: stretch;
+            flex-direction: column;
           }
 
           .purok-grid {
-            display: grid;
-            grid-template-columns: repeat(5, minmax(0, 1fr));
-            gap: 8px;
-            margin-top: 14px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
           }
 
-          .purok-grid button {
-            display: inline-flex;
-            justify-content: center;
-            gap: 6px;
-            border: 1px solid #d7e1db;
-            border-radius: 10px;
-            padding: 10px 8px;
-            background: #fff;
-            color: #34463c;
-            font-size: 12px;
-            font-weight: 700;
-            cursor: pointer;
+          .modal {
+            padding: 8px;
           }
 
-          .purok-grid button.selected {
-            border-color: #10b981;
-            background: #ecfdf5;
-            color: #047857;
-          }
-
-          .map-panel {
-            overflow: hidden;
-            border: 1px solid #dce6e0;
-            border-radius: 16px;
-            background: #ffffff;
-          }
-
-          .map-heading {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 15px 16px;
-            border-bottom: 1px solid #e8eeea;
-          }
-
-          .map-heading h3,
-          .map-heading p {
-            margin: 0;
-          }
-
-          .map-heading p {
-            margin-top: 4px;
-            color: #718078;
-            font-size: 13px;
-          }
-
-          .map-heading button {
-            border: 1px solid #cfdad4;
-            border-radius: 10px;
-            padding: 8px 11px;
-            background: #ffffff;
-            color: #0f5138;
-            font-size: 12px;
-            font-weight: 800;
-            cursor: pointer;
-          }
-
-          .map-heading button:disabled {
-            cursor: wait;
-            opacity: 0.55;
-          }
-
-          .barangay-map {
+          .editor {
             width: 100%;
-            height: 360px;
-            background: #e7eef0;
-          }
-
-          .map-disclaimer {
-            margin: 0;
-            padding: 11px 16px;
-            border-top: 1px solid #e8eeea;
-            color: #6c7b73;
-            background: #f8faf9;
-            font-size: 12px;
-            line-height: 1.5;
-          }
-
-          .info-card {
-            border: 1px solid #a7f3d0;
+            max-height: 98vh;
             border-radius: 14px;
-            padding: 14px;
-            background: #ecfdf5;
-            color: #065f46;
           }
 
-          .info-card strong,
-          .info-card p {
-            display: block;
-            margin: 0;
+          .editor-head,
+          .editor-body,
+          .editor-foot {
+            padding-left: 14px;
+            padding-right: 14px;
           }
 
-          .info-card p {
-            margin-top: 5px;
-            line-height: 1.55;
-            font-size: 13px;
+          .editor-foot {
+            align-items: stretch;
+            flex-direction: column;
           }
 
-          .primary {
-            border: 0;
-            border-radius: 12px;
-            padding: 12px 18px;
-            background: #22c55e;
-            color: #052e16;
-            font-weight: 800;
-            cursor: pointer;
+          .editor-foot > div:last-child {
+            justify-content: flex-end;
           }
 
-          @media (max-width: 1200px) {
-            .hero-copy {
-              width: min(610px, 62%);
-              padding-right: 30px;
-            }
+          .route-map-canvas {
+            height: 330px;
+            min-height: 330px;
+          }
+        }
 
-            .hero-illustration-svg {
-              width: 72%;
-              min-width: 660px;
-            }
-
-            .hero-cta {
-              right: 20px;
-            }
-
-            .metrics-grid,
-            .info-strip {
-              grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
-
-            .info-tile:nth-child(3) {
-              border-left: 0;
-            }
-
-            .info-tile {
-              border-top: 1px solid transparent;
-            }
+        @media (max-width: 560px) {
+          .purok-panel > header,
+          .route-map-preview > header {
+            align-items: stretch;
+            flex-direction: column;
           }
 
-          @media (max-width: 900px) {
-            .table-toolbar,
-            .panel-heading,
-            .map-heading {
-              flex-direction: column;
-              align-items: stretch;
-            }
-
-            .toolbar-actions {
-              width: 100%;
-            }
-
-            .search-wrap {
-              flex: 1;
-              width: auto;
-            }
-
-            .metrics-grid,
-            .info-strip,
-            .form-grid {
-              grid-template-columns: 1fr;
-            }
-
-            .hero-card {
-              min-height: 300px;
-            }
-
-            .hero-copy {
-              width: 100%;
-              min-height: 190px;
-              padding: 25px 24px 92px;
-              background: linear-gradient(
-                180deg,
-                rgba(5, 79, 49, 0.94) 0%,
-                rgba(5, 79, 49, 0.82) 58%,
-                rgba(5, 79, 49, 0.22) 100%
-              );
-            }
-
-            .hero-copy h2,
-            .hero-copy p {
-              max-width: 650px;
-            }
-
-            .hero-illustration-svg {
-              width: 100%;
-              min-width: 600px;
-              opacity: 0.66;
-            }
-
-            .hero-cta {
-              top: auto;
-              left: 24px;
-              right: auto;
-              bottom: 22px;
-              transform: none;
-            }
-
-            .hero-cta:hover {
-              transform: translateY(-2px);
-            }
-
-            .purok-grid {
-              grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
-
-            .table-footer {
-              flex-direction: column;
-              align-items: flex-start;
-            }
-
-            .info-tile + .info-tile {
-              border-left: 0;
-              border-top: 1px solid #dde8e2;
-            }
+          .purok-panel > header > button,
+          .route-map-preview > header > button {
+            width: fit-content;
           }
 
-          @media (max-width: 620px) {
-            .toolbar-actions {
-              flex-direction: column;
-              align-items: stretch;
-            }
-
-            .create-route-btn {
-              width: 100%;
-            }
-
-            .page-heading h1 {
-              font-size: 24px;
-            }
-
-            .hero-copy h2 {
-              font-size: 31px;
-            }
-
-            .hero-card {
-              min-height: 290px;
-              border-radius: 18px;
-            }
-
-            .hero-copy {
-              padding: 22px 18px 88px;
-            }
-
-            .hero-cta {
-              left: 18px;
-              bottom: 18px;
-            }
-
-            .hero-illustration-svg {
-              min-width: 560px;
-              transform: translateX(18%);
-            }
-
-            .barangay-map {
-              height: 300px;
-            }
-
-            .modal-backdrop {
-              padding: 12px;
-            }
+          .barangay-menu {
+            position: fixed;
+            top: 20%;
+            left: 16px;
+            right: 16px;
           }
-
-          @media (prefers-reduced-motion: reduce) {
-            .reveal,
-            .row-fade,
-            .editor {
-              animation: none !important;
-              opacity: 1 !important;
-              transform: none !important;
-            }
-          }
-        `}</style>
-      </div>
+        }
+      `}</style>
     </DashboardShell>
-  );
-}
-
-function Metric({
-  icon,
-  tone,
-  label,
-  value,
-  hint,
-}: {
-  icon: React.ReactNode;
-  tone: "green" | "blue" | "amber" | "purple";
-  label: string;
-  value: number;
-  hint: string;
-}) {
-  return (
-    <article className="metric-card">
-      <div className={`metric-icon ${tone}`}>{icon}</div>
-      <div className="metric-copy">
-        <span>{label}</span>
-        <strong>{value}</strong>
-        <small>{hint}</small>
-      </div>
-    </article>
   );
 }

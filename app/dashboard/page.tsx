@@ -375,7 +375,7 @@ export default function DashboardPage() {
     [issuesData, reportIssuesData],
   );
   const notifications = useMemo(
-    () => toArray(notificationsData),
+    () => toArray(notificationsData).filter((item) => item.adminVisible !== false),
     [notificationsData],
   );
   const schedules = useMemo(() => toArray(schedulesData), [schedulesData]);

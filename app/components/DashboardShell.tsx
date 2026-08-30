@@ -61,20 +61,27 @@ type AdminGuideStep = {
 const firstTimeSetupSteps: AdminGuideStep[] = [
   {
     number: "1",
+    title: "Verify service areas",
+    detail: "Add official Catbalogan Barangays and the Puroks used for collection coverage.",
+    href: "/service-areas",
+    action: "Open service areas",
+  },
+  {
+    number: "2",
     title: "Create driver accounts",
     detail: "Add or review driver accounts before assigning collection work.",
     href: "/drivers",
     action: "Open accounts",
   },
   {
-    number: "2",
+    number: "3",
     title: "Confirm waste points",
     detail: "Record the official drop-off and collection locations shown to residents.",
     href: "/waste-points",
     action: "Open waste points",
   },
   {
-    number: "3",
+    number: "4",
     title: "Create routes and assignments",
     detail: "Choose the Barangay and Puroks, then assign the correct driver.",
     href: "/routes",
@@ -123,7 +130,8 @@ const dailyOperationSteps: AdminGuideStep[] = [
 const pageGuidance = [
   { path: "/dashboard", title: "Start with today’s priorities", detail: "Check open issues, active trucks, schedules, and recent activity before making changes." },
   { path: "/live-map", title: "Monitor active collection work", detail: "Select a driver or route and confirm the truck location before contacting the driver." },
-  { path: "/routes", title: "Create the service-area assignment", detail: "Choose the Barangay and Puroks first, then assign one verified driver and save." },
+  { path: "/service-areas", title: "Add service coverage", detail: "Select one or many official Barangays and Puroks. No map work is required here." },
+  { path: "/routes", title: "Create the route assignment", detail: "Choose the Barangays and Puroks, then assign the driver and truck. Barangay pins are attached automatically." },
   { path: "/drivers", title: "Manage people and access", detail: "Create or review driver accounts here before using them in route assignments." },
   { path: "/schedules", title: "Set the collection date and time", detail: "Match every schedule to the correct service area so residents receive accurate reminders." },
   { path: "/waste-points", title: "Maintain official collection locations", detail: "Check the location name and map position carefully before publishing it to residents." },
@@ -385,6 +393,13 @@ const links: SidebarLink[] = [
     icon: <IconRoutes />,
   },
   {
+    href: "/service-areas",
+    label: "Barangays & Puroks",
+    help: "Add Barangays and Puroks used by Routes and Schedules.",
+    group: "SYSTEM SETUP",
+    icon: <IconMap />,
+  },
+  {
     href: "/drivers",
     label: "Accounts & Drivers",
     help: "Create and review resident and driver accounts.",
@@ -523,7 +538,12 @@ export function DashboardShell({
   useEffect(() => {
     const unsub = onValue(ref(db, "notifications"), (snap) => {
       const val = snap.val() || {};
-      setNotifCount(Object.keys(val).length);
+      setNotifCount(
+        Object.values(val).filter(
+          (item) => !item || typeof item !== "object" ||
+            (item as Record<string, unknown>).adminVisible !== false,
+        ).length,
+      );
     });
 
     return () => unsub();

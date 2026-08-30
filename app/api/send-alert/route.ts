@@ -14,13 +14,16 @@ type TokenRecord = {
 };
 
 function normalizeBarangay(value: unknown) {
-  return String(value ?? "")
+  const key = String(value ?? "")
     .toLowerCase()
     .replace(/\s*\(.*?\)/g, "")
     .replace(/barangay|brgy/g, "")
     .replace(/[^a-z0-9ñ\s]/g, "")
     .trim()
     .replace(/\s+/g, "_");
+  if (["13", "poblacion13", "poblacion_13"].includes(key)) return "poblacion_13";
+  if (["guindapunan", "gundaponan"].includes(key)) return "guindaponan";
+  return key;
 }
 
 function normalizePurok(value: unknown) {

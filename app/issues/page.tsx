@@ -5,6 +5,7 @@ import { onValue, push, ref, remove, set, update } from "@/lib/offlineFirebaseDa
 import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
 import { SectionCard } from "../components/SectionCard";
+import { findOfficialBarangay } from "../service-areas/catalog";
 
 type TabType = "all" | "driver" | "resident";
 type StatusFilter = "all" | "Open" | "In Progress" | "Resolved";
@@ -53,14 +54,11 @@ const EMPTY_NOTICE: NoticeForm = {
   message: "",
 };
 
-const ALLOWED_BARANGAYS = [
-  "Mercedes",
-  "Maulong",
-  "San Andres",
-  "Poblacion 13",
-  "Canlapwas",
-];
-
+type ServiceBarangay = {
+  barangay?: string;
+  active?: boolean;
+  puroks?: Record<string, { purok?: string; active?: boolean; verified?: boolean; lat?: number; lng?: number }>;
+};
 
 function readString(value: unknown): string {
   if (typeof value === "string") return cleanText(value);
@@ -114,7 +112,10 @@ function locationKey(value?: string): string {
 }
 
 function barangayKey(value?: string): string {
-  return locationKey(value).replace(/^barangay\s+/, "").trim();
+  const key = locationKey(value).replace(/^(barangay|brgy)\s+/, "").trim();
+  if (key === "13" || key === "poblacion13") return "poblacion 13";
+  if (key === "guindapunan" || key === "gundaponan") return "guindaponan";
+  return key;
 }
 
 function purokKey(value?: string): string {
@@ -142,9 +143,9 @@ function readFirstString(...values: unknown[]): string {
   return "";
 }
 
-function isAllowedBarangay(value?: string): boolean {
+function isAllowedBarangay(value: string | undefined, allowedBarangays: string[]): boolean {
   const key = barangayKey(value);
-  return ALLOWED_BARANGAYS.some((barangay) => barangayKey(barangay) === key);
+  return allowedBarangays.some((barangay) => barangayKey(barangay) === key);
 }
 
 function formatDate(timestamp?: number): string {
@@ -281,6 +282,7 @@ export default function IssuesPage() {
   const [residentRows, setResidentRows] = useState<ResidentRow[]>([]);
   const [userRows, setUserRows] = useState<ResidentRow[]>([]);
   const [extraResidentRows, setExtraResidentRows] = useState<ResidentRow[]>([]);
+  const [serviceRegistry, setServiceRegistry] = useState<Record<string, ServiceBarangay>>({});
 
   const [selected, setSelected] = useState<IssueRow | null>(null);
   const [showFullImage, setShowFullImage] = useState(false);
@@ -381,6 +383,18 @@ export default function IssuesPage() {
 
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => onValue(ref(db, "service_areas"), (snapshot) => {
+    setServiceRegistry(snapshot.val() || {});
+  }), []);
+
+  const availableBarangays = useMemo(() => Object.entries(serviceRegistry)
+    .filter(([, record]) => record.active !== false)
+    .filter(([, record]) => Object.values(record.puroks || {}).some((purok) =>
+      purok.active !== false && purok.verified === true &&
+      Number.isFinite(Number(purok.lat)) && Number.isFinite(Number(purok.lng))))
+    .map(([key, record]) => findOfficialBarangay(record.barangay || key)?.name || record.barangay || key)
+    .sort((left, right) => left.localeCompare(right)), [serviceRegistry]);
 
   useEffect(() => {
     const paths = [
@@ -591,12 +605,17 @@ export default function IssuesPage() {
       const purok = getIssuePurok(issue);
       if (purok) puroks.add(purok);
     });
+    Object.values(serviceRegistry).forEach((barangay) => {
+      Object.values(barangay.puroks || {}).forEach((purok) => {
+        if (purok.active !== false && purok.verified === true && purok.purok) puroks.add(purok.purok);
+      });
+    });
 
     return {
-      barangays: ALLOWED_BARANGAYS,
+      barangays: availableBarangays,
       puroks: Array.from(puroks).sort(),
     };
-  }, [issues, residents, residentsByUid]);
+  }, [availableBarangays, issues, residents, residentsByUid, serviceRegistry]);
 
   const getLocationMatchedResidents = (
     barangay: string,
@@ -682,9 +701,9 @@ export default function IssuesPage() {
     if (!title) throw new Error("Please enter a notification title.");
     if (!message) throw new Error("Please enter a message.");
 
-    if (!isAllowedBarangay(barangay)) {
+    if (!isAllowedBarangay(barangay, availableBarangays)) {
       throw new Error(
-        "Please select one of the supported barangays: Mercedes, Maulong, San Andres, Poblacion 13, or Canlapwas."
+        "Please select an active verified MetroWaste Barangay from Service Areas."
       );
     }
 
