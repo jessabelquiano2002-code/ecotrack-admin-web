@@ -271,6 +271,7 @@ export async function POST(request: NextRequest) {
       const response = await adminMessaging.sendEachForMulticast({
         tokens: chunk,
         data: {
+          source: "admin",
           title,
           message,
           body: message,
