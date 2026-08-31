@@ -7,11 +7,38 @@ type TokenRecord = {
   role?: string;
   uid?: string;
   residentId?: string;
+  deviceId?: string;
   barangay?: string;
   barangayKey?: string;
   purok?: string | number;
   enabled?: boolean;
 };
+
+function buildDeviceIdentityIndex(...trees: unknown[]) {
+  const index = new Map<string, string[]>();
+
+  trees.forEach((tree) => {
+    if (!tree || typeof tree !== "object") return;
+
+    Object.entries(tree as Record<string, unknown>).forEach(([recordKey, raw]) => {
+      if (!raw || typeof raw !== "object") return;
+      const item = raw as Record<string, unknown>;
+      const deviceId = String(item.deviceId || "").trim();
+      if (!deviceId) return;
+
+      const identities = [item.uid, item.residentId, recordKey]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+
+      index.set(
+        deviceId,
+        Array.from(new Set([...(index.get(deviceId) || []), ...identities])),
+      );
+    });
+  });
+
+  return index;
+}
 
 function normalizeBarangay(value: unknown) {
   const key = String(value ?? "")
@@ -164,10 +191,17 @@ export async function POST(request: NextRequest) {
      * The old API only read device_tokens, so many resident phones could never
      * receive FCM even though a valid token existed in Firebase.
      */
-    const [deviceTokensSnap, residentTokensSnap] = await Promise.all([
+    const [deviceTokensSnap, residentTokensSnap, residentsSnap, profilesSnap] = await Promise.all([
       adminDb.ref("device_tokens").get(),
       adminDb.ref("resident_fcm_tokens").get(),
+      adminDb.ref("residents").get(),
+      adminDb.ref("resident_profiles").get(),
     ]);
+
+    const identitiesByDevice = buildDeviceIdentityIndex(
+      residentsSnap.val(),
+      profilesSnap.val(),
+    );
 
     const candidates: TokenRecord[] = [
       ...flattenResidentTokenTree(deviceTokensSnap.val()),
@@ -190,8 +224,15 @@ export async function POST(request: NextRequest) {
       if (!roleMatch) return;
 
       if (requestedTargetUids.length > 0) {
-        const tokenResidentId = String(item.uid || item.residentId || "").trim();
-        if (!tokenResidentId || !requestedTargetUids.includes(tokenResidentId)) return;
+        const tokenIdentities = [
+          item.uid,
+          item.residentId,
+          ...(identitiesByDevice.get(String(item.deviceId || "").trim()) || []),
+        ]
+          .map((value) => String(value || "").trim())
+          .filter(Boolean);
+
+        if (!tokenIdentities.some((value) => requestedTargetUids.includes(value))) return;
       } else if (!matchesArea(item, requestedBarangays, requestedPuroks)) {
         return;
       }

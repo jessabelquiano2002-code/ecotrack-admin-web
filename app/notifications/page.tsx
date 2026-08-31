@@ -207,15 +207,13 @@ export default function NotificationsPage() {
   const availableBarangays = useMemo(() => Object.entries(serviceRegistry)
     .filter(([, record]) => record.active !== false)
     .filter(([, record]) => Object.values(record.puroks || {}).some((purok) =>
-      purok.active !== false && purok.verified === true &&
-      Number.isFinite(Number(purok.lat)) && Number.isFinite(Number(purok.lng))))
+      purok.active !== false))
     .map(([key, record]) => findOfficialBarangay(record.barangay || key)?.name || record.barangay || key)
     .sort((left, right) => left.localeCompare(right)), [serviceRegistry]);
 
   const availablePuroks = useMemo(() => Object.values(
     serviceRegistry[makeBarangayKey(form.barangay)]?.puroks || {},
-  ).filter((purok) => purok.active !== false && purok.verified === true &&
-      Number.isFinite(Number(purok.lat)) && Number.isFinite(Number(purok.lng)))
+  ).filter((purok) => purok.active !== false)
     .map((purok) => {
       const number = String(purok.purok || "").match(/\d+/)?.[0];
       return number ? `Purok ${Number(number)}` : "";
@@ -388,7 +386,7 @@ export default function NotificationsPage() {
       return false;
     }
     if (!availableBarangays.includes(form.barangay) || availablePuroks.length === 0) {
-      alert("This Barangay has no active verified Purok service area.");
+      alert("This Barangay has no active Purok in Admin Service Areas.");
       return false;
     }
 

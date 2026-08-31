@@ -702,7 +702,7 @@ export default function IssuesPage() {
 
     if (!isAllowedBarangay(barangay, availableBarangays)) {
       throw new Error(
-        "Please select an active verified MetroWaste Barangay from Service Areas."
+        "Please select an active MetroWaste Barangay from Service Areas."
       );
     }
 
