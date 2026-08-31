@@ -690,17 +690,139 @@ function routeSvgHtml(points: GpsPoint[]): string {
     </svg>`;
 }
 
+const ROUTE_MAP_WIDTH = 720;
+const ROUTE_MAP_HEIGHT = 320;
+const OSM_TILE_SIZE = 256;
+
+type RouteMapTile = { key: string; x: number; y: number; url: string };
+type RouteMapModel = {
+  path: string;
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  centerLatitude: number;
+  centerLongitude: number;
+  zoom: number;
+  tiles: RouteMapTile[];
+};
+
+function mercatorPoint(latitude: number, longitude: number, zoom: number) {
+  const safeLatitude = Math.max(-85.05112878, Math.min(85.05112878, latitude));
+  const worldSize = OSM_TILE_SIZE * 2 ** zoom;
+  const sinLatitude = Math.sin((safeLatitude * Math.PI) / 180);
+  return {
+    x: ((longitude + 180) / 360) * worldSize,
+    y: (0.5 - Math.log((1 + sinLatitude) / (1 - sinLatitude)) / (4 * Math.PI)) * worldSize,
+  };
+}
+
+function buildRouteMap(points: GpsPoint[]): RouteMapModel | null {
+  if (points.length === 0) return null;
+
+  const sample = points.length > 500
+    ? points.filter((_, index) => index % Math.ceil(points.length / 500) === 0 || index === points.length - 1)
+    : points;
+  const padding = 38;
+  let zoom = 18;
+  let projected = sample.map((point) => mercatorPoint(point.latitude, point.longitude, zoom));
+
+  for (let candidate = 18; candidate >= 4; candidate -= 1) {
+    const candidatePoints = sample.map((point) => mercatorPoint(point.latitude, point.longitude, candidate));
+    const xs = candidatePoints.map((point) => point.x);
+    const ys = candidatePoints.map((point) => point.y);
+    zoom = candidate;
+    projected = candidatePoints;
+    if (Math.max(...xs) - Math.min(...xs) <= ROUTE_MAP_WIDTH - padding * 2
+      && Math.max(...ys) - Math.min(...ys) <= ROUTE_MAP_HEIGHT - padding * 2) {
+      break;
+    }
+  }
+
+  const xs = projected.map((point) => point.x);
+  const ys = projected.map((point) => point.y);
+  const centerX = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const centerY = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const viewportLeft = centerX - ROUTE_MAP_WIDTH / 2;
+  const viewportTop = centerY - ROUTE_MAP_HEIGHT / 2;
+  const localPoints = projected.map((point) => ({
+    x: point.x - viewportLeft,
+    y: point.y - viewportTop,
+  }));
+  const path = localPoints
+    .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
+    .join(" ");
+
+  const tileCount = 2 ** zoom;
+  const minTileX = Math.floor(viewportLeft / OSM_TILE_SIZE);
+  const maxTileX = Math.floor((viewportLeft + ROUTE_MAP_WIDTH) / OSM_TILE_SIZE);
+  const minTileY = Math.max(0, Math.floor(viewportTop / OSM_TILE_SIZE));
+  const maxTileY = Math.min(tileCount - 1, Math.floor((viewportTop + ROUTE_MAP_HEIGHT) / OSM_TILE_SIZE));
+  const tiles: RouteMapTile[] = [];
+
+  for (let tileY = minTileY; tileY <= maxTileY; tileY += 1) {
+    for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
+      const wrappedX = ((tileX % tileCount) + tileCount) % tileCount;
+      tiles.push({
+        key: `${zoom}-${tileX}-${tileY}`,
+        x: tileX * OSM_TILE_SIZE - viewportLeft,
+        y: tileY * OSM_TILE_SIZE - viewportTop,
+        url: `https://tile.openstreetmap.org/${zoom}/${wrappedX}/${tileY}.png`,
+      });
+    }
+  }
+
+  const centerPoint = sample[Math.floor(sample.length / 2)] || sample[0];
+  return {
+    path,
+    startX: localPoints[0].x,
+    startY: localPoints[0].y,
+    endX: localPoints.at(-1)!.x,
+    endY: localPoints.at(-1)!.y,
+    centerLatitude: centerPoint.latitude,
+    centerLongitude: centerPoint.longitude,
+    zoom,
+    tiles,
+  };
+}
+
 function RouteTrace({ points }: { points: GpsPoint[] }) {
-  const geometry = routeTraceGeometry(points);
-  if (!geometry) return <div className="ops-gps-empty">No GPS points available.</div>;
+  const map = useMemo(() => buildRouteMap(points), [points]);
+  if (!map) return <div className="ops-gps-empty">No GPS points available.</div>;
+
+  const openMapUrl = `https://www.openstreetmap.org/?mlat=${map.centerLatitude}&mlon=${map.centerLongitude}#map=${map.zoom}/${map.centerLatitude}/${map.centerLongitude}`;
+
   return (
-    <svg viewBox="0 0 360 180" className="ops-gps-svg" role="img" aria-label="Recorded GPS collection route trace">
-      <rect x="0" y="0" width="360" height="180" rx="12" fill="#f8fafc" />
-      <path d="M0 45H360M0 90H360M0 135H360M90 0V180M180 0V180M270 0V180" stroke="#e2e8f0" strokeWidth="1" />
-      <path d={geometry.path} fill="none" stroke="#2563eb" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx={geometry.startX} cy={geometry.startY} r="7" fill="#16a34a" stroke="#fff" strokeWidth="3" />
-      <circle cx={geometry.endX} cy={geometry.endY} r="7" fill="#dc2626" stroke="#fff" strokeWidth="3" />
-    </svg>
+    <div className="ops-route-map" role="img" aria-label="Recorded GPS collection route on OpenStreetMap">
+      <div className="ops-route-tiles" aria-hidden="true">
+        {map.tiles.map((tile) => (
+          <img
+            alt=""
+            decoding="async"
+            draggable={false}
+            key={tile.key}
+            loading="lazy"
+            src={tile.url}
+            style={{ left: tile.x, top: tile.y }}
+          />
+        ))}
+      </div>
+      <svg viewBox={`0 0 ${ROUTE_MAP_WIDTH} ${ROUTE_MAP_HEIGHT}`} className="ops-route-overlay" aria-hidden="true">
+        <path d={map.path} className="ops-route-halo" />
+        <path d={map.path} className="ops-route-line" />
+        <g transform={`translate(${map.startX} ${map.startY})`}>
+          <circle r="12" className="ops-route-marker-ring start" />
+          <circle r="7" className="ops-route-marker start" />
+        </g>
+        <g transform={`translate(${map.endX} ${map.endY})`}>
+          <circle r="12" className="ops-route-marker-ring end" />
+          <circle r="7" className="ops-route-marker end" />
+        </g>
+      </svg>
+      <div className="ops-route-legend"><span className="start" />Start <span className="end" />End</div>
+      <a className="ops-route-open" href={openMapUrl} target="_blank" rel="noreferrer">Open full map ↗</a>
+      <a className="ops-map-credit" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a>
+    </div>
   );
 }
 
@@ -3386,6 +3508,122 @@ export function MetroWastePlanningReport() {
           .ops-report-types button{min-height:94px}
           .ops-filter-grid{padding:13px;grid-template-columns:1fr}
           .ops-output{padding:14px}
+        }
+
+        /* Actual OpenStreetMap route evidence */
+        .ops-gps-grid{
+          grid-template-columns:repeat(2,minmax(0,1fr));
+          gap:16px;
+          margin-top:16px;
+        }
+        .ops-gps-card{
+          border:1px solid #dbe5df;
+          border-radius:16px;
+          box-shadow:0 8px 24px rgba(15,45,31,.07);
+          transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;
+        }
+        .ops-gps-card:hover{
+          transform:translateY(-2px);
+          border-color:#a9cfbb;
+          box-shadow:0 14px 34px rgba(15,45,31,.11);
+        }
+        .ops-route-map{
+          position:relative;
+          width:100%;
+          aspect-ratio:720/320;
+          overflow:hidden;
+          isolation:isolate;
+          border-bottom:1px solid #dfe8e3;
+          background:#e8eee9;
+        }
+        .ops-route-tiles,.ops-route-overlay{
+          position:absolute;
+          inset:0;
+          width:100%;
+          height:100%;
+        }
+        .ops-route-tiles img{
+          position:absolute;
+          width:256px;
+          height:256px;
+          max-width:none;
+          user-select:none;
+          -webkit-user-drag:none;
+        }
+        .ops-route-overlay{z-index:2;pointer-events:none}
+        .ops-route-halo{
+          fill:none;
+          stroke:rgba(255,255,255,.96);
+          stroke-width:11;
+          stroke-linecap:round;
+          stroke-linejoin:round;
+        }
+        .ops-route-line{
+          fill:none;
+          stroke:#1677ff;
+          stroke-width:5;
+          stroke-linecap:round;
+          stroke-linejoin:round;
+          filter:drop-shadow(0 2px 2px rgba(15,70,150,.28));
+        }
+        .ops-route-marker-ring{stroke:#fff;stroke-width:3;opacity:.92}
+        .ops-route-marker-ring.start{fill:rgba(5,150,105,.25)}
+        .ops-route-marker-ring.end{fill:rgba(220,38,38,.24)}
+        .ops-route-marker{stroke:#fff;stroke-width:3}
+        .ops-route-marker.start{fill:#059669}
+        .ops-route-marker.end{fill:#dc2626}
+        .ops-route-legend,.ops-route-open,.ops-map-credit{
+          position:absolute;
+          z-index:3;
+          border:1px solid rgba(203,213,225,.9);
+          background:rgba(255,255,255,.94);
+          box-shadow:0 3px 12px rgba(15,23,42,.12);
+          backdrop-filter:blur(5px);
+        }
+        .ops-route-legend{
+          top:10px;
+          left:10px;
+          display:flex;
+          align-items:center;
+          gap:6px;
+          padding:6px 9px;
+          border-radius:9px;
+          color:#34463d;
+          font-size:11px;
+          font-weight:800;
+        }
+        .ops-route-legend span{width:8px;height:8px;border-radius:50%}
+        .ops-route-legend span.start{background:#059669}
+        .ops-route-legend span.end{margin-left:4px;background:#dc2626}
+        .ops-route-open{
+          top:10px;
+          right:10px;
+          padding:6px 9px;
+          border-radius:9px;
+          color:#075e3b;
+          font-size:11px;
+          font-weight:900;
+          text-decoration:none;
+        }
+        .ops-map-credit{
+          right:5px;
+          bottom:4px;
+          padding:2px 5px;
+          border-radius:4px;
+          color:#475569;
+          font-size:9px;
+          text-decoration:none;
+        }
+        .ops-gps-card-body{gap:10px;padding:14px 15px 15px}
+        .ops-gps-card-body strong{font-size:14px;color:#183126}
+        .ops-gps-card-body span{font-size:12px}
+        .ops-gps-meta span,.ops-gps-stats span{padding:6px 9px;font-size:11px}
+        .ops-gps-stats span{border:1px solid #d7eee2;background:#f0faf5}
+        @media(max-width:980px){.ops-gps-grid{grid-template-columns:1fr}}
+        @media(max-width:560px){
+          .ops-route-legend{display:none}
+          .ops-route-open{font-size:10px}
+          .ops-map-credit{font-size:8px}
         }
       `}</style>
     </section>
