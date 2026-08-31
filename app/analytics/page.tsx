@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { onValue, ref } from "@/lib/offlineFirebaseDatabase";
 import { db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
-import { LiveRouteMonitor } from "../components/LiveRouteMonitor";
+import { ActualRouteFootprintAnalytics } from "../components/ActualRouteFootprintAnalytics";
 
 type AnyItem = Record<string, any>;
 type RangeFilter = "7d" | "30d" | "all";
@@ -565,11 +565,11 @@ export default function AnalyticsPage() {
       <div className="analytics-page">
         <section className="analytics-hero">
           <div className="hero-copy">
-            <span className="eyebrow">Live Waste Collection Analytics</span>
-            <h1>City waste collection reports dashboard</h1>
+            <span className="eyebrow">Operations Analytics</span>
+            <h1>Collection performance with actual driver GPS evidence</h1>
             <p>
-              All available collection reports, driver route updates, missed pickups, schedules,
-              resident complaints, and system notices are consolidated from Firebase records only.
+              Review service performance, resident reports, schedules, and the exact GPS footprint recorded by the driver app.
+              Assigned-route comparison and route verification now live on the Live Map page.
             </p>
           </div>
 
@@ -668,7 +668,7 @@ export default function AnalyticsPage() {
           <SmallMetric label="Pending Updates" value={stats.activeOrInProgress} danger={stats.activeOrInProgress > 0} />
         </section>
 
-        <LiveRouteMonitor />
+        <ActualRouteFootprintAnalytics />
 
         <section className="analytics-grid main-grid">
           <div className="panel wide">

@@ -222,11 +222,6 @@ function formatDate(value?: number): string {
     : "—";
 }
 
-const PUROK_OPTIONS = Array.from({ length: 10 }, (_, index) => ({
-  key: `purok_${index + 1}`,
-  label: `Purok ${index + 1}`,
-}));
-
 type RouteMapPreviewProps = {
   points: BarangayMapPoint[];
   selectedBarangayCount: number;
@@ -373,12 +368,12 @@ function RouteMapPreview({
           <h3>Barangay map preview</h3>
           <p>
             {selectedBarangayCount
-              ? `Showing ${points.length} selected Barangay pin${points.length === 1 ? "" : "s"}. Coordinates are read from Service Areas.`
+              ? `Showing ${points.length} selected Barangay reference marker${points.length === 1 ? "" : "s"}. The location is loaded automatically from Service Areas.`
               : "Select one or more Barangays to preview the coordinates saved in Service Areas."}
           </p>
           {points.length > 0 && verifiedCoordinateCount !== points.length ? (
             <small>
-              {verifiedCoordinateCount} of {points.length} pin{points.length === 1 ? "" : "s"} use verified Service Area/OpenStreetMap coordinates; remaining legacy entries use the boundary fallback.
+              These are automatic Barangay reference points used only to build the road-route order. Admin does not need to add Purok pins.
             </small>
           ) : null}
         </div>
@@ -408,7 +403,7 @@ export default function RoutesPage() {
   const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
   const [form, setForm] = useState<RouteForm>(EMPTY_FORM);
   const [selectedBarangays, setSelectedBarangays] = useState<string[]>([]);
-  const [selectedPurokKeys, setSelectedPurokKeys] = useState<string[]>([]);
+  const [selectedAreaIds, setSelectedAreaIds] = useState<string[]>([]);
   const [barangayMenuOpen, setBarangayMenuOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
@@ -717,34 +712,32 @@ export default function RoutesPage() {
     });
   }, [configuredServiceAreas, selectedBarangays]);
 
-  const availablePurokKeys = useMemo(() => {
-    if (!selectedBarangays.length) return [] as string[];
-
-    const sets = selectedBarangays.map((barangay) =>
-      new Set(
-        configuredServiceAreas
-          .filter((area) => area.barangayKey === makeBarangayKey(barangay))
-          .map((area) => area.purokKey),
-      ),
-    );
-
-    return PUROK_OPTIONS.map((option) => option.key).filter((purokKey) =>
-      sets.every((set) => set.has(purokKey)),
-    );
+  const availableAreasByBarangay = useMemo(() => {
+    return selectedBarangays.map((barangay) => {
+      const barangayKey = makeBarangayKey(barangay);
+      const areas = configuredServiceAreas
+        .filter((area) => area.barangayKey === barangayKey)
+        .sort((left, right) =>
+          Number(left.purok.match(/\d+/)?.[0] || 0) -
+          Number(right.purok.match(/\d+/)?.[0] || 0),
+        );
+      return { barangay, barangayKey, areas };
+    });
   }, [configuredServiceAreas, selectedBarangays]);
+
+  const availableAreaIds = useMemo(
+    () => availableAreasByBarangay.flatMap((group) => group.areas.map((area) => area.id)),
+    [availableAreasByBarangay],
+  );
 
   const selectedServiceAreas = useMemo<ConfiguredServiceArea[]>(() => {
     const configuredById = new Map(
       configuredServiceAreas.map((area) => [area.id, area]),
     );
-
-    return selectedBarangays.flatMap((barangay) => {
-      const barangayKey = makeBarangayKey(barangay);
-      return selectedPurokKeys
-        .map((purokKey) => configuredById.get(`${barangayKey}|${purokKey}`))
-        .filter((area): area is ConfiguredServiceArea => Boolean(area));
-    });
-  }, [configuredServiceAreas, selectedBarangays, selectedPurokKeys]);
+    return selectedAreaIds
+      .map((areaId) => configuredById.get(areaId))
+      .filter((area): area is ConfiguredServiceArea => Boolean(area));
+  }, [configuredServiceAreas, selectedAreaIds]);
 
   useEffect(() => {
     if (!configuredBarangays.length) {
@@ -757,10 +750,10 @@ export default function RoutesPage() {
   }, [configuredBarangays]);
 
   useEffect(() => {
-    setSelectedPurokKeys((current) =>
-      current.filter((purokKey) => availablePurokKeys.includes(purokKey)),
+    setSelectedAreaIds((current) =>
+      current.filter((areaId) => availableAreaIds.includes(areaId)),
     );
-  }, [availablePurokKeys]);
+  }, [availableAreaIds]);
 
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
@@ -805,7 +798,7 @@ export default function RoutesPage() {
     setEditingRouteId(null);
     setForm(EMPTY_FORM);
     setSelectedBarangays([]);
-    setSelectedPurokKeys([]);
+    setSelectedAreaIds([]);
     setBarangayMenuOpen(false);
     setSaving(false);
   };
@@ -832,14 +825,12 @@ export default function RoutesPage() {
         ].filter(Boolean),
       ),
     );
-    const routePurokKeys = Array.from(
-      new Set(
-        [
-          ...routeAreas.map((area) => makePurokKey(area.purok || "")),
-          ...normalizeArray(route.puroks).map(makePurokKey),
-        ].filter((key) => /^purok_(?:[1-9]|10)$/.test(key)),
-      ),
-    );
+    const routeAreaIds = routeAreas
+      .map((area) =>
+        area.areaKey ||
+        `${makeBarangayKey(area.barangay || "")}|${makePurokKey(area.purok || "")}`,
+      )
+      .filter(Boolean);
 
     setNotice("");
     setEditingRouteId(route.id);
@@ -849,7 +840,7 @@ export default function RoutesPage() {
       assignedVehicle: route.assignedVehicle || "",
     });
     setSelectedBarangays(routeBarangays);
-    setSelectedPurokKeys(routePurokKeys);
+    setSelectedAreaIds(routeAreaIds);
     setBarangayMenuOpen(false);
     setEditorOpen(true);
   };
@@ -870,22 +861,22 @@ export default function RoutesPage() {
     );
   };
 
-  const togglePurok = (purokKey: string) => {
-    if (!availablePurokKeys.includes(purokKey)) return;
-    setSelectedPurokKeys((current) =>
-      current.includes(purokKey)
-        ? current.filter((key) => key !== purokKey)
-        : [...current, purokKey],
+  const toggleArea = (areaId: string) => {
+    if (!availableAreaIds.includes(areaId)) return;
+    setSelectedAreaIds((current) =>
+      current.includes(areaId)
+        ? current.filter((id) => id !== areaId)
+        : [...current, areaId],
     );
   };
 
-  const toggleAllPuroks = () => {
-    if (!availablePurokKeys.length) return;
-    setSelectedPurokKeys((current) =>
-      current.length === availablePurokKeys.length &&
-      availablePurokKeys.every((key) => current.includes(key))
+  const toggleAllAreas = () => {
+    if (!availableAreaIds.length) return;
+    setSelectedAreaIds((current) =>
+      current.length === availableAreaIds.length &&
+      availableAreaIds.every((id) => current.includes(id))
         ? []
-        : [...availablePurokKeys],
+        : [...availableAreaIds],
     );
   };
 
@@ -899,20 +890,12 @@ export default function RoutesPage() {
     if (!selectedBarangays.length) {
       return alert("Select at least one Barangay for this route.");
     }
-    if (!selectedPurokKeys.length) {
-      return alert("Select at least one Purok for route coverage.");
+    if (!selectedAreaIds.length) {
+      return alert("Select at least one Barangay/Purok service area for route coverage.");
     }
     if (!driver) return alert("Assign an active driver.");
     if (!selectedServiceAreas.length) {
       return alert("Unable to build the selected route coverage from Service Areas.");
-    }
-    if (
-      selectedServiceAreas.length !==
-      selectedBarangays.length * selectedPurokKeys.length
-    ) {
-      return alert(
-        "One or more selected Barangay/Purok combinations are no longer active in Service Areas. Refresh the selection and try again.",
-      );
     }
 
     const areas = selectedServiceAreas.map((area, order) => ({
@@ -987,16 +970,21 @@ export default function RoutesPage() {
       assignedDriverId: driver.id,
       assignedDriverName: driver.name || "Driver",
       assignedVehicle: vehicle,
+      routeModel: "service-area-live-gps",
       routeType: "service-area-route",
       trackingMode: "live-gps",
+      navigationMode: "api-gps-road-route",
       requiresDrawnPath: false,
+      requiresManualPins: false,
+      manualPurokPinsRequired: false,
+      manualRoadPathRequired: false,
       coverageOnly: true,
       roadPointOnly: false,
       servicePinMode: "disabled",
       verified: true,
       routeValidation: {
         status: "verified",
-        method: "admin-confirmed-coverage",
+        method: "admin-confirmed-coverage-auto-road",
         verifiedBy: auth.currentUser?.uid || "admin",
         verifiedAt: now,
         coordinateCount: 0,
@@ -1057,7 +1045,7 @@ export default function RoutesPage() {
       setSaving(true);
       await update(ref(db), rootUpdates);
       setNotice(
-        "Route assignment saved. The Driver can start collection using live phone GPS.",
+        "Route assignment saved. The Driver will follow an automatic road route from live phone GPS through /api/gps; no manual Purok pins are required.",
       );
       closeEditor();
     } catch (error) {
@@ -1344,50 +1332,52 @@ export default function RoutesPage() {
                   <section className="purok-panel">
                     <header>
                       <div>
-                        <h3>Purok coverage</h3>
+                        <h3>Actual Purok coverage per Barangay</h3>
                         <p>
                           {!selectedBarangays.length
-                            ? "Select Barangays first. Puroks are loaded from Service Areas."
-                            : availablePurokKeys.length
-                              ? "Only Puroks active in every selected Barangay can be assigned."
-                              : "The selected Barangays do not share an active Purok in Service Areas."}
+                            ? "Select Barangays first. Actual Puroks are loaded from Service Areas."
+                            : availableAreaIds.length
+                              ? "Choose the exact Puroks for each Barangay. Different Barangays can have different Purok coverage."
+                              : "No active local Puroks are configured for the selected Barangays."}
                         </p>
                       </div>
                       <button
                         type="button"
-                        onClick={toggleAllPuroks}
-                        disabled={!availablePurokKeys.length}
+                        onClick={toggleAllAreas}
+                        disabled={!availableAreaIds.length}
                       >
-                        {availablePurokKeys.length > 0 &&
-                        selectedPurokKeys.length === availablePurokKeys.length
+                        {availableAreaIds.length > 0 &&
+                        selectedAreaIds.length === availableAreaIds.length
                           ? "Clear all"
                           : "Select all"}
                       </button>
                     </header>
-                    <div className="purok-grid">
-                      {PUROK_OPTIONS.map((option) => {
-                        const selected = selectedPurokKeys.includes(option.key);
-                        const available = availablePurokKeys.includes(option.key);
-                        return (
-                          <button
-                            type="button"
-                            className={`${selected ? "selected" : ""} ${
-                              !available ? "unavailable" : ""
-                            }`}
-                            key={option.key}
-                            onClick={() => togglePurok(option.key)}
-                            disabled={!available}
-                            title={
-                              available
-                                ? `${option.label} is active in every selected Barangay`
-                                : `${option.label} is not available for all selected Barangays`
-                            }
-                          >
-                            <span>{selected ? "✓" : available ? "+" : "–"}</span>
-                            {option.label}
-                          </button>
-                        );
-                      })}
+                    <div className="purok-by-barangay-grid">
+                      {availableAreasByBarangay.map((group) => (
+                        <article className="purok-group-card" key={group.barangayKey}>
+                          <div className="purok-group-head">
+                            <strong>{group.barangay}</strong>
+                            <small>{group.areas.length} active local Purok{group.areas.length === 1 ? "" : "s"}</small>
+                          </div>
+                          <div className="purok-grid">
+                            {group.areas.length ? group.areas.map((area) => {
+                              const selected = selectedAreaIds.includes(area.id);
+                              return (
+                                <button
+                                  type="button"
+                                  className={selected ? "selected" : ""}
+                                  key={area.id}
+                                  onClick={() => toggleArea(area.id)}
+                                  title={`${area.barangay} • ${area.purok}`}
+                                >
+                                  <span>{selected ? "✓" : "+"}</span>
+                                  {area.purok}
+                                </button>
+                              );
+                            }) : <p className="no-local-puroks">No active Puroks. Add them in Service Areas.</p>}
+                          </div>
+                        </article>
+                      ))}
                     </div>
                   </section>
 
@@ -1413,8 +1403,8 @@ export default function RoutesPage() {
                 <div className="editor-selection-summary">
                   <strong>{selectedBarangays.length}</strong> Barangay
                   {selectedBarangays.length === 1 ? "" : "s"} ·{` `}
-                  <strong>{selectedPurokKeys.length}</strong> Purok
-                  {selectedPurokKeys.length === 1 ? "" : "s"} ·{` `}
+                  <strong>{selectedServiceAreas.length}</strong> Purok coverage
+                  {selectedServiceAreas.length === 1 ? "" : "s"} ·{` `}
                   <strong>{selectedServiceAreas.length}</strong> coverage area
                   {selectedServiceAreas.length === 1 ? "" : "s"}
                 </div>
@@ -1639,20 +1629,24 @@ export default function RoutesPage() {
         .modal {
           position: fixed;
           inset: 0;
-          z-index: 5000;
+          z-index: 999999;
           display: grid;
           place-items: center;
-          padding: 18px;
+          padding: 10px;
+          box-sizing: border-box;
+          overflow: hidden;
           background: rgba(15, 27, 21, 0.58);
           backdrop-filter: blur(5px);
+          overscroll-behavior: contain;
         }
 
         .editor {
-          width: min(1320px, calc(100vw - 42px));
-          height: min(840px, calc(100vh - 36px));
-          max-height: 96vh;
+          width: min(1680px, calc(100vw - 20px));
+          height: calc(100% - 20px);
+          max-width: none;
+          max-height: calc(100% - 20px);
           display: grid;
-          grid-template-rows: auto minmax(0, 1fr) auto;
+          grid-template-rows: auto minmax(0, 1fr) 72px;
           overflow: hidden;
           border: 1px solid #d6e2da;
           border-radius: 20px;
@@ -1665,7 +1659,7 @@ export default function RoutesPage() {
           align-items: flex-start;
           justify-content: space-between;
           gap: 18px;
-          padding: 18px 22px 16px;
+          padding: 16px 22px 14px;
           border-bottom: 1px solid #e2ebe5;
           background: #fff;
         }
@@ -1725,20 +1719,32 @@ export default function RoutesPage() {
           min-height: 0;
           overflow: hidden;
           display: grid;
-          grid-template-columns: minmax(500px, 0.9fr) minmax(0, 1.25fr);
-          gap: 18px;
-          padding: 18px;
+          grid-template-columns: minmax(500px, 0.82fr) minmax(640px, 1.18fr);
+          gap: 16px;
+          padding: 16px;
           background: #f8fbf9;
         }
 
         .editor-form-column {
           min-width: 0;
           min-height: 0;
-          overflow: auto;
+          overflow-y: auto;
+          overflow-x: hidden;
           display: grid;
           align-content: start;
-          gap: 15px;
-          padding: 1px 2px 1px 1px;
+          gap: 14px;
+          padding: 1px 6px 1px 1px;
+          scrollbar-width: thin;
+          scrollbar-color: #b8c9bf transparent;
+        }
+
+        .editor-form-column::-webkit-scrollbar {
+          width: 7px;
+        }
+
+        .editor-form-column::-webkit-scrollbar-thumb {
+          border-radius: 999px;
+          background: #b8c9bf;
         }
 
         .assignment-grid {
@@ -2025,6 +2031,59 @@ export default function RoutesPage() {
           cursor: not-allowed;
         }
 
+        .purok-by-barangay-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+          margin-top: 14px;
+        }
+
+        .purok-group-card {
+          min-width: 0;
+          padding: 11px;
+          border: 1px solid #e1e9e4;
+          border-radius: 12px;
+          background: #fbfdfc;
+        }
+
+        .purok-group-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 10px;
+        }
+
+        .purok-group-head strong,
+        .purok-group-head small {
+          display: block;
+        }
+
+        .purok-group-head strong {
+          color: #173227;
+          font-size: 12px;
+        }
+
+        .purok-group-head small {
+          color: #718078;
+          font-size: 9px;
+          text-align: right;
+        }
+
+        .purok-group-card .purok-grid {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          margin-top: 9px;
+        }
+
+        .no-local-puroks {
+          grid-column: 1 / -1;
+          margin: 0 !important;
+          padding: 10px;
+          border: 1px dashed #d5dfd8;
+          border-radius: 9px;
+          background: #fff;
+          text-align: center;
+        }
+
         .purok-grid {
           display: grid;
           grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -2077,6 +2136,7 @@ export default function RoutesPage() {
         .route-map-preview {
           min-width: 0;
           min-height: 0;
+          height: 100%;
           display: grid;
           grid-template-rows: auto minmax(0, 1fr);
           box-shadow: 0 8px 28px rgba(22, 52, 35, 0.06);
@@ -2094,7 +2154,7 @@ export default function RoutesPage() {
         .route-map-canvas {
           width: 100%;
           height: 100%;
-          min-height: 500px;
+          min-height: 0;
           border-top: 1px solid #e4ebe6;
           background: #edf3ef;
         }
@@ -2191,19 +2251,32 @@ export default function RoutesPage() {
         }
 
         .editor-foot {
+          position: relative;
+          z-index: 80;
+          min-height: 72px;
           display: flex;
           align-items: center;
           justify-content: space-between;
           gap: 14px;
-          padding: 13px 22px;
-          border-top: 1px solid #dfe8e2;
-          background: #fff;
+          padding: 12px 22px;
+          border-top: 1px solid #d7e3dc;
+          background: rgba(255, 255, 255, 0.99);
+          box-shadow: 0 -10px 26px rgba(18, 46, 31, 0.08);
         }
 
         .editor-foot > div:last-child {
           display: flex;
           align-items: center;
           gap: 9px;
+        }
+
+        .editor-foot > div:last-child .primary {
+          min-width: 205px;
+        }
+
+        .editor-foot > div:last-child .primary:disabled {
+          opacity: 0.55;
+          filter: saturate(0.8);
         }
 
         .editor-selection-summary {
@@ -2216,29 +2289,55 @@ export default function RoutesPage() {
         }
 
         @media (max-height: 720px) and (min-width: 1121px) {
-          .editor {
-            height: calc(100vh - 24px);
+          .modal {
+            padding: 6px;
           }
 
-          .route-map-canvas {
-            min-height: 360px;
+          .editor {
+            width: calc(100vw - 12px);
+            height: calc(100% - 12px);
+            border-radius: 15px;
+          }
+
+          .editor-head {
+            padding-top: 12px;
+            padding-bottom: 11px;
+          }
+
+          .editor-head p {
+            margin-top: 4px;
+          }
+
+          .editor-body {
+            padding: 12px;
+            gap: 12px;
           }
         }
 
         @media (max-width: 1120px) {
+          .modal {
+            padding: 8px;
+          }
+
           .editor {
-            width: min(980px, calc(100vw - 24px));
-            height: auto;
-            max-height: 97vh;
+            width: calc(100vw - 16px);
+            height: calc(100% - 16px);
+            max-height: none;
           }
 
           .editor-body {
-            overflow: auto;
+            overflow-y: auto;
+            overflow-x: hidden;
             grid-template-columns: 1fr;
           }
 
           .editor-form-column {
             overflow: visible;
+            padding-right: 1px;
+          }
+
+          .route-map-preview {
+            min-height: 460px;
           }
 
           .route-map-canvas {
@@ -2248,6 +2347,10 @@ export default function RoutesPage() {
         }
 
         @media (max-width: 900px) {
+          .editor {
+            grid-template-rows: auto minmax(0, 1fr) auto;
+          }
+
           .route-summary,
           .assignment-grid {
             grid-template-columns: 1fr;
@@ -2269,7 +2372,8 @@ export default function RoutesPage() {
 
           .editor {
             width: 100%;
-            max-height: 98vh;
+            height: calc(100% - 16px);
+            max-height: none;
             border-radius: 14px;
           }
 

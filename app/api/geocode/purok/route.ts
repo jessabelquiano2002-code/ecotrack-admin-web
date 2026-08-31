@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { authErrorStatus, requireAdmin } from "../../../../lib/serverAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -121,6 +122,8 @@ function scoreResult(
 
 export async function GET(request: NextRequest) {
   try {
+    await requireAdmin(request);
+
     const mode =
       request.nextUrl.searchParams.get("mode") === "barangay" ? "barangay" : "purok";
     const barangay = request.nextUrl.searchParams.get("barangay")?.trim() ?? "";
@@ -215,12 +218,16 @@ export async function GET(request: NextRequest) {
     });
   } catch (error: unknown) {
     console.error("Purok geocoding failed", error);
+    const authStatus = authErrorStatus(error);
+    const status = authStatus === 500 ? 502 : authStatus;
     return NextResponse.json(
       {
         error:
-          error instanceof Error ? error.message : "Unable to search the map provider.",
+          status === 502 && error instanceof Error
+            ? error.message
+            : "Not authorized.",
       },
-      { status: 502 },
+      { status },
     );
   }
 }

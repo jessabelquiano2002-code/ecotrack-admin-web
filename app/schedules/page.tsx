@@ -989,6 +989,7 @@ export default function SchedulesPage() {
         routeId: route.id,
         assignedRouteId: route.id,
         routeName: route.routeName || "",
+        routeModel: "service-area-live-gps",
         routeType: "service-area-route",
         trackingMode: "live-gps",
         routeVerified: true,

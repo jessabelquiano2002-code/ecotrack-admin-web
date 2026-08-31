@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAuth } from "firebase-admin/auth";
 import { adminDb, adminMessaging } from "../../../lib/firebase-admin";
+import { authErrorStatus, requireAdmin } from "../../../lib/serverAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -66,26 +66,7 @@ async function findDriverTokens(driverId: string): Promise<string[]> {
 
 export async function POST(request: NextRequest) {
   try {
-    const authorization = request.headers.get("authorization") || "";
-
-    if (!authorization.startsWith("Bearer ")) {
-      return NextResponse.json(
-        { success: false, message: "Unauthorized request." },
-        { status: 401 },
-      );
-    }
-
-    const idToken = authorization.slice("Bearer ".length).trim();
-    if (!idToken) {
-      return NextResponse.json(
-        { success: false, message: "Missing authentication token." },
-        { status: 401 },
-      );
-    }
-
-    // Verify that the call came from a signed-in Firebase account.
-    // Your Activity Requests page is already restricted to administrators.
-    await getAuth().verifyIdToken(idToken);
+    await requireAdmin(request);
 
     const body = (await request.json()) as NotifyPayload;
     const driverId = clean(body.driverId);
@@ -171,17 +152,18 @@ export async function POST(request: NextRequest) {
       successCount: response.successCount,
       failureCount: response.failureCount,
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Driver activity notification failed:", error);
+    const status = authErrorStatus(error);
     return NextResponse.json(
       {
         success: false,
         message:
-          error instanceof Error
+          status === 500 && error instanceof Error
             ? error.message
-            : "Unable to send driver notification.",
+            : "Not authorized.",
       },
-      { status: 500 },
+      { status },
     );
   }
 }
