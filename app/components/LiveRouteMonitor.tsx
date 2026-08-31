@@ -56,6 +56,9 @@ type DriverActivity = {
 
 const DEFAULT_CENTER: LngLatTuple = [124.886, 11.775];
 const ROUTE_STATUSES: RouteStatus[] = ["Not Started", "Ongoing", "On Route", "Deviated from Route", "Partially Completed", "Completed", "Missed Route"];
+const MAX_REASONABLE_ACCURACY_METERS = 100;
+const MIN_VISUAL_POINT_DISTANCE_METERS = 4;
+const MAX_REASONABLE_SPEED_METERS_PER_SECOND = 45;
 
 function asRecords(value: unknown): Record<string, RawRecord> {
   return value && typeof value === "object" ? value as Record<string, RawRecord> : {};
@@ -82,6 +85,38 @@ function gpsPoint(value: unknown): Point | null {
   const lng = Number(raw.longitude ?? raw.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
   return { lat, lng, timestamp: timestamp(raw.timestamp ?? raw.lastUpdated), accuracy: Number(raw.accuracy || 0) };
+}
+
+function distanceMetersBetween(a: Point, b: Point): number {
+  const radius = 6_371_000;
+  const lat1 = a.lat * Math.PI / 180;
+  const lat2 = b.lat * Math.PI / 180;
+  const deltaLat = (b.lat - a.lat) * Math.PI / 180;
+  const deltaLng = (b.lng - a.lng) * Math.PI / 180;
+  const sinLat = Math.sin(deltaLat / 2);
+  const sinLng = Math.sin(deltaLng / 2);
+  const value = sinLat * sinLat + Math.cos(lat1) * Math.cos(lat2) * sinLng * sinLng;
+  return radius * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+}
+
+/** Filters only the rendered trace. Firebase history is never modified. */
+function cleanGpsTrace(points: Point[]): Point[] {
+  const ordered = [...points].sort((a, b) => a.timestamp - b.timestamp);
+  const accepted: Point[] = [];
+  for (const point of ordered) {
+    if (point.accuracy > MAX_REASONABLE_ACCURACY_METERS) continue;
+    const previous = accepted.at(-1);
+    if (!previous) { accepted.push(point); continue; }
+    const distance = distanceMetersBetween(previous, point);
+    if (distance < MIN_VISUAL_POINT_DISTANCE_METERS) {
+      accepted[accepted.length - 1] = point;
+      continue;
+    }
+    const elapsedSeconds = Math.max(1, (point.timestamp - previous.timestamp) / 1000);
+    if (point.timestamp && previous.timestamp && distance / elapsedSeconds > MAX_REASONABLE_SPEED_METERS_PER_SECOND) continue;
+    accepted.push(point);
+  }
+  return accepted.length >= 2 ? accepted : ordered;
 }
 
 function statusValue(value: unknown): RouteStatus {
@@ -137,7 +172,7 @@ function historyPoints(historyData: Record<string, RawRecord>, scheduleId: strin
   const scheduleHistory = asRecords(historyData[scheduleId]);
   const sessionHistory = (scheduleHistory[sessionId] || {}) as RawRecord;
   const points = asRecords(sessionHistory.points || sessionHistory);
-  return Object.values(points).map(gpsPoint).filter((point): point is Point => point !== null).sort((left, right) => left.timestamp - right.timestamp);
+  return cleanGpsTrace(Object.values(points).map(gpsPoint).filter((point): point is Point => point !== null).sort((left, right) => left.timestamp - right.timestamp));
 }
 
 function passedIndexSet(value: unknown) {
@@ -640,6 +675,7 @@ function RouteMap({ coordinates, actualPoints, checkpoints, passedSegments, sele
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
+  const markerRequestRef = useRef(0);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -675,10 +711,11 @@ function RouteMap({ coordinates, actualPoints, checkpoints, passedSegments, sele
         map.addSource("route-segments", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addSource("actual-route", { type: "geojson", data: emptyLine() });
         map.addSource("route-checkpoints", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-        map.addLayer({ id: "assigned-route", type: "line", source: "assigned-route", paint: { "line-color": "#0f766e", "line-width": 4, "line-dasharray": [2, 2], "line-opacity": .75 } });
-        map.addLayer({ id: "route-remaining", type: "line", source: "route-segments", filter: ["==", ["get", "passed"], false], paint: { "line-color": ["get", "color"], "line-width": 6, "line-dasharray": [2, 1.4] } });
-        map.addLayer({ id: "route-passed", type: "line", source: "route-segments", filter: ["==", ["get", "passed"], true], paint: { "line-color": "#22c55e", "line-width": 7 } });
-        map.addLayer({ id: "actual-route", type: "line", source: "actual-route", paint: { "line-color": "#2563eb", "line-width": 4, "line-opacity": .92 } });
+        map.addLayer({ id: "assigned-route", type: "line", source: "assigned-route", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#0f766e", "line-width": 3, "line-dasharray": [2, 2], "line-opacity": .7 } });
+        map.addLayer({ id: "route-remaining", type: "line", source: "route-segments", filter: ["==", ["get", "passed"], false], layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": ["get", "color"], "line-width": 4, "line-dasharray": [2, 1.4], "line-opacity": .82 } });
+        map.addLayer({ id: "route-passed", type: "line", source: "route-segments", filter: ["==", ["get", "passed"], true], layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#22c55e", "line-width": 4.5, "line-opacity": .9 } });
+        map.addLayer({ id: "actual-route-casing", type: "line", source: "actual-route", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#ffffff", "line-width": 6.5, "line-opacity": .9, "line-blur": .3 } });
+        map.addLayer({ id: "actual-route", type: "line", source: "actual-route", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#2563eb", "line-width": 3.1, "line-opacity": .9 } });
         map.addLayer({ id: "route-checkpoints", type: "circle", source: "route-checkpoints", paint: { "circle-radius": 5, "circle-color": "#fff", "circle-stroke-width": 3, "circle-stroke-color": "#059669" } });
         setReady(true);
       });
@@ -696,8 +733,11 @@ function RouteMap({ coordinates, actualPoints, checkpoints, passedSegments, sele
     setSource(map, "actual-route", lineData(actualPoints.map((point): LngLatTuple => [point.lng, point.lat])));
     setSource(map, "route-checkpoints", { type: "FeatureCollection", features: checkpoints.map((point) => ({ type: "Feature", properties: { purok: point.purok }, geometry: { type: "Point", coordinates: [point.lng, point.lat] } })) });
     markerRef.current?.remove();
+    markerRef.current = null;
+    const markerRequest = ++markerRequestRef.current;
     if (selectedLocation) {
       import("maplibre-gl").then((maplibregl) => {
+        if (markerRequest !== markerRequestRef.current || mapRef.current !== map) return;
         const wrapper = document.createElement("div");
         wrapper.className = "live-driver-marker-wrap";
 
@@ -740,7 +780,7 @@ function RouteMap({ coordinates, actualPoints, checkpoints, passedSegments, sele
 
         markerRef.current.setPopup(popup);
       });
-    }
+    } else markerRequestRef.current += 1;
     const all = [...coordinates, ...actualPoints.map((point): LngLatTuple => [point.lng, point.lat]), ...(selectedLocation ? [[selectedLocation.lng, selectedLocation.lat] as LngLatTuple] : [])];
     if (all.length === 1) map.flyTo({ center: all[0], zoom: 16 });
     else if (all.length > 1) {
@@ -835,22 +875,25 @@ function ActivityDayMap({ activities, focusKey }: { activities: DriverActivity[]
           id: "day-assigned-routes",
           type: "line",
           source: "day-assigned-routes",
+          layout: { "line-cap": "round", "line-join": "round" },
           paint: {
             "line-color": "#0f766e",
-            "line-width": 5,
+            "line-width": 3,
             "line-opacity": 0.8,
             "line-dasharray": [2, 1.5],
           },
         });
 
+        map.addLayer({ id: "day-actual-routes-casing", type: "line", source: "day-actual-routes", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#ffffff", "line-width": 6.5, "line-opacity": .9, "line-blur": .3 } });
         map.addLayer({
           id: "day-actual-routes",
           type: "line",
           source: "day-actual-routes",
+          layout: { "line-cap": "round", "line-join": "round" },
           paint: {
             "line-color": "#2563eb",
-            "line-width": 5,
-            "line-opacity": 0.95,
+            "line-width": 3.1,
+            "line-opacity": 0.9,
           },
         });
 

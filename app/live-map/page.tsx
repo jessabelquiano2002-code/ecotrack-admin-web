@@ -61,14 +61,10 @@ export default function LiveMapPage() {
 
   const stats = useMemo(() => {
     const ids = new Set([...Object.keys(drivers), ...Object.keys(locations)]);
-    let online = 0;
-    let stale = 0;
-    let offline = 0;
+    let online = 0, stale = 0, offline = 0;
     ids.forEach((id) => {
       const state = stateFrom(locations[id] || {}, drivers[id] || {});
-      if (state === "online") online += 1;
-      else if (state === "stale") stale += 1;
-      else offline += 1;
+      if (state === "online") online += 1; else if (state === "stale") stale += 1; else offline += 1;
     });
     let historyCount = 0;
     Object.values(sessions).forEach((raw) => { historyCount += Object.keys(raw && typeof raw === "object" ? raw as RawRecord : {}).length; });
@@ -77,37 +73,23 @@ export default function LiveMapPage() {
 
   return (
     <DashboardShell title="Live Map" description="Track drivers, verify assigned routes, and inspect stored GPS trip history." hidePageHeader>
-      <div className="live-ops-page">
+      <main className="live-ops-page">
         <section className="live-ops-hero">
-          <div>
-            <span>GPS OPERATIONS CENTER</span>
-            <h1>Live Map & Route Verification</h1>
-            <p>
-              One workspace for current truck GPS, assigned-route comparison, selected operations, driver history, and route replay.
-              Analytics now keeps the completed actual GPS footprint separate for cleaner reporting.
-            </p>
-          </div>
+          <div><span>GPS OPERATIONS CENTER</span><h1>Live Map &amp; Route Verification</h1><p>Monitor current truck positions, compare assigned coverage with the recorded GPS trail, and inspect completed trip history.</p></div>
           <div className="live-sync"><i/><div><strong>Realtime Firebase</strong><small>Updated {relative(lastUpdated)}</small></div></div>
         </section>
-
         <section className="live-ops-metrics">
-          <Metric icon={<TruckIcon/>} label="Tracked drivers" value={stats.total} note="Drivers with profile or GPS" tone="green"/>
-          <Metric icon={<RadioIcon/>} label="Live now" value={stats.online} note="GPS updated within 2 minutes" tone="live"/>
+          <Metric icon={<TruckIcon/>} label="Tracked drivers" value={stats.total} note="Profile or GPS record" tone="green"/>
+          <Metric icon={<RadioIcon/>} label="Live now" value={stats.online} note="Updated within 2 minutes" tone="live"/>
           <Metric icon={<VerifyIcon/>} label="Needs update" value={stats.stale} note={`${stats.offline} offline`} tone="amber"/>
-          <Metric icon={<HistoryIcon/>} label="Stored sessions" value={stats.historyCount} note="Available for driver/route history" tone="blue"/>
+          <Metric icon={<HistoryIcon/>} label="Stored sessions" value={stats.historyCount} note="Available for replay" tone="blue"/>
         </section>
-
-        <section className="live-workspace-intro">
-          <div><span>LIVE OPERATIONS WORKSPACE</span><h2>Current position + verification + history</h2></div>
-          <div className="workspace-guide"><b>1</b><span>Select driver</span><b>2</b><span>Inspect actual vs assigned</span><b>3</b><span>Open/replay history</span></div>
-        </section>
-
+        <section className="live-workspace-intro"><div><span>LIVE OPERATIONS WORKSPACE</span><h2>Current position, route verification, and history</h2></div><div className="workspace-guide"><b>1</b><span>Select driver</span><b>2</b><span>Inspect route</span><b>3</b><span>Replay history</span></div></section>
         <LiveRouteMonitor />
-      </div>
-
+      </main>
       <style jsx global>{`
-        .live-ops-page{width:100%;max-width:1680px;margin:0 auto;display:grid;gap:16px;color:#10231b}.live-ops-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:24px 25px;border:1px solid #d8e4dc;border-radius:24px;background:radial-gradient(circle at 85% 15%,rgba(34,197,94,.12),transparent 25%),linear-gradient(120deg,#fff 0%,#f7fbf8 55%,#edf8f0 100%);box-shadow:0 12px 30px rgba(16,35,27,.055)}.live-ops-hero>div:first-child{max-width:890px}.live-ops-hero span,.live-workspace-intro>div:first-child>span{color:#168a4a;font-size:10px;font-weight:950;letter-spacing:.11em}.live-ops-hero h1{margin:6px 0 0;color:#10231b;font-size:clamp(30px,3vw,44px);line-height:1.05;letter-spacing:-.045em}.live-ops-hero p{margin:10px 0 0;color:#5f7167;font-size:14px;line-height:1.6}.live-sync{display:flex;align-items:center;gap:11px;min-width:205px;padding:12px 14px;border:1px solid #cce2d4;border-radius:15px;background:#fff;box-shadow:0 8px 20px rgba(16,35,27,.06)}.live-sync i{width:10px;height:10px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 6px rgba(34,197,94,.12)}.live-sync strong,.live-sync small{display:block}.live-sync strong{font-size:12px;color:#17683e}.live-sync small{margin-top:3px;color:#718078;font-size:10px}.live-ops-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.live-ops-metric{--tone:#168a4a;--soft:#e9f7ee;display:flex;align-items:center;gap:13px;min-height:96px;padding:15px 16px;border:1px solid #dce6e0;border-radius:17px;background:#fff;box-shadow:0 8px 22px rgba(16,35,27,.045)}.live-ops-metric.live{--tone:#16a34a;--soft:#ecfdf3}.live-ops-metric.amber{--tone:#b7790d;--soft:#fff6df}.live-ops-metric.blue{--tone:#2563eb;--soft:#edf4ff}.live-ops-metric-icon{width:45px;height:45px;display:grid;place-items:center;flex:0 0 45px;border-radius:14px;background:var(--soft);color:var(--tone)}.live-ops-metric-icon svg{width:23px;height:23px;fill:currentColor}.live-ops-metric-copy span,.live-ops-metric-copy strong,.live-ops-metric-copy small{display:block}.live-ops-metric-copy span{color:#40564a;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.03em}.live-ops-metric-copy strong{margin-top:4px;color:#10231b;font-size:26px;line-height:1}.live-ops-metric-copy small{margin-top:4px;color:#718078;font-size:10px}.live-workspace-intro{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 17px;border:1px solid #dfe8e2;border-radius:16px;background:#fff}.live-workspace-intro h2{margin:4px 0 0;font-size:18px;letter-spacing:-.025em}.workspace-guide{display:flex;align-items:center;gap:7px;flex-wrap:wrap;color:#617268;font-size:10px;font-weight:800}.workspace-guide b{width:22px;height:22px;display:grid;place-items:center;border-radius:50%;background:#e8f6ed;color:#167a44}.workspace-guide span:not(:last-child){margin-right:7px}.live-ops-page .live-route-monitor{margin:0!important}
-        @media(max-width:1000px){.live-ops-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.live-ops-hero,.live-workspace-intro{align-items:stretch;flex-direction:column}.live-sync{width:100%}}@media(max-width:620px){.live-ops-metrics{grid-template-columns:1fr}.live-ops-hero{padding:20px}.workspace-guide{display:grid;grid-template-columns:auto 1fr}}
+        .live-ops-page{width:min(100%,1680px);margin:0 auto;padding:4px 4px 32px;display:grid;gap:20px;color:#10231b}.live-ops-hero{display:flex;align-items:center;justify-content:space-between;gap:28px;padding:22px 24px;border:1px solid #d8e4dc;border-radius:22px;background:radial-gradient(circle at 86% 10%,rgba(34,197,94,.11),transparent 28%),linear-gradient(120deg,#fff,#f5faf7 60%,#eef8f1);box-shadow:0 12px 30px rgba(16,35,27,.05)}.live-ops-hero>div:first-child{max-width:850px}.live-ops-hero span,.live-workspace-intro>div:first-child>span{color:#168a4a;font-size:10px;font-weight:950;letter-spacing:.12em}.live-ops-hero h1{margin:6px 0 0;font-size:clamp(29px,3vw,42px);line-height:1.08;letter-spacing:-.04em}.live-ops-hero p{max-width:780px;margin:9px 0 0;color:#5f7167;font-size:14px;line-height:1.55}.live-sync{display:flex;align-items:center;gap:12px;min-width:210px;padding:13px 15px;border:1px solid #cce2d4;border-radius:15px;background:rgba(255,255,255,.92);box-shadow:0 8px 20px rgba(16,35,27,.05)}.live-sync i{width:9px;height:9px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 6px rgba(34,197,94,.12)}.live-sync strong,.live-sync small{display:block}.live-sync strong{font-size:12px;color:#17683e}.live-sync small{margin-top:3px;color:#718078;font-size:10px}.live-ops-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.live-ops-metric{--tone:#168a4a;--soft:#e9f7ee;display:flex;align-items:center;gap:14px;min-height:92px;padding:15px 17px;border:1px solid #dce6e0;border-radius:17px;background:#fff;box-shadow:0 7px 20px rgba(16,35,27,.04)}.live-ops-metric.live{--tone:#16a34a;--soft:#ecfdf3}.live-ops-metric.amber{--tone:#b7790d;--soft:#fff6df}.live-ops-metric.blue{--tone:#2563eb;--soft:#edf4ff}.live-ops-metric-icon{width:44px;height:44px;display:grid;place-items:center;flex:0 0 44px;border-radius:13px;background:var(--soft);color:var(--tone)}.live-ops-metric-icon svg{width:22px;height:22px;fill:currentColor}.live-ops-metric-copy span,.live-ops-metric-copy strong,.live-ops-metric-copy small{display:block}.live-ops-metric-copy span{color:#40564a;font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}.live-ops-metric-copy strong{margin-top:4px;font-size:25px;line-height:1}.live-ops-metric-copy small{margin-top:5px;color:#718078;font-size:10px}.live-workspace-intro{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:15px 18px;border:1px solid #dfe8e2;border-radius:17px;background:#fff;box-shadow:0 5px 16px rgba(16,35,27,.035)}.live-workspace-intro h2{margin:4px 0 0;font-size:18px;letter-spacing:-.025em}.workspace-guide{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:#617268;font-size:10px;font-weight:800}.workspace-guide b{width:23px;height:23px;display:grid;place-items:center;border-radius:50%;background:#e8f6ed;color:#167a44}.workspace-guide span:not(:last-child){margin-right:8px}.live-ops-page .live-route-monitor{margin:0!important;border-radius:22px!important;overflow:hidden}.live-ops-page .map-workspace,.live-ops-page .live-map-workspace{gap:0!important;border:1px solid #d8e4dc!important;border-radius:20px!important;overflow:hidden!important;background:#fff!important;box-shadow:0 12px 28px rgba(16,35,27,.06)!important}.live-ops-page .map-panel,.live-ops-page .live-map-panel{min-height:540px!important}.live-ops-page .drivers-panel,.live-ops-page .driver-panel{min-width:320px!important;border-left:1px solid #dfe8e2!important;background:#fbfdfc!important}.live-ops-page .filter-bar,.live-ops-page .route-filters{gap:12px!important;padding:15px!important;border-radius:18px!important}.live-ops-page .maplibregl-canvas{outline:none}.live-ops-page .maplibregl-ctrl-group{border-radius:10px!important;overflow:hidden;box-shadow:0 4px 12px rgba(15,23,42,.14)!important}
+        @media(max-width:1000px){.live-ops-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.live-ops-hero,.live-workspace-intro{align-items:stretch;flex-direction:column}.live-sync{width:100%}.live-ops-page .drivers-panel,.live-ops-page .driver-panel{min-width:0!important;border-left:0!important;border-top:1px solid #dfe8e2!important}}@media(max-width:620px){.live-ops-page{gap:14px;padding-inline:0}.live-ops-metrics{grid-template-columns:1fr}.live-ops-hero{padding:19px}.workspace-guide{display:grid;grid-template-columns:auto 1fr}.live-ops-page .map-panel,.live-ops-page .live-map-panel{min-height:430px!important}}
       `}</style>
     </DashboardShell>
   );
