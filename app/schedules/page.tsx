@@ -36,6 +36,12 @@ type RouteRecord = {
   barangays?: string[] | Record<string, string | boolean>;
   puroks?: string[] | Record<string, string | boolean>;
   areas?: ServiceArea[] | Record<string, ServiceArea>;
+  coverageByBarangay?: Record<string, {
+    barangay?: string;
+    barangayKey?: string;
+    puroks?: string[] | Record<string, string | boolean>;
+    areas?: ServiceArea[] | Record<string, ServiceArea>;
+  }>;
   assignedDriverId?: string;
   assignedDriverName?: string;
   assignedVehicle?: string;
@@ -200,20 +206,55 @@ function getServiceAreas(value: unknown): ServiceArea[] {
     .sort((left, right) => Number(left.order || 0) - Number(right.order || 0));
 }
 
+function getRouteServiceAreas(route: RouteRecord): ServiceArea[] {
+  const explicitAreas = getServiceAreas(route.areas);
+  if (explicitAreas.length > 0) return explicitAreas;
+
+  return Object.entries(route.coverageByBarangay || {}).flatMap(
+    ([storedKey, coverage]) => {
+      const barangay = String(coverage.barangay || storedKey).trim();
+      const barangayKey = coverage.barangayKey || makeBarangayKey(barangay);
+      const nestedAreas = getServiceAreas(coverage.areas);
+      if (nestedAreas.length > 0) return nestedAreas;
+
+      return normalizeArray(coverage.puroks).map((purok, order) => ({
+        areaKey: `${barangayKey}|${makePurokKey(purok)}`,
+        barangay,
+        barangayKey,
+        purok: normalizePurokLabel(purok),
+        purokKey: makePurokKey(purok),
+        order,
+      }));
+    },
+  );
+}
+
 function routeCoversSelection(
   route: RouteRecord,
   barangays: string[],
   selectedPuroks: string[],
 ): boolean {
-  const routeAreas = getServiceAreas(route.areas);
-  const coversEveryArea = barangays.every((barangay) =>
-    selectedPuroks.every((purok) =>
-      routeAreas.some(
-        (area) =>
-          makeBarangayKey(area.barangay) === makeBarangayKey(barangay) &&
-          normalizePurokLabel(area.purok) === normalizePurokLabel(purok),
-      ),
-    ),
+  const routeAreas = getRouteServiceAreas(route);
+  const selectedBarangayKeys = new Set(barangays.map(makeBarangayKey));
+  const selectedPurokLabels = new Set(
+    selectedPuroks.map(normalizePurokLabel).filter(Boolean),
+  );
+  const matchingAreas = routeAreas.filter(
+    (area) =>
+      selectedBarangayKeys.has(makeBarangayKey(area.barangay)) &&
+      selectedPurokLabels.has(normalizePurokLabel(area.purok)),
+  );
+  const coveredBarangayKeys = new Set(
+    matchingAreas.map((area) => makeBarangayKey(area.barangay)),
+  );
+  const coveredPurokLabels = new Set(
+    matchingAreas.map((area) => normalizePurokLabel(area.purok)),
+  );
+  const coversEveryBarangay = [...selectedBarangayKeys].every((key) =>
+    coveredBarangayKeys.has(key),
+  );
+  const coversEverySelectedPurok = [...selectedPurokLabels].every((purok) =>
+    coveredPurokLabels.has(purok),
   );
 
   const routeStatus = String(route.status || "ready").toLowerCase();
@@ -225,10 +266,28 @@ function routeCoversSelection(
     route.routeValidation?.status === "verified";
 
   return (
-    coversEveryArea &&
+    coversEveryBarangay &&
+    coversEverySelectedPurok &&
     routeIsAvailable &&
     verified &&
     Boolean(route.assignedDriverId)
+  );
+}
+
+function getMatchingRouteAreas(
+  route: RouteRecord,
+  barangays: string[],
+  selectedPuroks: string[],
+): ServiceArea[] {
+  const selectedBarangayKeys = new Set(barangays.map(makeBarangayKey));
+  const selectedPurokLabels = new Set(
+    selectedPuroks.map(normalizePurokLabel).filter(Boolean),
+  );
+
+  return getRouteServiceAreas(route).filter(
+    (area) =>
+      selectedBarangayKeys.has(makeBarangayKey(area.barangay)) &&
+      selectedPurokLabels.has(normalizePurokLabel(area.purok)),
   );
 }
 
@@ -918,11 +977,7 @@ export default function SchedulesPage() {
       result[makePurokKey(purok)] = purokTimes[purok];
       return result;
     }, {});
-    const selectedBarangayKeys = new Set(barangays.map(makeBarangayKey));
-    const selectedPurokLabels = new Set(selectedPuroks.map(normalizePurokLabel));
-    const scheduleAreas = getServiceAreas(route.areas)
-      .filter((area) => selectedBarangayKeys.has(makeBarangayKey(area.barangay)))
-      .filter((area) => !area.purok || selectedPurokLabels.has(normalizePurokLabel(area.purok)))
+    const scheduleAreas = getMatchingRouteAreas(route, barangays, selectedPuroks)
       .map((area) => ({
         ...area,
         startTime: area.purok
@@ -933,20 +988,24 @@ export default function SchedulesPage() {
     if (scheduleAreas.length === 0) {
       return alert("The route assignment has no Barangay/Purok coverage matching this schedule.");
     }
-    const uncoveredAreas = barangays.flatMap((barangay) =>
-      selectedPuroks
-        .filter(
-          (purok) =>
-            !scheduleAreas.some(
-              (area) =>
-                makeBarangayKey(area.barangay) === makeBarangayKey(barangay) &&
-                normalizePurokLabel(area.purok) === normalizePurokLabel(purok),
-            ),
-        )
-        .map((purok) => `${barangay} / ${purok}`),
+    const coveredBarangays = new Set(
+      scheduleAreas.map((area) => makeBarangayKey(area.barangay)),
     );
-    if (uncoveredAreas.length > 0) {
-      return alert(`The selected route assignment does not include: ${uncoveredAreas.join(", ")}.`);
+    const coveredPuroks = new Set(
+      scheduleAreas.map((area) => normalizePurokLabel(area.purok)),
+    );
+    const missingBarangays = barangays.filter(
+      (barangay) => !coveredBarangays.has(makeBarangayKey(barangay)),
+    );
+    const missingPuroks = selectedPuroks.filter(
+      (purok) => !coveredPuroks.has(normalizePurokLabel(purok)),
+    );
+    if (missingBarangays.length > 0 || missingPuroks.length > 0) {
+      const details = [
+        missingBarangays.length ? `Barangays: ${missingBarangays.join(", ")}` : "",
+        missingPuroks.length ? `Puroks: ${missingPuroks.join(", ")}` : "",
+      ].filter(Boolean).join("; ");
+      return alert(`The selected route assignment is missing coverage for ${details}.`);
     }
 
     try {

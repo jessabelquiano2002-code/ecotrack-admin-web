@@ -89,6 +89,13 @@ type RouteRecord = {
   barangays?: string[] | Record<string, string | boolean>;
   puroks?: string[] | Record<string, string | boolean>;
   areas?: RouteArea[] | Record<string, RouteArea>;
+  coverageByBarangay?: Record<string, {
+    barangay: string;
+    barangayKey: string;
+    puroks: string[];
+    purokKeys: string[];
+    areas: RouteArea[];
+  }>;
   assignedDriverId?: string;
   assignedDriverName?: string;
   assignedVehicle?: string;
@@ -956,6 +963,21 @@ export default function RoutesPage() {
 
     const now = Date.now();
     const vehicle = form.assignedVehicle.trim() || driver.truck || "";
+    const coverageByBarangay = Object.fromEntries(
+      barangays.map((barangay) => {
+        const barangayKey = makeBarangayKey(barangay);
+        const barangayAreas = areas.filter(
+          (area) => area.barangayKey === barangayKey,
+        );
+        return [barangayKey, {
+          barangay,
+          barangayKey,
+          puroks: barangayAreas.map((area) => area.purok).filter(Boolean),
+          purokKeys: barangayAreas.map((area) => area.purokKey).filter(Boolean),
+          areas: barangayAreas,
+        }];
+      }),
+    );
     const payload = {
       routeName,
       barangay: barangays[0],
@@ -965,6 +987,7 @@ export default function RoutesPage() {
       puroks,
       purokKeys: puroks.map(makePurokKey),
       areas,
+      coverageByBarangay,
       barangayDestinations,
       checkpoints: [],
       assignedDriverId: driver.id,
