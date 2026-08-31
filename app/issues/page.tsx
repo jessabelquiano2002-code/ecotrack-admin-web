@@ -391,8 +391,7 @@ export default function IssuesPage() {
   const availableBarangays = useMemo(() => Object.entries(serviceRegistry)
     .filter(([, record]) => record.active !== false)
     .filter(([, record]) => Object.values(record.puroks || {}).some((purok) =>
-      purok.active !== false && purok.verified === true &&
-      Number.isFinite(Number(purok.lat)) && Number.isFinite(Number(purok.lng))))
+      purok.active !== false))
     .map(([key, record]) => findOfficialBarangay(record.barangay || key)?.name || record.barangay || key)
     .sort((left, right) => left.localeCompare(right)), [serviceRegistry]);
 
@@ -607,7 +606,7 @@ export default function IssuesPage() {
     });
     Object.values(serviceRegistry).forEach((barangay) => {
       Object.values(barangay.puroks || {}).forEach((purok) => {
-        if (purok.active !== false && purok.verified === true && purok.purok) puroks.add(purok.purok);
+        if (purok.active !== false && purok.purok) puroks.add(purok.purok);
       });
     });
 
