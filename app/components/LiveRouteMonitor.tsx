@@ -116,7 +116,43 @@ function cleanGpsTrace(points: Point[]): Point[] {
     if (point.timestamp && previous.timestamp && distance / elapsedSeconds > MAX_REASONABLE_SPEED_METERS_PER_SECOND) continue;
     accepted.push(point);
   }
-  return accepted.length >= 2 ? accepted : ordered;
+  const reliable = accepted.length >= 2 ? accepted : ordered;
+  if (reliable.length < 3) return reliable;
+
+  // Remove short A-B-A GPS reversals that create sharp scribbles around a
+  // stationary or slowly moving truck. Keep the actual first and last sample.
+  let deSpiked = reliable;
+  for (let pass = 0; pass < 2 && deSpiked.length > 3; pass += 1) {
+    deSpiked = deSpiked.filter((point, index, values) => {
+      if (index === 0 || index === values.length - 1) return true;
+      const previous = values[index - 1];
+      const next = values[index + 1];
+      const via = distanceMetersBetween(previous, point) + distanceMetersBetween(point, next);
+      const direct = distanceMetersBetween(previous, next);
+      return via <= Math.max(35, direct * 2.35);
+    });
+  }
+
+  if (deSpiked.length < 5) return deSpiked;
+
+  // A five-sample median removes left/right GPS jitter while preserving turns.
+  // The first and latest real positions are kept unchanged.
+  const smoothed = deSpiked.map((point, index) => {
+    if (index === 0 || index === deSpiked.length - 1) return point;
+    const from = Math.max(0, index - 2);
+    const to = Math.min(deSpiked.length, index + 3);
+    const window = deSpiked.slice(from, to);
+    const latitudes = window.map((item) => item.lat).sort((a, b) => a - b);
+    const longitudes = window.map((item) => item.lng).sort((a, b) => a - b);
+    const middle = Math.floor(window.length / 2);
+    return { ...point, lat: latitudes[middle], lng: longitudes[middle] };
+  });
+
+  return smoothed.filter((point, index, values) =>
+    index === 0
+    || index === values.length - 1
+    || distanceMetersBetween(values[index - 1], point) >= 6
+  );
 }
 
 function statusValue(value: unknown): RouteStatus {
@@ -200,6 +236,7 @@ export function LiveRouteMonitor() {
   const [statusFilter, setStatusFilter] = useState("");
   const [replayIndex, setReplayIndex] = useState(0);
   const [replaying, setReplaying] = useState(false);
+  const [mapFocusTick, setMapFocusTick] = useState(0);
   const [openActivityDays, setOpenActivityDays] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -470,17 +507,48 @@ export function LiveRouteMonitor() {
         <button type="button" onClick={() => { setDateFilter(""); setPurokFilter(""); setScheduleFilter(""); setStatusFilter(""); setSearch(""); }}>Reset</button>
       </div>
 
-      <div className="monitor-workspace">
+      <div className="monitor-workspace approved-workspace">
         <div className="monitor-map-panel">
-          <RouteMap coordinates={routeCoordinates} actualPoints={actualPoints} checkpoints={routeCheckpoints.map((point) => ({ lng: point.lng, lat: point.lat, purok: point.purok || "" }))} passedSegments={passedSegments} selectedLocation={selected?.latestLocation || fullActualPoints.at(-1) || null} status={selectedStatus} driverName={selected?.driverName || ""} truck={selected?.truck || ""} focusKey={`${selectedKey}:${selectedSessionId}`} />
-          <div className="map-legend"><span><i className="assigned" />Assigned route</span><span><i className="travelled" />Actual GPS route</span><span><i className="passed" />Passed section</span><span><i className="remaining" />Unreached / missed</span></div>
+          <RouteMap coordinates={routeCoordinates} actualPoints={actualPoints} checkpoints={routeCheckpoints.map((point) => ({ lng: point.lng, lat: point.lat, purok: point.purok || "" }))} passedSegments={passedSegments} selectedLocation={selected?.latestLocation || fullActualPoints.at(-1) || null} status={selectedStatus} driverName={selected?.driverName || ""} truck={selected?.truck || ""} focusKey={`${selectedKey}:${selectedSessionId}:${mapFocusTick}`} />
+          <div className="approved-map-tools">
+            <label>
+              <span>Driver</span>
+              <select value={selected?.key || ""} onChange={(event) => setSelectedKey(event.target.value)}>
+                {filteredAssignments.map((item) => <option key={item.key} value={item.key}>{item.driverName} · {item.truck}</option>)}
+              </select>
+            </label>
+            <button type="button" onClick={() => setMapFocusTick((value) => value + 1)}>Follow truck</button>
+          </div>
+          <div className="map-legend"><span><i className="assigned" />Assigned route</span><span><i className="travelled" />Actual GPS route</span><span><i style={{ width: 9, height: 9, borderRadius: "50%", background: "#16a34a" }} />Start</span><span><i style={{ width: 9, height: 9, borderRadius: "50%", background: "#dc2626" }} />Stop / latest</span><span><i className="passed" />Passed section</span><span><i className="remaining" />Unreached / missed</span></div>
           {loading && <div className="map-loading"><i />Loading live GPS data…</div>}
           {!loading && !selected && <div className="map-empty"><strong>No assigned drivers match the filters</strong><span>Change a filter or assign a driver and GPS route to a schedule.</span></div>}
         </div>
 
-        <aside className="driver-panel"><div className="driver-panel-head"><div><h3>Drivers</h3><p>{filteredAssignments.length} assignment{filteredAssignments.length === 1 ? "" : "s"} shown</p></div></div><div className="monitor-driver-list">
-          {filteredAssignments.map((item) => <button key={item.key} type="button" onClick={() => setSelectedKey(item.key)} className={item.key === selected?.key ? "selected" : ""}><div className="driver-row-head"><span className="driver-initial">{item.driverName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span><div><strong>{item.driverName}</strong><small>{item.truck}</small></div><Status status={item.status} /></div><div className="driver-row-meta"><span>{item.scheduleName}</span><span>{item.puroks.join(", ") || "No puroks"}</span><span>GPS: {formatDateTime(item.lastUpdate)}</span></div><div className="mini-progress"><i style={{ width: `${item.progress}%` }} /></div></button>)}
-        </div></aside>
+        <aside className="driver-panel approved-operation-panel">
+          <div className="approved-operation-head"><h3>Selected operation</h3><p>One clear driver panel, no crowded map labels.</p></div>
+          {selected ? <>
+            <div className="approved-driver-card">
+              <div className="approved-driver-head">
+                <span className="approved-avatar">{selected.driverName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span>
+                <div><strong>{selected.truck || "Assigned truck"}</strong><small>{selected.driverName} · {selected.barangay || selected.scheduleName}</small></div>
+                <Status status={selectedStatus} />
+              </div>
+              <div className="approved-progress"><i style={{ width: `${progress}%` }} /></div>
+              <p>{progress}% of recorded trip completed</p>
+              <div className="approved-facts">
+                <Fact label="Distance" value={formatDistance(Number(sessionData.distanceTravelledMeters || 0))} />
+                <Fact label="Duration" value={formatDuration(Number(sessionData.durationSeconds || 0))} />
+                <Fact label="Last GPS" value={selected.lastUpdate ? formatTimeOnly(selected.lastUpdate) : "Waiting"} />
+                <Fact label="Accuracy" value={selected.latestLocation?.accuracy ? `± ${Math.round(selected.latestLocation.accuracy)} m` : "—"} />
+              </div>
+            </div>
+            <div className="approved-timeline">
+              <div className="approved-step start"><i /><div><strong>Route started</strong><small>{formatTimeOnly(timestamp(sessionData.startTime))} · assigned service area</small></div></div>
+              <div className="approved-step current"><i /><div><strong>Truck currently here</strong><small>{selected.lastUpdate ? "Live GPS position" : "Waiting for GPS"} · {selectedStatus}</small></div></div>
+              <div className="approved-step stop"><i /><div><strong>Latest recorded point</strong><small>{formatTimeOnly(selected.lastUpdate)} · {fullActualPoints.length} GPS samples</small></div></div>
+            </div>
+          </> : <div className="activity-empty"><strong>No selected operation.</strong><span>Choose a driver from the map control.</span></div>}
+        </aside>
       </div>
 
       {selected && <div className="route-detail-grid" id="selected-operation">
@@ -576,6 +644,8 @@ export function LiveRouteMonitor() {
                           <div className="activity-map-legend">
                             <span><i className="assigned" />Assigned route</span>
                             <span><i className="actual" />Actual GPS trail</span>
+                            <span><i className="start-point" />Start</span>
+                            <span><i className="stop-point" />Latest / stop</span>
                           </div>
                         </div>
 
@@ -663,6 +733,63 @@ export function LiveRouteMonitor() {
       <style jsx global>{`
         .live-route-monitor{display:flex;flex-direction:column;gap:15px;padding-top:2px}.monitor-heading{display:flex;justify-content:space-between;gap:20px;align-items:center}.monitor-heading>div>span{color:#059669;font-size:11px;font-weight:950;text-transform:uppercase;letter-spacing:.08em}.monitor-heading h2{margin:6px 0 0;color:#0f172a;font-size:25px;letter-spacing:-.035em}.monitor-heading p{margin:5px 0 0;color:#64748b;font-size:13px}.monitor-sync{display:grid;grid-template-columns:auto 1fr;column-gap:9px;padding:11px 13px;border:1px solid #dbe4df;border-radius:14px;background:#f8faf9;min-width:160px}.monitor-sync i{grid-row:1/3;width:10px;height:10px;margin-top:4px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 5px rgba(34,197,94,.13)}.monitor-sync strong,.monitor-sync small{display:block}.monitor-sync strong{font-size:12px}.monitor-sync small{color:#64748b}.monitor-error{padding:12px;border:1px solid #fecaca;border-radius:13px;background:#fef2f2;color:#b91c1c}.monitor-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.monitor-metric{padding:13px 14px;border:1px solid #e2e8f0;border-radius:16px;background:#fff}.monitor-metric small,.monitor-metric strong{display:block}.monitor-metric small{color:#64748b}.monitor-metric strong{margin-top:5px;font-size:24px;color:#0f172a}.monitor-metric.green{background:#f0fdf4}.monitor-metric.red{background:#fef2f2}.monitor-metric.blue{background:#eff6ff}.monitor-filters{display:grid;grid-template-columns:145px 145px minmax(180px,1fr) 180px minmax(190px,1.2fr) auto;gap:9px;padding:12px;border:1px solid #e2e8f0;border-radius:17px;background:#fff}.monitor-filters label{display:flex;flex-direction:column;gap:5px;color:#64748b;font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}.monitor-filters input,.monitor-filters select{height:39px;min-width:0;border:1px solid #dbe3df;border-radius:11px;background:#f8faf9;color:#0f172a;padding:0 9px;font-size:12px}.monitor-filters>button{height:39px;align-self:end;border:0;border-radius:11px;background:#f1f5f9;color:#334155;font-weight:850}.monitor-workspace{display:grid;grid-template-columns:minmax(0,1.9fr) minmax(290px,.75fr);min-height:540px;border:1px solid #dbe3df;border-radius:21px;overflow:hidden;background:#fff}.monitor-map-panel{position:relative;min-height:540px}.route-live-map{position:absolute;inset:0}.map-legend{position:absolute;z-index:2;left:14px;bottom:14px;display:flex;flex-wrap:wrap;gap:9px;padding:9px 11px;border-radius:13px;background:rgba(255,255,255,.94);box-shadow:0 8px 24px rgba(15,23,42,.14);font-size:10px;color:#475569}.map-legend span{display:flex;align-items:center;gap:5px}.map-legend i{width:24px;height:4px;border-radius:4px}.map-legend .assigned{background:#0f766e}.map-legend .travelled{background:#2563eb}.map-legend .passed{background:#22c55e}.map-legend .remaining{background:#f59e0b}.map-loading,.map-empty{position:absolute;z-index:3;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;justify-items:center;gap:7px;padding:17px;border-radius:16px;background:rgba(255,255,255,.95);box-shadow:0 12px 30px rgba(15,23,42,.16);text-align:center;color:#64748b}.map-loading i{width:27px;height:27px;border:3px solid #d1fae5;border-top-color:#059669;border-radius:50%;animation:monitor-spin .8s linear infinite}.map-empty strong{color:#0f172a}.driver-panel{border-left:1px solid #e2e8f0;background:#f8faf9;min-height:540px;display:flex;flex-direction:column}.driver-panel-head{padding:15px;border-bottom:1px solid #e2e8f0}.driver-panel-head h3{margin:0;color:#0f172a}.driver-panel-head p{margin:3px 0 0;color:#64748b;font-size:11px}.monitor-driver-list{padding:9px;overflow:auto;display:flex;flex-direction:column;gap:8px;max-height:490px}.monitor-driver-list>button{border:1px solid #e2e8f0;border-radius:15px;background:#fff;padding:11px;text-align:left;cursor:pointer}.monitor-driver-list>button.selected{border-color:#10b981;box-shadow:0 0 0 3px rgba(16,185,129,.11)}.driver-row-head{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:9px}.driver-initial{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;background:#064e3b;color:#fff;font-weight:900}.driver-row-head strong,.driver-row-head small{display:block}.driver-row-head strong{color:#0f172a;font-size:12px}.driver-row-head small{margin-top:2px;color:#64748b;font-size:10px}.route-status{display:inline-flex;padding:5px 7px;border-radius:999px;background:#e2e8f0;color:#334155;font-size:9px;font-weight:900;white-space:nowrap}.route-status.completed,.route-status.on-route{background:#dcfce7;color:#166534}.route-status.deviated-from-route,.route-status.missed-route{background:#fee2e2;color:#991b1b}.route-status.ongoing,.route-status.partially-completed{background:#fef3c7;color:#92400e}.driver-row-meta{display:flex;flex-direction:column;gap:3px;margin-top:8px;color:#64748b;font-size:10px}.mini-progress,.progress-track{height:6px;border-radius:999px;overflow:hidden;background:#e2e8f0}.mini-progress{margin-top:8px}.mini-progress i,.progress-track i{display:block;height:100%;background:linear-gradient(90deg,#059669,#22c55e)}.route-detail-grid{display:grid;grid-template-columns:1.55fr .75fr;gap:12px}.route-summary-card,.purok-visit-card,.route-replay{padding:16px;border:1px solid #e2e8f0;border-radius:18px;background:#fff}.route-title{display:flex;justify-content:space-between;gap:12px}.route-title small,.replay-heading small,.purok-visit-card>div>small{color:#059669;font-size:10px;font-weight:900;text-transform:uppercase}.route-title h3,.purok-visit-card h3,.replay-heading h3{margin:4px 0 0;color:#0f172a}.route-title p{margin:4px 0 0;color:#64748b;font-size:11px}.route-progress{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:13px;margin-top:14px}.route-progress strong,.route-progress span{display:block}.route-progress strong{font-size:24px;color:#0f172a}.route-progress span{color:#64748b;font-size:10px}.progress-track{height:9px}.route-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}.route-fact{padding:9px;border-radius:11px;background:#f8fafc}.route-fact small,.route-fact strong{display:block}.route-fact small{color:#64748b;font-size:9px;text-transform:uppercase}.route-fact strong{margin-top:3px;color:#0f172a;font-size:11px;overflow-wrap:anywhere}.visit-list{display:flex;flex-direction:column;gap:7px;margin-top:12px;max-height:240px;overflow:auto}.visit-list>div{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;padding:8px;border-radius:11px;background:#f8fafc}.visit-list i{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-style:normal;font-weight:900}.visit-list .visited i{background:#dcfce7;color:#166534}.visit-list .pending i{background:#fef3c7;color:#92400e}.visit-list span{font-size:11px;color:#334155}.visit-list strong{font-size:9px;color:#64748b}.replay-heading{display:flex;justify-content:space-between;align-items:end;gap:12px}.replay-heading select{height:38px;max-width:360px;border:1px solid #dbe3df;border-radius:10px;padding:0 9px;background:#f8faf9}.replay-controls{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;margin-top:12px}.replay-controls button{height:36px;border:0;border-radius:10px;background:#059669;color:#fff;padding:0 14px;font-weight:900}.replay-controls button:disabled{opacity:.5}.replay-controls span{color:#64748b;font-size:11px}.driver-activity-card{padding:16px;border:1px solid #e2e8f0;border-radius:18px;background:#fff}.activity-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}.activity-card-head small{color:#059669;font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}.activity-card-head h3{margin:4px 0 0;color:#0f172a}.activity-card-head p{margin:5px 0 0;color:#64748b;font-size:11px}.activity-print-all,.folder-print,.activity-extra button{border:0;border-radius:10px;background:#0f172a;color:#fff;font-weight:850;cursor:pointer}.activity-print-all{height:38px;padding:0 14px}.activity-print-all:disabled{opacity:.45;cursor:not-allowed}.activity-empty{display:flex;flex-direction:column;gap:4px;margin-top:14px;padding:18px;border-radius:14px;background:#f8fafc;color:#64748b}.activity-empty strong{color:#0f172a}.activity-folders{display:flex;flex-direction:column;gap:10px;margin-top:15px}.activity-folder{border:1px solid #dbe3df;border-radius:15px;overflow:hidden;background:#fff;transition:border-color .2s ease,box-shadow .2s ease}.activity-folder.open{border-color:#86efac;box-shadow:0 0 0 3px rgba(34,197,94,.06)}.activity-folder-head{display:grid;grid-template-columns:1fr auto;align-items:center;gap:10px;padding:8px;background:#f8fafc}.activity-folder.open .activity-folder-head{background:#f0fdf4}.activity-folder-toggle{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:11px;min-width:0;border:0;background:transparent;padding:4px 6px;text-align:left;cursor:pointer}.folder-icon{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:#fff;border:1px solid #e2e8f0;font-size:20px}.folder-title{display:flex;flex-direction:column;gap:2px;min-width:0}.folder-title strong{color:#0f172a;font-size:12px}.folder-title small{color:#64748b;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.folder-chevron{color:#64748b;font-size:14px}.folder-print{height:32px;padding:0 11px;font-size:10px}.activity-folder-body{border-top:1px solid #e2e8f0}.activity-day-overview{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(230px,.65fr);gap:12px;padding:12px;background:#fff}.activity-map-card{position:relative;min-height:290px;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;background:#eef2f7}.activity-map-head{position:absolute;z-index:3;left:10px;top:10px;display:flex;align-items:flex-end;justify-content:space-between;gap:15px;max-width:calc(100% - 20px);padding:7px 9px;border-radius:10px;background:rgba(255,255,255,.94);box-shadow:0 7px 22px rgba(15,23,42,.12)}.activity-map-head>div{display:flex;flex-direction:column;gap:2px}.activity-map-head small{color:#059669;font-size:8px;font-weight:900;text-transform:uppercase}.activity-map-head strong{font-size:10px;color:#0f172a}.activity-map-head>span{font-size:9px;color:#64748b}.activity-day-map{position:absolute;inset:0}.activity-map-legend{position:absolute;z-index:3;left:10px;bottom:10px;display:flex;gap:10px;padding:6px 8px;border-radius:9px;background:rgba(255,255,255,.94);box-shadow:0 7px 22px rgba(15,23,42,.12);font-size:9px;color:#475569}.activity-map-legend span{display:flex;align-items:center;gap:5px}.activity-map-legend i{width:20px;height:4px;border-radius:999px}.activity-map-legend .assigned{background:#0f766e}.activity-map-legend .actual{background:#2563eb}.activity-day-summary{display:grid;grid-template-columns:1fr 1fr;align-content:start;gap:8px}.activity-day-summary>div{padding:11px;border-radius:12px;background:#f8fafc;border:1px solid #eef2f7}.activity-day-summary small,.activity-day-summary strong{display:block}.activity-day-summary small{color:#64748b;font-size:9px;text-transform:uppercase}.activity-day-summary strong{margin-top:4px;color:#0f172a;font-size:11px;overflow-wrap:anywhere}.activity-list{display:flex;flex-direction:column;border-top:1px solid #eef2f7}.activity-record{border-bottom:1px solid #eef2f7;background:#fff}.activity-record:last-child{border-bottom:0}.activity-record.selected{background:#f0fdf4;box-shadow:inset 3px 0 0 #10b981}.activity-open{width:100%;display:grid;grid-template-columns:auto minmax(0,1.45fr) minmax(150px,.65fr) auto;align-items:center;gap:12px;padding:12px 13px;border:0;background:transparent;text-align:left;cursor:pointer}.activity-record-icon{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:#f1f5f9;border:1px solid #e2e8f0}.activity-main,.activity-time,.activity-status-wrap{display:flex;flex-direction:column;gap:3px}.activity-main strong{color:#0f172a;font-size:12px}.activity-main small,.activity-time small,.activity-status-wrap small{color:#64748b;font-size:10px}.activity-brgy{width:max-content;max-width:100%;padding:4px 7px;border-radius:999px;background:#dcfce7;color:#166534;font-size:9px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.activity-time strong{color:#334155;font-size:11px}.activity-status-wrap{align-items:flex-end}.activity-extra{display:grid;grid-template-columns:1.05fr 1.25fr .62fr .62fr .55fr auto;align-items:center;gap:8px;padding:9px 13px 11px 59px;border-top:1px dashed #e2e8f0;color:#64748b;font-size:9px}.activity-extra b{color:#334155}.activity-extra button{height:29px;padding:0 9px;font-size:9px;background:#059669}@media(max-width:1000px){.activity-day-overview{grid-template-columns:1fr}.activity-day-summary{grid-template-columns:repeat(4,1fr)}.activity-extra{grid-template-columns:1fr 1fr 1fr;padding-left:13px}}@media(max-width:760px){.activity-open{grid-template-columns:auto 1fr}.activity-time,.activity-status-wrap{grid-column:2}.activity-status-wrap{align-items:flex-start}.activity-day-summary{grid-template-columns:1fr 1fr}.activity-extra{grid-template-columns:1fr 1fr}.activity-map-head{align-items:flex-start;flex-direction:column;gap:3px}}@media(max-width:620px){.activity-card-head{flex-direction:column}.activity-print-all{width:100%}.activity-folder-head{grid-template-columns:1fr}.folder-print{width:100%}.activity-open{grid-template-columns:1fr}.activity-record-icon{display:none}.activity-time,.activity-status-wrap{grid-column:auto}.activity-extra{grid-template-columns:1fr;padding-left:13px}.activity-day-summary{grid-template-columns:1fr}.activity-map-card{min-height:260px}}.live-driver-marker-wrap{display:flex;flex-direction:column;align-items:center;gap:6px;transform:translateY(-10px)}.live-driver-label{max-width:220px;padding:6px 10px;border-radius:999px;background:rgba(15,23,42,.92);color:#fff;font-size:11px;font-weight:800;line-height:1.15;box-shadow:0 8px 24px rgba(15,23,42,.22);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.live-driver-sub{display:block;margin-top:2px;font-size:9px;font-weight:600;color:#cbd5e1;text-align:center}.live-driver-marker{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:#0f172a;color:#fff;border:4px solid #fff;box-shadow:0 5px 16px rgba(15,23,42,.38);font-size:18px}@keyframes monitor-spin{to{transform:rotate(360deg)}}@media(max-width:1050px){.monitor-filters{grid-template-columns:repeat(3,1fr)}.monitor-workspace{grid-template-columns:1fr}.driver-panel{border-left:0;border-top:1px solid #e2e8f0;min-height:auto}.monitor-driver-list{max-height:320px}.route-detail-grid{grid-template-columns:1fr}}@media(max-width:700px){.monitor-heading{align-items:flex-start;flex-direction:column}.monitor-sync{width:100%}.monitor-metrics{grid-template-columns:1fr 1fr}.monitor-filters{grid-template-columns:1fr 1fr}.monitor-search{grid-column:1/-1}.monitor-workspace,.monitor-map-panel{min-height:440px}.route-facts{grid-template-columns:1fr 1fr}.replay-heading{align-items:stretch;flex-direction:column}.replay-heading select{max-width:none}.replay-controls{grid-template-columns:1fr}.map-legend{right:14px}}@media(max-width:480px){.monitor-filters,.monitor-metrics,.route-facts{grid-template-columns:1fr}}
       `}</style>
+      <style jsx global>{`
+        .live-route-monitor{gap:18px}
+        .approved-workspace{grid-template-columns:minmax(0,1.65fr) 320px;min-height:650px;border-radius:20px;box-shadow:0 18px 48px rgba(15,23,42,.08)}
+        .monitor-map-panel,.driver-panel{min-height:580px}
+        .driver-panel{background:#fbfdfc}
+        .approved-workspace .monitor-map-panel{min-height:650px}
+        .approved-map-tools{position:absolute;z-index:4;left:16px;top:16px;display:flex;align-items:end;gap:9px}
+        .approved-map-tools label{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border:1px solid #dbe3df;border-radius:12px;background:rgba(255,255,255,.96);box-shadow:0 8px 22px rgba(15,23,42,.1);color:#64748b;font-size:9px;font-weight:800;text-transform:uppercase}
+        .approved-map-tools select{min-width:190px;border:0;outline:0;background:transparent;color:#0f172a;font-size:12px;font-weight:750}
+        .approved-map-tools button{height:45px;padding:0 14px;border:1px solid #dbe3df;border-radius:12px;background:rgba(255,255,255,.96);box-shadow:0 8px 22px rgba(15,23,42,.1);color:#0f172a;font-size:12px;font-weight:800;cursor:pointer}
+        .approved-operation-panel{min-height:650px;padding:22px 20px;border-left:1px solid #dbe3df;background:#fff;overflow:auto}
+        .approved-operation-head h3{margin:0;color:#0f172a;font-size:19px}
+        .approved-operation-head p{margin:5px 0 18px;color:#64748b;font-size:12px}
+        .approved-driver-card{padding:16px;border:1px solid #cfe0d6;border-radius:17px;background:#fff}
+        .approved-driver-head{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:11px}
+        .approved-avatar{width:46px;height:46px;display:grid;place-items:center;border-radius:14px;background:#065f46;color:#fff;font-size:14px;font-weight:900}
+        .approved-driver-head strong,.approved-driver-head small{display:block}
+        .approved-driver-head strong{color:#0f172a;font-size:14px}
+        .approved-driver-head small{margin-top:3px;color:#64748b;font-size:10px;line-height:1.4}
+        .approved-progress{height:8px;margin:17px 0 9px;border-radius:999px;overflow:hidden;background:#e2e8e5}
+        .approved-progress i{display:block;height:100%;border-radius:inherit;background:#20b568}
+        .approved-driver-card>p{margin:0;color:#64748b;font-size:11px}
+        .approved-facts{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:15px}
+        .approved-facts .route-fact{min-height:74px;padding:12px;border-radius:13px;background:#f1f6f3}
+        .approved-facts .route-fact small{font-size:10px;text-transform:none}
+        .approved-facts .route-fact strong{margin-top:8px;font-size:14px}
+        .approved-timeline{padding:20px 2px 0}
+        .approved-step{position:relative;display:grid;grid-template-columns:25px 1fr;gap:12px;padding-bottom:25px;color:#2563eb}
+        .approved-step:not(:last-child):before{content:"";position:absolute;left:11px;top:23px;bottom:0;width:2px;background:#dbe5df}
+        .approved-step>i{position:relative;z-index:1;width:25px;height:25px;border:3px solid currentColor;border-radius:50%;background:#fff}
+        .approved-step strong,.approved-step small{display:block}
+        .approved-step strong{font-size:12px;color:currentColor}
+        .approved-step small{margin-top:5px;color:#64748b;font-size:10px;line-height:1.4}
+        .approved-step.start{color:#16a34a}.approved-step.stop{color:#dc2626}
+        .activity-folder{border-radius:18px}
+        .activity-folder-head{padding:11px 12px}
+        .activity-day-overview{grid-template-columns:minmax(0,2.2fr) minmax(250px,.7fr);gap:16px;padding:16px}
+        .activity-map-card{min-height:390px;border-radius:16px}
+        .activity-map-head{left:14px;top:14px;padding:10px 12px;border-radius:12px}
+        .activity-map-head small{font-size:9px}
+        .activity-map-head strong{font-size:12px}
+        .activity-map-legend{left:14px;bottom:14px;gap:12px;padding:9px 11px;border-radius:12px;flex-wrap:wrap}
+        .activity-map-legend i.actual{height:5px;box-shadow:0 0 0 2px #fff}
+        .activity-map-legend i.start-point,.activity-map-legend i.stop-point{width:10px;height:10px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(15,23,42,.25)}
+        .activity-map-legend i.start-point{background:#16a34a}
+        .activity-map-legend i.stop-point{background:#dc2626}
+        .activity-day-summary{gap:10px}
+        .activity-day-summary>div{padding:14px;border-radius:13px;background:#f8faf9}
+        .activity-day-summary small{font-size:10px}
+        .activity-day-summary strong{margin-top:6px;font-size:13px}
+        .activity-record.selected{background:#f2fbf6}
+        .activity-open{padding:14px 16px}
+        .activity-extra{padding:11px 16px 13px 62px}
+        @media(max-width:1000px){.approved-workspace{grid-template-columns:1fr}.approved-operation-panel{min-height:auto;border-left:0;border-top:1px solid #dbe3df}.activity-day-overview{grid-template-columns:1fr}.activity-day-summary{grid-template-columns:repeat(4,1fr)}}
+        @media(max-width:760px){.approved-map-tools{right:14px;align-items:stretch;flex-direction:column}.approved-map-tools label,.approved-map-tools button{width:100%}.approved-map-tools select{min-width:0;width:100%}.activity-map-card{min-height:330px}.activity-day-summary{grid-template-columns:1fr 1fr}}
+        @media(max-width:620px){.activity-day-summary{grid-template-columns:1fr}.activity-extra{padding-left:13px}}
+      `}</style>
     </section>
   );
 }
@@ -710,12 +837,15 @@ function RouteMap({ coordinates, actualPoints, checkpoints, passedSegments, sele
         map.addSource("assigned-route", { type: "geojson", data: emptyLine() });
         map.addSource("route-segments", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addSource("actual-route", { type: "geojson", data: emptyLine() });
+        map.addSource("actual-route-endpoints", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addSource("route-checkpoints", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addLayer({ id: "assigned-route", type: "line", source: "assigned-route", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#0f766e", "line-width": 3, "line-dasharray": [2, 2], "line-opacity": .7 } });
         map.addLayer({ id: "route-remaining", type: "line", source: "route-segments", filter: ["==", ["get", "passed"], false], layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": ["get", "color"], "line-width": 4, "line-dasharray": [2, 1.4], "line-opacity": .82 } });
         map.addLayer({ id: "route-passed", type: "line", source: "route-segments", filter: ["==", ["get", "passed"], true], layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#22c55e", "line-width": 4.5, "line-opacity": .9 } });
-        map.addLayer({ id: "actual-route-casing", type: "line", source: "actual-route", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#ffffff", "line-width": 6.5, "line-opacity": .9, "line-blur": .3 } });
-        map.addLayer({ id: "actual-route", type: "line", source: "actual-route", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#2563eb", "line-width": 3.1, "line-opacity": .9 } });
+        map.addLayer({ id: "actual-route-casing", type: "line", source: "actual-route", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#ffffff", "line-width": 9, "line-opacity": .96, "line-blur": .2 } });
+        map.addLayer({ id: "actual-route", type: "line", source: "actual-route", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#2563eb", "line-width": 5, "line-opacity": .96 } });
+        map.addLayer({ id: "actual-route-endpoints", type: "circle", source: "actual-route-endpoints", paint: { "circle-radius": 11, "circle-color": ["match", ["get", "kind"], "start", "#16a34a", "#dc2626"], "circle-stroke-color": "#ffffff", "circle-stroke-width": 4, "circle-opacity": .98 } });
+        map.addLayer({ id: "actual-route-endpoint-labels", type: "symbol", source: "actual-route-endpoints", layout: { "text-field": ["get", "label"], "text-size": 11, "text-allow-overlap": true, "text-ignore-placement": true }, paint: { "text-color": "#ffffff" } });
         map.addLayer({ id: "route-checkpoints", type: "circle", source: "route-checkpoints", paint: { "circle-radius": 5, "circle-color": "#fff", "circle-stroke-width": 3, "circle-stroke-color": "#059669" } });
         setReady(true);
       });
@@ -731,6 +861,15 @@ function RouteMap({ coordinates, actualPoints, checkpoints, passedSegments, sele
     setSource(map, "assigned-route", lineData(coordinates));
     setSource(map, "route-segments", { type: "FeatureCollection", features: coordinates.slice(1).map((coordinate, index) => ({ type: "Feature", properties: { passed: passedSegments.has(index), color: remainingColor }, geometry: { type: "LineString", coordinates: [coordinates[index], coordinate] } })) });
     setSource(map, "actual-route", lineData(actualPoints.map((point): LngLatTuple => [point.lng, point.lat])));
+    const actualStart = actualPoints[0];
+    const actualStop = actualPoints.at(-1);
+    setSource(map, "actual-route-endpoints", {
+      type: "FeatureCollection",
+      features: [
+        ...(actualStart ? [{ type: "Feature" as const, properties: { kind: "start", label: "A" }, geometry: { type: "Point" as const, coordinates: [actualStart.lng, actualStart.lat] as LngLatTuple } }] : []),
+        ...(actualStop && actualStop !== actualStart ? [{ type: "Feature" as const, properties: { kind: "stop", label: "B" }, geometry: { type: "Point" as const, coordinates: [actualStop.lng, actualStop.lat] as LngLatTuple } }] : []),
+      ],
+    });
     setSource(map, "route-checkpoints", { type: "FeatureCollection", features: checkpoints.map((point) => ({ type: "Feature", properties: { purok: point.purok }, geometry: { type: "Point", coordinates: [point.lng, point.lat] } })) });
     markerRef.current?.remove();
     markerRef.current = null;
@@ -837,6 +976,40 @@ function ActivityDayMap({ activities, focusKey }: { activities: DriverActivity[]
     }),
   }), [activities]);
 
+  const endpointFeatures = useMemo(() => ({
+    type: "FeatureCollection" as const,
+    features: activities.flatMap((activity) => {
+      const coordinates = activity.actualPoints.map(
+        (point): LngLatTuple => [point.lng, point.lat]
+      );
+      if (coordinates.length === 0) return [];
+
+      return [
+        {
+          type: "Feature" as const,
+          properties: {
+            kind: "start",
+            label: "A",
+            activityKey: activity.key,
+          },
+          geometry: { type: "Point" as const, coordinates: coordinates[0] },
+        },
+        {
+          type: "Feature" as const,
+          properties: {
+            kind: "end",
+            label: "B",
+            activityKey: activity.key,
+          },
+          geometry: {
+            type: "Point" as const,
+            coordinates: coordinates[coordinates.length - 1],
+          },
+        },
+      ];
+    }),
+  }), [activities]);
+
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
@@ -871,6 +1044,11 @@ function ActivityDayMap({ activities, focusKey }: { activities: DriverActivity[]
           data: { type: "FeatureCollection", features: [] },
         });
 
+        map.addSource("day-route-endpoints", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+
         map.addLayer({
           id: "day-assigned-routes",
           type: "line",
@@ -884,7 +1062,7 @@ function ActivityDayMap({ activities, focusKey }: { activities: DriverActivity[]
           },
         });
 
-        map.addLayer({ id: "day-actual-routes-casing", type: "line", source: "day-actual-routes", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#ffffff", "line-width": 6.5, "line-opacity": .9, "line-blur": .3 } });
+        map.addLayer({ id: "day-actual-routes-casing", type: "line", source: "day-actual-routes", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#ffffff", "line-width": 9, "line-opacity": .96, "line-blur": .2 } });
         map.addLayer({
           id: "day-actual-routes",
           type: "line",
@@ -892,9 +1070,35 @@ function ActivityDayMap({ activities, focusKey }: { activities: DriverActivity[]
           layout: { "line-cap": "round", "line-join": "round" },
           paint: {
             "line-color": "#2563eb",
-            "line-width": 3.1,
-            "line-opacity": 0.9,
+            "line-width": 5,
+            "line-opacity": 0.96,
           },
+        });
+
+        map.addLayer({
+          id: "day-route-endpoints",
+          type: "circle",
+          source: "day-route-endpoints",
+          paint: {
+            "circle-radius": 11,
+            "circle-color": ["match", ["get", "kind"], "start", "#16a34a", "#dc2626"],
+            "circle-stroke-color": "#ffffff",
+            "circle-stroke-width": 4,
+            "circle-opacity": 0.98,
+          },
+        });
+
+        map.addLayer({
+          id: "day-route-endpoint-labels",
+          type: "symbol",
+          source: "day-route-endpoints",
+          layout: {
+            "text-field": ["get", "label"],
+            "text-size": 11,
+            "text-allow-overlap": true,
+            "text-ignore-placement": true,
+          },
+          paint: { "text-color": "#ffffff" },
         });
 
         setReady(true);
@@ -916,6 +1120,7 @@ function ActivityDayMap({ activities, focusKey }: { activities: DriverActivity[]
 
     setSource(map, "day-assigned-routes", assignedFeatures);
     setSource(map, "day-actual-routes", actualFeatures);
+    setSource(map, "day-route-endpoints", endpointFeatures);
 
     const allCoordinates: LngLatTuple[] = [
       ...activities.flatMap((activity) => activity.assignedCoordinates),
@@ -937,7 +1142,7 @@ function ActivityDayMap({ activities, focusKey }: { activities: DriverActivity[]
         { padding: 45, maxZoom: 17, duration: 0 }
       );
     }
-  }, [ready, assignedFeatures, actualFeatures, activities, focusKey]);
+  }, [ready, assignedFeatures, actualFeatures, endpointFeatures, activities, focusKey]);
 
   return <div ref={containerRef} className="activity-day-map" />;
 }
@@ -1461,7 +1666,7 @@ async function captureActualActivityMap(activities: DriverActivity[]): Promise<s
     return [
       {
         type: "Feature" as const,
-        properties: { kind: "start" },
+        properties: { kind: "start", label: "A" },
         geometry: {
           type: "Point" as const,
           coordinates: start,
@@ -1469,7 +1674,7 @@ async function captureActualActivityMap(activities: DriverActivity[]): Promise<s
       },
       {
         type: "Feature" as const,
-        properties: { kind: "end" },
+        properties: { kind: "end", label: "B" },
         geometry: {
           type: "Point" as const,
           coordinates: end,
@@ -1586,12 +1791,25 @@ async function captureActualActivityMap(activities: DriverActivity[]): Promise<s
     });
 
     map.addLayer({
+      id: "print-actual-routes-casing",
+      type: "line",
+      source: "print-actual-routes",
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": "#ffffff",
+        "line-width": 11,
+        "line-opacity": 0.96,
+      },
+    });
+
+    map.addLayer({
       id: "print-actual-routes",
       type: "line",
       source: "print-actual-routes",
+      layout: { "line-cap": "round", "line-join": "round" },
       paint: {
         "line-color": "#2563eb",
-        "line-width": 6,
+        "line-width": 7,
         "line-opacity": 0.96,
       },
     });
@@ -1611,6 +1829,19 @@ async function captureActualActivityMap(activities: DriverActivity[]): Promise<s
         "circle-stroke-color": "#ffffff",
         "circle-stroke-width": 3,
       },
+    });
+
+    map.addLayer({
+      id: "print-route-point-labels",
+      type: "symbol",
+      source: "print-route-points",
+      layout: {
+        "text-field": ["get", "label"],
+        "text-size": 11,
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
+      },
+      paint: { "text-color": "#ffffff" },
     });
 
     if (allCoordinates.length === 1) {
