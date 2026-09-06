@@ -969,7 +969,7 @@ export default function UsersPage() {
                   </p>
 
                   <div className="profile-meta-row">
-                    <span>ID: {shortId(profileDriver.id)}</span>
+                    <span>ID: {profileDriver.id}</span>
                     <span>Joined {formatDate(profileDriver.createdAt)}</span>
                   </div>
                 </div>
@@ -1013,7 +1013,7 @@ export default function UsersPage() {
                     <div className="driver-showcase-hero">
                       <div className="driver-showcase-title">
                         <h4>DRIVER PROFILE</h4>
-                        <p>Trusted Drivers. Safer Communities.</p>
+                        <p>Authorized collection driver account</p>
                       </div>
 
                       <div className="driver-showcase-avatar-wrap">
@@ -1040,27 +1040,32 @@ export default function UsersPage() {
                         <span className={`status-pill ${getStatusClass(profileDriver.status || "offline")}`}>
                           {profileDriver.status || "offline"}
                         </span>
-                        <span className="driver-id-pill">
-                          ID: {profileDriver.truck || shortId(profileDriver.id)}
-                        </span>
+                        <span className="driver-id-pill">Truck: {profileDriver.truck || "Not assigned"}</span>
                       </div>
 
-                      <p className="showcase-quote">“Committed to serve our community.”</p>
+                      
                     </div>
 
-                    <div className="driver-quick-actions">
-                      <button type="button" className="driver-quick-action" aria-label="Call action preview">
-                        <span className="driver-quick-icon">☎</span>
-                        <span>Call</span>
-                      </button>
-                      <button type="button" className="driver-quick-action blue" aria-label="Message action preview">
-                        <span className="driver-quick-icon">💬</span>
-                        <span>Message</span>
-                      </button>
-                      <button type="button" className="driver-quick-action gold" aria-label="Track action preview">
-                        <span className="driver-quick-icon">📍</span>
-                        <span>Track</span>
-                      </button>
+                    <div className="driver-highlights-grid">
+                      <div className="driver-highlight-card">
+                        <small>Driver ID</small>
+                        <strong>{profileDriver.id}</strong>
+                      </div>
+
+                      <div className="driver-highlight-card">
+                        <small>Joined</small>
+                        <strong>{formatDate(profileDriver.createdAt)}</strong>
+                      </div>
+
+                      <div className="driver-highlight-card">
+                        <small>Contact Number</small>
+                        <strong>{profileDriver.phone || "Not provided"}</strong>
+                      </div>
+
+                      <div className="driver-highlight-card">
+                        <small>Licence Number</small>
+                        <strong>{profileDriver.licenseNumber || "Not provided"}</strong>
+                      </div>
                     </div>
 
                     <button
@@ -1087,7 +1092,7 @@ export default function UsersPage() {
                       </div>
 
                       <div className="driver-info-list">
-                        <div className="driver-info-item">
+                        <div className="driver-info-item wide">
                           <div className="driver-info-icon" aria-hidden="true">✉</div>
                           <div className="driver-info-copy">
                             <small>Email Address</small>
@@ -1138,6 +1143,30 @@ export default function UsersPage() {
                             </strong>
                           </div>
                         </div>
+
+                        <div className="driver-info-item wide">
+                          <div className="driver-info-icon" aria-hidden="true">#</div>
+                          <div className="driver-info-copy">
+                            <small>Driver ID</small>
+                            <strong>{profileDriver.id}</strong>
+                          </div>
+                        </div>
+
+                        <div className="driver-info-item">
+                          <div className="driver-info-icon" aria-hidden="true">＋</div>
+                          <div className="driver-info-copy">
+                            <small>Account Created</small>
+                            <strong>{formatDate(profileDriver.createdAt)}</strong>
+                          </div>
+                        </div>
+
+                        <div className="driver-info-item">
+                          <div className="driver-info-icon" aria-hidden="true">↻</div>
+                          <div className="driver-info-copy">
+                            <small>Last Updated</small>
+                            <strong>{formatDate(profileDriver.updatedAt)}</strong>
+                          </div>
+                        </div>
                       </div>
                     </section>
 
@@ -1146,7 +1175,7 @@ export default function UsersPage() {
                         <div className="driver-info-badge shield" aria-hidden="true">🛡</div>
                         <div>
                           <h4>Password Security</h4>
-                          <p>Manage your account password</p>
+                          <p>Manage the driver account password</p>
                         </div>
                       </div>
 
@@ -1154,7 +1183,10 @@ export default function UsersPage() {
                         <div className="driver-password-lock" aria-hidden="true">🔒</div>
                         <div>
                           <strong>Protected by Firebase Authentication</strong>
-                          <p>Existing passwords cannot be viewed for security reasons.</p>
+                          <p>
+                            Existing passwords cannot be viewed after account creation.
+                            Use the update profile form to set a new password when needed.
+                          </p>
                         </div>
                       </div>
 
@@ -1982,13 +2014,16 @@ export default function UsersPage() {
         .file-button input { position: absolute; opacity: 0; pointer-events: none; }
 
         .profile-modal {
-          width: min(1040px, calc(100vw - 40px));
-          max-height: calc(100dvh - 40px);
+          width: min(1380px, calc(100vw - 24px));
+          height: calc(100dvh - 24px);
+          max-height: calc(100dvh - 24px);
           padding: 0;
           overflow-y: auto;
           overflow-x: hidden;
           border: 1px solid rgba(203, 213, 225, 0.9);
+          border-radius: 28px;
           background: #f8fafc;
+          box-shadow: 0 30px 80px rgba(15, 23, 42, 0.18);
         }
 
         .profile-hero {
@@ -2461,18 +2496,20 @@ export default function UsersPage() {
         }
 
         .professional-driver-profile {
-          grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
-          gap: 16px;
+          grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+          gap: 18px;
           align-items: start;
         }
 
         .driver-showcase-card {
+          position: sticky;
+          top: 18px;
           display: flex;
           flex-direction: column;
           gap: 18px;
-          padding: 18px;
+          padding: 20px;
           border: 1px solid #dbe8df;
-          border-radius: 20px;
+          border-radius: 24px;
           background:
             radial-gradient(circle at 30% 0%, rgba(16, 185, 129, 0.16), transparent 36%),
             radial-gradient(circle at 100% 25%, rgba(16, 185, 129, 0.1), transparent 30%),
@@ -2565,45 +2602,43 @@ export default function UsersPage() {
           line-height: 1.5;
         }
 
-        .driver-quick-actions {
+        .driver-highlights-grid {
           display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
+          grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 12px;
-          padding-top: 4px;
+          padding-top: 14px;
           border-top: 1px solid #e7edf1;
         }
 
-        .driver-quick-action {
-          min-height: 84px;
-          border: 1px solid #e5efe8;
+        .driver-highlight-card {
+          min-height: 82px;
+          border: 1px solid #e7edf1;
           border-radius: 16px;
-          background: #ecfdf5;
-          color: #065f46;
+          background: #ffffff;
+          padding: 14px;
           display: flex;
           flex-direction: column;
-          align-items: center;
           justify-content: center;
-          gap: 8px;
+        }
+
+        .driver-highlight-card small {
+          color: #94a3b8;
+          font-size: 11px;
           font-weight: 800;
-          cursor: default;
+          text-transform: uppercase;
+          letter-spacing: 0.03em;
         }
 
-        .driver-quick-action.blue {
-          background: #eff6ff;
-          color: #1d4ed8;
-        }
-
-        .driver-quick-action.gold {
-          background: #fff7ed;
-          color: #92400e;
-        }
-
-        .driver-quick-icon {
-          font-size: 20px;
-          line-height: 1;
+        .driver-highlight-card strong {
+          margin-top: 6px;
+          color: #0f172a;
+          font-size: 13px;
+          line-height: 1.4;
+          overflow-wrap: anywhere;
         }
 
         .driver-showcase-edit-btn {
+          width: 100%;
           min-height: 48px;
           border: 0;
           border-radius: 14px;
@@ -2624,9 +2659,9 @@ export default function UsersPage() {
         .driver-info-card,
         .driver-password-card-visual {
           border: 1px solid #e2e8f0;
-          border-radius: 20px;
+          border-radius: 24px;
           background: #ffffff;
-          padding: 18px;
+          padding: 20px;
           box-shadow: 0 12px 32px rgba(15, 23, 42, 0.04);
         }
 
@@ -2638,8 +2673,8 @@ export default function UsersPage() {
         }
 
         .driver-info-badge {
-          width: 40px;
-          height: 40px;
+          width: 42px;
+          height: 42px;
           border-radius: 12px;
           display: grid;
           place-items: center;
@@ -2667,7 +2702,7 @@ export default function UsersPage() {
 
         .driver-info-list {
           display: grid;
-          grid-template-columns: 1fr;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 12px;
         }
 
@@ -2680,6 +2715,11 @@ export default function UsersPage() {
           border: 1px solid #e7edf1;
           border-radius: 16px;
           background: #ffffff;
+          min-height: 92px;
+        }
+
+        .driver-info-item.wide {
+          grid-column: 1 / -1;
         }
 
         .driver-info-icon {
@@ -2707,7 +2747,7 @@ export default function UsersPage() {
           margin-top: 5px;
           color: #0f172a;
           font-size: 14px;
-          line-height: 1.4;
+          line-height: 1.45;
           overflow-wrap: anywhere;
         }
 
@@ -2751,9 +2791,23 @@ export default function UsersPage() {
           min-height: 44px;
         }
 
+        @media (max-width: 960px) {
+          .professional-driver-profile {
+            grid-template-columns: 1fr;
+          }
+
+          .driver-showcase-card {
+            position: static;
+          }
+
+          .driver-info-list {
+            grid-template-columns: 1fr;
+          }
+        }
+
         @media (max-width: 640px) {
-          .driver-quick-actions {
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+          .driver-highlights-grid {
+            grid-template-columns: 1fr;
           }
 
           .driver-info-item {
@@ -2761,7 +2815,6 @@ export default function UsersPage() {
             padding: 12px;
           }
         }
-
         @media (max-width: 1100px) {
           .users-stats-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2875,6 +2928,75 @@ export default function UsersPage() {
             width: 100%;
           }
         }
+
+        /* FINAL DRIVER PROFILE FULL-SCREEN OVERRIDES */
+        .modal-card.profile-modal {
+          position: fixed !important;
+          inset: 8px !important;
+          width: auto !important;
+          max-width: none !important;
+          height: auto !important;
+          max-height: none !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          overflow-y: auto !important;
+          overflow-x: hidden !important;
+          border-radius: 20px !important;
+          background: #f8fafc !important;
+          z-index: 10000;
+        }
+
+        .modal-card.profile-modal .profile-hero {
+          padding: 20px 26px;
+        }
+
+        .modal-card.profile-modal .profile-tabs {
+          padding-inline: 26px;
+        }
+
+        .modal-card.profile-modal .professional-driver-profile {
+          grid-template-columns: minmax(320px, 380px) minmax(0, 1fr) !important;
+          gap: 20px !important;
+          padding: 22px 26px !important;
+          max-width: 1320px;
+          margin: 0 auto;
+          width: 100%;
+        }
+
+        .modal-card.profile-modal .driver-info-list {
+          grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        }
+
+        .modal-card.profile-modal .driver-info-item.wide {
+          grid-column: 1 / -1 !important;
+        }
+
+        .modal-card.profile-modal .profile-modal-actions {
+          padding: 0 26px 24px;
+          max-width: 1320px;
+          margin: 0 auto;
+        }
+
+        @media (max-width: 920px) {
+          .modal-card.profile-modal {
+            inset: 4px !important;
+            border-radius: 14px !important;
+          }
+
+          .modal-card.profile-modal .professional-driver-profile {
+            grid-template-columns: 1fr !important;
+            padding: 16px !important;
+          }
+
+          .modal-card.profile-modal .driver-showcase-card {
+            position: static !important;
+          }
+
+          .modal-card.profile-modal .driver-info-list {
+            grid-template-columns: 1fr !important;
+          }
+        }
+
       `}</style>
     </DashboardShell>
   );
