@@ -514,15 +514,33 @@ export async function POST(request) {
     const coverageBarangays = [...new Set(
       coverageAreas.map((area) => area.barangayKey).filter(Boolean),
     )];
-    const tokenSnapshots = await Promise.all(coverageBarangays.map((barangayKey) =>
-      database.ref(`resident_fcm_tokens/${safeKey(barangayKey)}`).get(),
-    ));
+    /*
+     * Keep the original Barangay-scoped FCM registry for compatibility, but also
+     * read device_tokens because ResidentTokenRegistrar defines it as the canonical
+     * device registry. This restores background push reliability when the legacy
+     * Barangay mirror is stale or was not rewritten after a settings/location edit.
+     */
+    const [canonicalTokenSnapshot, ...tokenSnapshots] = await Promise.all([
+      database.ref("device_tokens").get(),
+      ...coverageBarangays.map((barangayKey) =>
+        database.ref(`resident_fcm_tokens/${safeKey(barangayKey)}`).get(),
+      ),
+    ]);
+
     const tokenMap = {};
+
+    // Compatibility registry first. Canonical device_tokens wins on duplicates.
     tokenSnapshots.forEach((snapshot) => {
       const value = snapshot.val();
       if (!value || typeof value !== "object") return;
       Object.assign(tokenMap, value);
     });
+
+    const canonicalTokens = canonicalTokenSnapshot.val();
+    if (canonicalTokens && typeof canonicalTokens === "object") {
+      Object.assign(tokenMap, canonicalTokens);
+    }
+
     const devices = tokenRecords(tokenMap);
 
     const candidates = await buildCandidates({

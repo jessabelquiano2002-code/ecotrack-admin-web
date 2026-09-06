@@ -1008,77 +1008,168 @@ export default function UsersPage() {
               </div>
 
               {profileTab === "overview" ? (
-                <div className="profile-overview-layout">
-                  <aside className="profile-photo-card">
-                    <span className="section-eyebrow">Driver identity</span>
-                    <DriverProfileAvatar driver={profileDriver} large />
-                    <strong>{profileDriver.name || "Unnamed Driver"}</strong>
-                    <span>{profileDriver.email || "No email provided"}</span>
+                <div className="profile-overview-layout professional-driver-profile">
+                  <aside className="driver-showcase-card">
+                    <div className="driver-showcase-hero">
+                      <div className="driver-showcase-title">
+                        <h4>DRIVER PROFILE</h4>
+                        <p>Trusted Drivers. Safer Communities.</p>
+                      </div>
 
-                    <div className="profile-identity-badges">
-                      <span className={`status-pill ${getStatusClass(profileDriver.status || "offline")}`}>
-                        {profileDriver.status || "offline"}
-                      </span>
-                      <span className="vehicle-pill">
-                        {profileDriver.truck || "No vehicle assigned"}
-                      </span>
+                      <div className="driver-showcase-avatar-wrap">
+                        <DriverProfileAvatar driver={profileDriver} large />
+                        <button
+                          type="button"
+                          className="driver-avatar-edit"
+                          onClick={() => {
+                            const driver = profileDriver;
+                            closeDriverProfile();
+                            openEditDriver(driver);
+                          }}
+                          aria-label="Edit driver profile"
+                          title="Edit driver profile"
+                        >
+                          ✎
+                        </button>
+                      </div>
+
+                      <strong className="showcase-name">{profileDriver.name || "Unnamed Driver"}</strong>
+                      <span className="showcase-email">{profileDriver.email || "No email provided"}</span>
+
+                      <div className="showcase-badges">
+                        <span className={`status-pill ${getStatusClass(profileDriver.status || "offline")}`}>
+                          {profileDriver.status || "offline"}
+                        </span>
+                        <span className="driver-id-pill">
+                          ID: {profileDriver.truck || shortId(profileDriver.id)}
+                        </span>
+                      </div>
+
+                      <p className="showcase-quote">“Committed to serve our community.”</p>
                     </div>
+
+                    <div className="driver-quick-actions">
+                      <button type="button" className="driver-quick-action" aria-label="Call action preview">
+                        <span className="driver-quick-icon">☎</span>
+                        <span>Call</span>
+                      </button>
+                      <button type="button" className="driver-quick-action blue" aria-label="Message action preview">
+                        <span className="driver-quick-icon">💬</span>
+                        <span>Message</span>
+                      </button>
+                      <button type="button" className="driver-quick-action gold" aria-label="Track action preview">
+                        <span className="driver-quick-icon">📍</span>
+                        <span>Track</span>
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="driver-showcase-edit-btn"
+                      onClick={() => {
+                        const driver = profileDriver;
+                        closeDriverProfile();
+                        openEditDriver(driver);
+                      }}
+                    >
+                      ✎ Edit Profile
+                    </button>
                   </aside>
 
-                  <div className="profile-information-card">
-                    <div className="section-heading">
-                      <div>
-                        <span className="section-eyebrow">Account information</span>
-                        <h4>Driver account details</h4>
-                        <p>
-                          Contact, assignment, licence, and account information for this
-                          authorized collection driver.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="profile-detail-grid">
-                      <ProfileField label="Email address" value={profileDriver.email} />
-                      <ProfileField label="Contact number" value={profileDriver.phone} />
-                      <ProfileField label="Assigned vehicle" value={profileDriver.truck} />
-                      <ProfileField label="Licence number" value={profileDriver.licenseNumber} />
-                      <ProfileField
-                        label="Licence expiration"
-                        value={formatLicenceDate(profileDriver.licenseExpirationDate)}
-                      />
-                      <ProfileField label="Account status" value={profileDriver.status || "offline"} />
-                    </div>
-
-                    <div className="profile-security-card">
-                      <div className="profile-security-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24">
-                          <path d="M7 10V8a5 5 0 0 1 10 0v2" />
-                          <rect x="5" y="10" width="14" height="10" rx="3" />
-                          <path d="M12 14v2" />
-                        </svg>
+                  <div className="driver-info-stack">
+                    <section className="driver-info-card">
+                      <div className="driver-info-heading">
+                        <div className="driver-info-badge" aria-hidden="true">👥</div>
+                        <div>
+                          <h4>Driver Information</h4>
+                          <p>Personal and account details</p>
+                        </div>
                       </div>
 
-                      <div className="profile-security-copy">
-                        <small>PASSWORD SECURITY</small>
-                        <strong>Protected by Firebase Authentication</strong>
-                        <p>
-                          Existing passwords cannot be retrieved or displayed after account
-                          creation. Use Update Profile to set a new password when required.
-                        </p>
+                      <div className="driver-info-list">
+                        <div className="driver-info-item">
+                          <div className="driver-info-icon" aria-hidden="true">✉</div>
+                          <div className="driver-info-copy">
+                            <small>Email Address</small>
+                            <strong>{profileDriver.email || "Not provided"}</strong>
+                          </div>
+                        </div>
+
+                        <div className="driver-info-item">
+                          <div className="driver-info-icon" aria-hidden="true">☎</div>
+                          <div className="driver-info-copy">
+                            <small>Contact Number</small>
+                            <strong>{profileDriver.phone || "Not provided"}</strong>
+                          </div>
+                        </div>
+
+                        <div className="driver-info-item">
+                          <div className="driver-info-icon" aria-hidden="true">🚚</div>
+                          <div className="driver-info-copy">
+                            <small>Assigned Vehicle</small>
+                            <strong>{profileDriver.truck || "No vehicle assigned"}</strong>
+                          </div>
+                        </div>
+
+                        <div className="driver-info-item">
+                          <div className="driver-info-icon" aria-hidden="true">🪪</div>
+                          <div className="driver-info-copy">
+                            <small>Licence Number</small>
+                            <strong>{profileDriver.licenseNumber || "Not provided"}</strong>
+                          </div>
+                        </div>
+
+                        <div className="driver-info-item">
+                          <div className="driver-info-icon" aria-hidden="true">🗓</div>
+                          <div className="driver-info-copy">
+                            <small>Licence Expiration</small>
+                            <strong>{formatLicenceDate(profileDriver.licenseExpirationDate)}</strong>
+                          </div>
+                        </div>
+
+                        <div className="driver-info-item">
+                          <div className="driver-info-icon" aria-hidden="true">●</div>
+                          <div className="driver-info-copy">
+                            <small>Account Status</small>
+                            <strong>
+                              <span className={`status-pill ${getStatusClass(profileDriver.status || "offline")}`}>
+                                {profileDriver.status || "offline"}
+                              </span>
+                            </strong>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="driver-password-card-visual">
+                      <div className="driver-info-heading">
+                        <div className="driver-info-badge shield" aria-hidden="true">🛡</div>
+                        <div>
+                          <h4>Password Security</h4>
+                          <p>Manage your account password</p>
+                        </div>
+                      </div>
+
+                      <div className="driver-password-note">
+                        <div className="driver-password-lock" aria-hidden="true">🔒</div>
+                        <div>
+                          <strong>Protected by Firebase Authentication</strong>
+                          <p>Existing passwords cannot be viewed for security reasons.</p>
+                        </div>
                       </div>
 
                       <button
                         type="button"
-                        className="security-action"
+                        className="security-action driver-password-action"
                         onClick={() => {
                           const driver = profileDriver;
                           closeDriverProfile();
                           openEditDriver(driver);
                         }}
                       >
-                        Set new password
+                        Set New Password
                       </button>
-                    </div>
+                    </section>
                   </div>
                 </div>
               ) : (
@@ -2366,6 +2457,308 @@ export default function UsersPage() {
         @keyframes driver-spin {
           to {
             transform: rotate(360deg);
+          }
+        }
+
+        .professional-driver-profile {
+          grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+          gap: 16px;
+          align-items: start;
+        }
+
+        .driver-showcase-card {
+          display: flex;
+          flex-direction: column;
+          gap: 18px;
+          padding: 18px;
+          border: 1px solid #dbe8df;
+          border-radius: 20px;
+          background:
+            radial-gradient(circle at 30% 0%, rgba(16, 185, 129, 0.16), transparent 36%),
+            radial-gradient(circle at 100% 25%, rgba(16, 185, 129, 0.1), transparent 30%),
+            linear-gradient(180deg, #fbfffd 0%, #ffffff 100%);
+          box-shadow: 0 12px 32px rgba(15, 23, 42, 0.05);
+        }
+
+        .driver-showcase-hero {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          text-align: center;
+          gap: 10px;
+          padding: 10px 8px 0;
+        }
+
+        .driver-showcase-title h4 {
+          margin: 0;
+          color: #0f172a;
+          font-size: 18px;
+          font-weight: 900;
+          letter-spacing: -0.03em;
+        }
+
+        .driver-showcase-title p {
+          margin: 6px 0 0;
+          color: #64748b;
+          font-size: 13px;
+        }
+
+        .driver-showcase-avatar-wrap {
+          position: relative;
+          margin-top: 10px;
+        }
+
+        .driver-avatar-edit {
+          position: absolute;
+          right: -6px;
+          bottom: 8px;
+          width: 42px;
+          height: 42px;
+          border: 4px solid #f8fffc;
+          border-radius: 999px;
+          background: #dcfce7;
+          color: #047857;
+          font-size: 16px;
+          font-weight: 900;
+          cursor: pointer;
+          box-shadow: 0 8px 18px rgba(5, 150, 105, 0.18);
+        }
+
+        .showcase-name {
+          color: #0f172a;
+          font-size: 18px;
+          font-weight: 900;
+        }
+
+        .showcase-email {
+          margin-top: -3px;
+          color: #64748b;
+          font-size: 13px;
+          overflow-wrap: anywhere;
+        }
+
+        .showcase-badges {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: center;
+          gap: 10px;
+          margin-top: 4px;
+        }
+
+        .driver-id-pill {
+          display: inline-flex;
+          align-items: center;
+          min-height: 30px;
+          padding: 0 14px;
+          border-radius: 999px;
+          background: #dcfce7;
+          color: #065f46;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .showcase-quote {
+          margin: 2px 0 0;
+          color: #64748b;
+          font-size: 12px;
+          max-width: 220px;
+          line-height: 1.5;
+        }
+
+        .driver-quick-actions {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 12px;
+          padding-top: 4px;
+          border-top: 1px solid #e7edf1;
+        }
+
+        .driver-quick-action {
+          min-height: 84px;
+          border: 1px solid #e5efe8;
+          border-radius: 16px;
+          background: #ecfdf5;
+          color: #065f46;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          font-weight: 800;
+          cursor: default;
+        }
+
+        .driver-quick-action.blue {
+          background: #eff6ff;
+          color: #1d4ed8;
+        }
+
+        .driver-quick-action.gold {
+          background: #fff7ed;
+          color: #92400e;
+        }
+
+        .driver-quick-icon {
+          font-size: 20px;
+          line-height: 1;
+        }
+
+        .driver-showcase-edit-btn {
+          min-height: 48px;
+          border: 0;
+          border-radius: 14px;
+          background: linear-gradient(135deg, #047857, #059669);
+          color: #ffffff;
+          font-size: 15px;
+          font-weight: 900;
+          cursor: pointer;
+          box-shadow: 0 12px 24px rgba(5, 150, 105, 0.2);
+        }
+
+        .driver-info-stack {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+        }
+
+        .driver-info-card,
+        .driver-password-card-visual {
+          border: 1px solid #e2e8f0;
+          border-radius: 20px;
+          background: #ffffff;
+          padding: 18px;
+          box-shadow: 0 12px 32px rgba(15, 23, 42, 0.04);
+        }
+
+        .driver-info-heading {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 16px;
+        }
+
+        .driver-info-badge {
+          width: 40px;
+          height: 40px;
+          border-radius: 12px;
+          display: grid;
+          place-items: center;
+          background: linear-gradient(135deg, #047857, #059669);
+          color: #ffffff;
+          font-size: 18px;
+          box-shadow: 0 8px 18px rgba(5, 150, 105, 0.18);
+        }
+
+        .driver-info-badge.shield {
+          background: linear-gradient(135deg, #065f46, #10b981);
+        }
+
+        .driver-info-heading h4 {
+          margin: 0;
+          color: #0f172a;
+          font-size: 18px;
+        }
+
+        .driver-info-heading p {
+          margin: 2px 0 0;
+          color: #64748b;
+          font-size: 13px;
+        }
+
+        .driver-info-list {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 12px;
+        }
+
+        .driver-info-item {
+          display: grid;
+          grid-template-columns: 54px minmax(0, 1fr);
+          align-items: center;
+          gap: 12px;
+          padding: 14px;
+          border: 1px solid #e7edf1;
+          border-radius: 16px;
+          background: #ffffff;
+        }
+
+        .driver-info-icon {
+          width: 46px;
+          height: 46px;
+          border-radius: 14px;
+          display: grid;
+          place-items: center;
+          background: #f8fafc;
+          color: #0f172a;
+          font-size: 20px;
+        }
+
+        .driver-info-copy small {
+          display: block;
+          color: #94a3b8;
+          font-size: 11px;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: 0.03em;
+        }
+
+        .driver-info-copy strong {
+          display: block;
+          margin-top: 5px;
+          color: #0f172a;
+          font-size: 14px;
+          line-height: 1.4;
+          overflow-wrap: anywhere;
+        }
+
+        .driver-password-note {
+          display: grid;
+          grid-template-columns: 52px minmax(0, 1fr);
+          gap: 12px;
+          padding: 16px;
+          border: 1px solid #dce8e2;
+          border-radius: 16px;
+          background: linear-gradient(135deg, #f0fdf7, #f8fffc);
+        }
+
+        .driver-password-lock {
+          width: 44px;
+          height: 44px;
+          border-radius: 14px;
+          display: grid;
+          place-items: center;
+          background: #dcfce7;
+          color: #047857;
+          font-size: 20px;
+        }
+
+        .driver-password-note strong {
+          display: block;
+          color: #166534;
+          font-size: 14px;
+        }
+
+        .driver-password-note p {
+          margin: 5px 0 0;
+          color: #64748b;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
+        .driver-password-action {
+          margin-top: 14px;
+          width: 100%;
+          min-height: 44px;
+        }
+
+        @media (max-width: 640px) {
+          .driver-quick-actions {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
+          .driver-info-item {
+            grid-template-columns: 46px minmax(0, 1fr);
+            padding: 12px;
           }
         }
 
