@@ -795,13 +795,18 @@ export default function UsersPage() {
               <div className="modal-header">
                 <div>
                   <h3>Update Driver Profile</h3>
-                  <p>Update contact, vehicle, licence details, or replace the stored licence image.</p>
+                  <p>Update contact, vehicle, licence details, password, or replace the stored licence image.</p>
                 </div>
                 <button className="modal-close" onClick={() => { setEditDriverId(null); clearLicenseSelection(); }}>×</button>
               </div>
 
               {formError && <div className="form-error full-error" role="alert">{formError}</div>}
-              <DriverFields form={form} setForm={setForm} />
+              <DriverFields
+                form={form}
+                setForm={setForm}
+                includePassword
+                passwordLabel="New Password (Optional)"
+              />
               <LicensePicker
                 preview={licensePreview}
                 hasStoredImage={Boolean(drivers.find((driver) => driver.id === editDriverId)?.licenseImageRef)}
@@ -920,6 +925,10 @@ export default function UsersPage() {
                         value={formatLicenceDate(profileDriver.licenseExpirationDate)}
                       />
                       <ProfileField label="Account status" value={profileDriver.status || "offline"} />
+                      <ProfileField
+                        label="Password"
+                        value="Protected — use Update Profile to set a new password"
+                      />
                     </div>
                   </div>
                 </div>
@@ -1469,6 +1478,53 @@ export default function UsersPage() {
           border-color: #10b981;
           background: #ffffff;
           box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.12);
+        }
+
+        .password-input-wrap {
+          position: relative;
+          display: block;
+        }
+
+        .password-input-wrap input {
+          width: 100%;
+          padding-right: 50px;
+        }
+
+        .password-toggle {
+          position: absolute;
+          top: 50%;
+          right: 8px;
+          width: 36px;
+          height: 36px;
+          transform: translateY(-50%);
+          display: grid;
+          place-items: center;
+          padding: 0;
+          border: 0;
+          border-radius: 10px;
+          background: transparent;
+          color: #64748b;
+          cursor: pointer;
+        }
+
+        .password-toggle:hover {
+          background: #eef7f2;
+          color: #047857;
+        }
+
+        .password-toggle:focus-visible {
+          outline: 2px solid #10b981;
+          outline-offset: 2px;
+        }
+
+        .password-toggle svg {
+          width: 19px;
+          height: 19px;
+          fill: none;
+          stroke: currentColor;
+          stroke-width: 1.9;
+          stroke-linecap: round;
+          stroke-linejoin: round;
         }
 
         .modal-actions {
@@ -2038,11 +2094,15 @@ function DriverFields({
   form,
   setForm,
   includePassword = false,
+  passwordLabel = "Password",
 }: {
   form: DriverFormState;
   setForm: (value: DriverFormState) => void;
   includePassword?: boolean;
+  passwordLabel?: string;
 }) {
+  const [showPassword, setShowPassword] = useState(false);
+
   return (
     <div className="form-grid">
       <label>
@@ -2071,8 +2131,37 @@ function DriverFields({
       </label>
       {includePassword && (
         <label>
-          Temporary Password
-          <input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="At least 6 characters" autoComplete="new-password" />
+          {passwordLabel}
+          <span className="password-input-wrap">
+            <input
+              type={showPassword ? "text" : "password"}
+              value={form.password}
+              onChange={(event) => setForm({ ...form, password: event.target.value })}
+              placeholder={passwordLabel.includes("Optional") ? "Leave blank to keep current password" : "At least 6 characters"}
+              autoComplete="new-password"
+            />
+            <button
+              type="button"
+              className="password-toggle"
+              onClick={() => setShowPassword((visible) => !visible)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              title={showPassword ? "Hide password" : "Show password"}
+            >
+              {showPassword ? (
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M3 3l18 18" />
+                  <path d="M10.6 10.7a2 2 0 0 0 2.7 2.7" />
+                  <path d="M9.9 4.2A10.8 10.8 0 0 1 12 4c5.2 0 8.7 4.4 9.6 6-.5.9-1.5 2.3-3 3.5" />
+                  <path d="M6.3 6.3C4.4 7.6 3.1 9.4 2.4 10.6 3.3 12.2 6.8 16 12 16c1 0 2-.1 2.9-.4" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M2.4 12s3.5-6 9.6-6 9.6 6 9.6 6-3.5 6-9.6 6-9.6-6-9.6-6Z" />
+                  <circle cx="12" cy="12" r="2.7" />
+                </svg>
+              )}
+            </button>
+          </span>
         </label>
       )}
     </div>

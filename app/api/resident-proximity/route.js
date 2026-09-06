@@ -21,6 +21,7 @@ export const dynamic = "force-dynamic";
 
 const MAX_GPS_ACCURACY_METERS = 100;
 const MAX_LOCATION_AGE_MS = 10 * 60 * 1000;
+const MAX_RESIDENT_LIVE_LOCATION_AGE_MS = 2 * 60 * 1000;
 const FCM_BATCH_SIZE = 500;
 
 function readServiceAccount() {
@@ -123,14 +124,49 @@ function tokenRecords(snapshotValue) {
     .filter((item) => stringValue(item.token));
 }
 
-function registeredLocation(resident) {
-  const value = resident?.collectionLocation;
+function validResidentLocation(value) {
   if (!value || typeof value !== "object") return null;
   const latitude = Number(value.latitude ?? value.lat);
   const longitude = Number(value.longitude ?? value.lng);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
   if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
-  return { latitude, longitude };
+  const updatedAt = Number(value.updatedAt ?? value.capturedAt ?? 0) || 0;
+  return { latitude, longitude, updatedAt };
+}
+
+/**
+ * Selects the resident's explicit alert-location mode.
+ * LIVE uses a fresh foreground-service location when available and falls back
+ * to the saved collection pin if Android has stopped updating the live point.
+ * PINNED (and legacy residents with no saved mode) use collectionLocation.
+ */
+function configuredAlertLocation(resident) {
+  const modeRaw = stringValue(
+    resident?.alertLocation?.mode,
+    resident?.alertLocationMode,
+    "PINNED",
+  ).toUpperCase();
+  const mode = modeRaw === "LIVE" ? "LIVE" : "PINNED";
+
+  const pinned = validResidentLocation(resident?.collectionLocation);
+  if (mode !== "LIVE") {
+    return pinned
+      ? { ...pinned, mode: "PINNED", source: "pinned" }
+      : null;
+  }
+
+  const live = validResidentLocation(resident?.liveLocation);
+  const liveFresh = live
+    && live.updatedAt > 0
+    && Math.abs(Date.now() - live.updatedAt) <= MAX_RESIDENT_LIVE_LOCATION_AGE_MS;
+
+  if (liveFresh) {
+    return { ...live, mode: "LIVE", source: "live" };
+  }
+
+  return pinned
+    ? { ...pinned, mode: "LIVE", source: "pinned_fallback" }
+    : null;
 }
 
 function coverageLabel(areas) {
@@ -144,6 +180,12 @@ function coverageLabel(areas) {
   if (!labels.length) return "your assigned area";
   if (labels.length <= 3) return labels.join(", ");
   return `${labels.slice(0, 3).join(", ")} and ${labels.length - 3} more area(s)`;
+}
+
+function alertLocationLabel(candidate) {
+  if (candidate.locationSource === "live") return "your current live location";
+  if (candidate.locationSource === "pinned_fallback") return "your saved collection point";
+  return "your pinned collection location";
 }
 
 function candidateMessage(candidate, routeName, areas) {
@@ -168,14 +210,14 @@ function candidateMessage(candidate, routeName, areas) {
     return {
       type: "truck_arrival",
       title: "MetroWaste truck has arrived",
-      message: `${driverName} is now near your registered collection point. Please bring out your waste safely.`,
+      message: `${driverName} is now near ${alertLocationLabel(candidate)}. Please bring your properly prepared waste to the designated collection point.`,
       ttl: 10 * 60 * 1000,
     };
   }
   return {
     type: "truck_approaching",
     title: "MetroWaste truck is approaching",
-    message: `${driverName} is approximately ${formatDistance(candidate.distance)} from your registered collection point.`,
+    message: `${driverName} is approximately ${formatDistance(candidate.distance)} from ${alertLocationLabel(candidate)}. Please prepare your properly segregated waste for collection.`,
     ttl: 15 * 60 * 1000,
   };
 }
@@ -251,7 +293,7 @@ async function buildCandidates({
     if (!booleanValue(device.approachEnabled, true)) continue;
     const residentId = stringValue(device.residentId, device.uid);
     if (!residentId) continue;
-    const location = registeredLocation(residents.get(residentId));
+    const location = configuredAlertLocation(residents.get(residentId));
     if (!location) continue;
 
     const distance = distanceMeters(
@@ -271,6 +313,8 @@ async function buildCandidates({
       distance,
       threshold,
       driverName,
+      locationMode: location.mode,
+      locationSource: location.source,
     });
   }
 
@@ -303,6 +347,8 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
             ? String(Math.round(candidate.distance))
             : "",
           triggerDistanceMeters: candidate.threshold ? String(candidate.threshold) : "",
+          alertLocationMode: stringValue(candidate.locationMode),
+          alertLocationSource: stringValue(candidate.locationSource),
           timestamp: String(Date.now()),
         },
         android: {
@@ -356,6 +402,8 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
               ? Math.round(candidate.distance)
               : null,
             triggerDistanceMeters: candidate.threshold || null,
+            alertLocationMode: stringValue(candidate.locationMode),
+            alertLocationSource: stringValue(candidate.locationSource),
             seen: false,
             timestamp: now,
             createdAt: now,

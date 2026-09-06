@@ -10,7 +10,8 @@ export const metadata: Metadata = {
   description: "Catbalogan City Waste Management System",
   manifest: "/manifest.webmanifest",
   icons: {
-    icon: "/pwa-icons/wastetrack-192.png",
+    icon: "/icon.svg",
+    shortcut: "/icon.svg",
     apple: "/pwa-icons/wastetrack-192.png",
   },
   appleWebApp: {

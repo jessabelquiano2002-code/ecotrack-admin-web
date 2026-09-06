@@ -62,7 +62,7 @@ function validateFields(
     return "Enter a valid email address, such as driver@example.com.";
   }
 
-  if (requirePassword && fields.password.length < 6) {
+  if ((requirePassword || fields.password.length > 0) && fields.password.length < 6) {
     return "Password must contain at least 6 characters.";
   }
 
@@ -388,6 +388,7 @@ export async function PATCH(request: NextRequest) {
     await adminAuth.updateUser(driverId, {
       email: fields.email,
       displayName: fields.name,
+      ...(fields.password ? { password: fields.password } : {}),
     });
 
     const timestamp = Date.now();
