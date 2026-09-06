@@ -98,14 +98,99 @@ function getStatus(value: unknown) {
   return String(value || "").trim().toLowerCase();
 }
 
+const METROWASTE_TIME_ZONE = "Asia/Manila";
+
+function getLocalDateKey(value: Date | number = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: METROWASTE_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const year = parts.find((part) => part.type === "year")?.value || "";
+  const month = parts.find((part) => part.type === "month")?.value || "";
+  const day = parts.find((part) => part.type === "day")?.value || "";
+
+  return year && month && day ? `${year}-${month}-${day}` : "";
+}
+
+function getLocalWeekday(value: Date | number = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: METROWASTE_TIME_ZONE,
+    weekday: "long",
+  }).format(date);
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || "").trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .filter(([, enabled]) => enabled !== false && enabled !== null)
+      .map(([key, item]) =>
+        typeof item === "string" && item.trim() ? item.trim() : key.trim(),
+      )
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+function isScheduleDueToday(schedule: any) {
+  const status = getStatus(schedule.status || schedule.collectionStatus);
+  if (["inactive", "disabled", "archived", "cancelled", "canceled"].includes(status)) {
+    return false;
+  }
+
+  const today = getLocalWeekday();
+  const configuredDays = Array.from(
+    new Set([
+      ...normalizeStringList(schedule.scheduleDays),
+      ...normalizeStringList(schedule.daysOfWeek),
+      ...normalizeStringList(schedule.recurrence?.daysOfWeek),
+      String(schedule.scheduleDay || "").trim(),
+      String(schedule.dayOfWeek || "").trim(),
+      String(schedule.recurrence?.dayOfWeek || "").trim(),
+    ].filter(Boolean)),
+  );
+
+  if (configuredDays.length > 0) {
+    return configuredDays.some(
+      (day) => day.toLowerCase() === today.toLowerCase(),
+    );
+  }
+
+  const scheduledTimestamp = normalizeTimestamp(
+    schedule.scheduledAt ?? schedule.date ?? schedule.collectionDate,
+  );
+
+  if (scheduledTimestamp) {
+    return getLocalDateKey(scheduledTimestamp) === getLocalDateKey();
+  }
+
+  // Legacy schedules without a weekday/date are not counted as due merely
+  // because they are active. A real collection report can still add them to
+  // today's denominator below, preventing false 0%/inflated results.
+  return false;
+}
+
 function isOpenIssue(issue: any) {
   const status = getStatus(issue.status || issue.issueStatus || issue.state);
   return !["resolved", "closed", "completed", "done", "cancelled"].includes(status);
-}
-
-function isCompletedSchedule(schedule: any) {
-  const status = getStatus(schedule.status || schedule.collectionStatus);
-  return ["completed", "done", "finished", "collected", "success"].includes(status);
 }
 
 function isUpcomingSchedule(schedule: any) {
@@ -294,6 +379,7 @@ export default function DashboardPage() {
   const [schedulesData, setSchedulesData] = useState<AnyRecord>({});
   const [routesData, setRoutesData] = useState<AnyRecord>({});
   const [routeUpdatesData, setRouteUpdatesData] = useState<AnyRecord>({});
+  const [collectionReportsData, setCollectionReportsData] = useState<AnyRecord>({});
   const [lastUpdated, setLastUpdated] = useState(Date.now());
 
   useEffect(() => {
@@ -349,6 +435,11 @@ export default function DashboardPage() {
       touch();
     });
 
+    const unsubCollectionReports = onValue(ref(db, "collection_reports"), (snapshot) => {
+      setCollectionReportsData(snapshot.val() || {});
+      touch();
+    });
+
     return () => {
       unsubDrivers();
       unsubDriverLocations();
@@ -360,6 +451,7 @@ export default function DashboardPage() {
       unsubSchedules();
       unsubRoutes();
       unsubRouteUpdates();
+      unsubCollectionReports();
     };
   }, []);
 
@@ -383,6 +475,10 @@ export default function DashboardPage() {
   const routeUpdates = useMemo(
     () => toArray(routeUpdatesData),
     [routeUpdatesData],
+  );
+  const collectionReports = useMemo(
+    () => toArray(collectionReportsData),
+    [collectionReportsData],
   );
 
   const activeTrucks = useMemo(() => {
@@ -419,15 +515,78 @@ export default function DashboardPage() {
 
   const openIssues = useMemo(() => issues.filter(isOpenIssue).length, [issues]);
 
-  const completedSchedules = useMemo(
-    () => schedules.filter(isCompletedSchedule).length,
-    [schedules],
-  );
+  const todayCompletion = useMemo(() => {
+    const todayKey = getLocalDateKey();
 
-  const compliance = useMemo(() => {
-    if (schedules.length === 0) return 0;
-    return Math.round((completedSchedules / schedules.length) * 100);
-  }, [completedSchedules, schedules.length]);
+    const reportsToday = collectionReports.filter((report) => {
+      const timestamp = normalizeTimestamp(
+        report.completedAt ?? report.timestamp ?? report.updatedAt ?? report.createdAt,
+      );
+      return Boolean(timestamp) && getLocalDateKey(timestamp) === todayKey;
+    });
+
+    // Keep only the latest report for each schedule in case a route is retried.
+    const latestReportBySchedule = new Map<string, any>();
+    reportsToday.forEach((report) => {
+      const scheduleId = String(report.scheduleId || "").trim();
+      if (!scheduleId) return;
+
+      const existing = latestReportBySchedule.get(scheduleId);
+      const currentTime = normalizeTimestamp(
+        report.completedAt ?? report.timestamp ?? report.updatedAt ?? report.createdAt,
+      );
+      const existingTime = existing
+        ? normalizeTimestamp(
+            existing.completedAt ?? existing.timestamp ?? existing.updatedAt ?? existing.createdAt,
+          )
+        : 0;
+
+      if (!existing || currentTime >= existingTime) {
+        latestReportBySchedule.set(scheduleId, report);
+      }
+    });
+
+    const dueScheduleIds = new Set(
+      schedules
+        .filter(isScheduleDueToday)
+        .map((schedule) => String(schedule.id || "").trim())
+        .filter(Boolean),
+    );
+
+    // A real finish report is authoritative. Include its schedule even if an
+    // older/legacy schedule record is missing its weekday metadata.
+    latestReportBySchedule.forEach((_, scheduleId) => {
+      dueScheduleIds.add(scheduleId);
+    });
+
+    let completed = 0;
+    let partial = 0;
+
+    dueScheduleIds.forEach((scheduleId) => {
+      const report = latestReportBySchedule.get(scheduleId);
+      const reportStatus = getStatus(
+        report?.collectionStatus ?? report?.status ?? report?.routeStatus,
+      );
+
+      if (["completed", "complete", "done", "finished", "success"].includes(reportStatus)) {
+        completed += 1;
+      } else if (
+        ["partially_completed", "partially completed", "partial", "incomplete"].includes(reportStatus)
+      ) {
+        partial += 1;
+      }
+    });
+
+    const scheduled = dueScheduleIds.size;
+    const pending = Math.max(0, scheduled - completed - partial);
+    const percentage = scheduled > 0
+      ? Math.round((completed / scheduled) * 100)
+      : 0;
+
+    return { scheduled, completed, partial, pending, percentage };
+  }, [collectionReports, schedules]);
+
+  const compliance = todayCompletion.percentage;
 
   const upcomingSchedules = useMemo(
     () => schedules.filter(isUpcomingSchedule).length,
@@ -538,6 +697,30 @@ export default function DashboardPage() {
       });
     });
 
+    collectionReports.forEach((item) => {
+      const timestamp = normalizeTimestamp(
+        item.completedAt ?? item.timestamp ?? item.updatedAt ?? item.createdAt,
+      );
+      if (!timestamp) return;
+
+      const status = getStatus(item.collectionStatus ?? item.status ?? item.routeStatus);
+      const isPartial = ["partially_completed", "partially completed", "partial"].includes(status);
+
+      events.push({
+        id: `collection-report-${item.id}`,
+        type: "route",
+        title: isPartial ? "Collection partially completed" : "Collection completed",
+        subtitle: [
+          item.driverName,
+          item.routeName || item.scheduleName,
+          item.barangay,
+        ]
+          .filter(Boolean)
+          .join(" • ") || "Driver completion report received",
+        timestamp,
+      });
+    });
+
     routeUpdates.forEach((item) => {
       const timestamp = normalizeTimestamp(
         item.timestamp ?? item.createdAt ?? item.updatedAt,
@@ -566,6 +749,7 @@ export default function DashboardPage() {
     issues,
     schedules,
     routeUpdates,
+    collectionReports,
   ]);
 
   const weeklyActivity = useMemo(() => {
@@ -727,7 +911,11 @@ export default function DashboardPage() {
           <MetricCard
             label="Completion"
             value={`${compliance}%`}
-            helper={`${completedSchedules} of ${schedules.length} schedules completed`}
+            helper={
+              todayCompletion.scheduled > 0
+                ? `${todayCompletion.completed} completed • ${todayCompletion.partial} partial • ${todayCompletion.pending} pending of ${todayCompletion.scheduled} today`
+                : "No collection schedules due today"
+            }
             tone="emerald"
             icon={<CheckIcon />}
             progress={compliance}

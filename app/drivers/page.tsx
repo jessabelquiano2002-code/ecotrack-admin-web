@@ -93,6 +93,13 @@ export default function UsersPage() {
   const [isLicenseLoading, setIsLicenseLoading] = useState(false);
   const [profileError, setProfileError] = useState("");
   const [profileTab, setProfileTab] = useState<"overview" | "licence">("overview");
+  const [createdCredential, setCreatedCredential] = useState<{
+    name: string;
+    email: string;
+    password: string;
+  } | null>(null);
+  const [showCreatedPassword, setShowCreatedPassword] = useState(true);
+  const [credentialCopied, setCredentialCopied] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -334,6 +341,13 @@ export default function UsersPage() {
       return;
     }
 
+    setCreatedCredential({
+      name: normalizedName,
+      email: normalizedEmail,
+      password: form.password,
+    });
+    setShowCreatedPassword(true);
+    setCredentialCopied(false);
     setShowModal(false);
     setForm(emptyForm);
     clearLicenseSelection();
@@ -789,6 +803,101 @@ export default function UsersPage() {
           </div>
         )}
 
+        {createdCredential && (
+          <div
+            className="modal-backdrop"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setCreatedCredential(null);
+              }
+            }}
+          >
+            <section
+              className="modal-card credential-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="driver-credential-title"
+            >
+              <div className="credential-success-icon" aria-hidden="true">✓</div>
+
+              <div className="credential-heading">
+                <span>DRIVER ACCOUNT CREATED</span>
+                <h3 id="driver-credential-title">Temporary sign-in credentials</h3>
+                <p>
+                  Review or copy the password now. MetroWaste does not store a
+                  readable copy of Firebase Authentication passwords.
+                </p>
+              </div>
+
+              <div className="credential-person">
+                <div className="credential-avatar">
+                  {getInitials(createdCredential.name)}
+                </div>
+                <div>
+                  <strong>{createdCredential.name}</strong>
+                  <span>{createdCredential.email}</span>
+                </div>
+              </div>
+
+              <div className="credential-password-card">
+                <div className="credential-password-copy">
+                  <small>TEMPORARY PASSWORD</small>
+                  <input
+                    readOnly
+                    type={showCreatedPassword ? "text" : "password"}
+                    value={createdCredential.password}
+                    aria-label="Temporary driver password"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  className="credential-icon-btn"
+                  onClick={() => setShowCreatedPassword((visible) => !visible)}
+                  aria-label={showCreatedPassword ? "Hide password" : "Show password"}
+                  title={showCreatedPassword ? "Hide password" : "Show password"}
+                >
+                  {showCreatedPassword ? "Hide" : "Show"}
+                </button>
+
+                <button
+                  type="button"
+                  className="credential-copy-btn"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(createdCredential.password);
+                      setCredentialCopied(true);
+                    } catch {
+                      setCredentialCopied(false);
+                    }
+                  }}
+                >
+                  {credentialCopied ? "Copied" : "Copy password"}
+                </button>
+              </div>
+
+              <div className="credential-security-note">
+                <strong>Security note</strong>
+                <span>
+                  After this window is closed, the existing password cannot be
+                  retrieved. An administrator can set a new password from Update Profile.
+                </span>
+              </div>
+
+              <div className="credential-actions">
+                <button
+                  className="primary-action"
+                  type="button"
+                  onClick={() => setCreatedCredential(null)}
+                >
+                  Done
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
+
         {editDriverId && (
           <div className="modal-backdrop">
             <div className="modal-card">
@@ -900,18 +1009,31 @@ export default function UsersPage() {
 
               {profileTab === "overview" ? (
                 <div className="profile-overview-layout">
-                  <div className="profile-photo-card">
-                    <span className="section-eyebrow">Driver photo</span>
+                  <aside className="profile-photo-card">
+                    <span className="section-eyebrow">Driver identity</span>
                     <DriverProfileAvatar driver={profileDriver} large />
                     <strong>{profileDriver.name || "Unnamed Driver"}</strong>
                     <span>{profileDriver.email || "No email provided"}</span>
-                  </div>
+
+                    <div className="profile-identity-badges">
+                      <span className={`status-pill ${getStatusClass(profileDriver.status || "offline")}`}>
+                        {profileDriver.status || "offline"}
+                      </span>
+                      <span className="vehicle-pill">
+                        {profileDriver.truck || "No vehicle assigned"}
+                      </span>
+                    </div>
+                  </aside>
 
                   <div className="profile-information-card">
                     <div className="section-heading">
                       <div>
                         <span className="section-eyebrow">Account information</span>
-                        <h4>Driver details</h4>
+                        <h4>Driver account details</h4>
+                        <p>
+                          Contact, assignment, licence, and account information for this
+                          authorized collection driver.
+                        </p>
                       </div>
                     </div>
 
@@ -925,10 +1047,37 @@ export default function UsersPage() {
                         value={formatLicenceDate(profileDriver.licenseExpirationDate)}
                       />
                       <ProfileField label="Account status" value={profileDriver.status || "offline"} />
-                      <ProfileField
-                        label="Password"
-                        value="Protected — use Update Profile to set a new password"
-                      />
+                    </div>
+
+                    <div className="profile-security-card">
+                      <div className="profile-security-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24">
+                          <path d="M7 10V8a5 5 0 0 1 10 0v2" />
+                          <rect x="5" y="10" width="14" height="10" rx="3" />
+                          <path d="M12 14v2" />
+                        </svg>
+                      </div>
+
+                      <div className="profile-security-copy">
+                        <small>PASSWORD SECURITY</small>
+                        <strong>Protected by Firebase Authentication</strong>
+                        <p>
+                          Existing passwords cannot be retrieved or displayed after account
+                          creation. Use Update Profile to set a new password when required.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        className="security-action"
+                        onClick={() => {
+                          const driver = profileDriver;
+                          closeDriverProfile();
+                          openEditDriver(driver);
+                        }}
+                      >
+                        Set new password
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1527,6 +1676,138 @@ export default function UsersPage() {
           stroke-linejoin: round;
         }
 
+        .field-help {
+          margin-top: 1px;
+          color: #64748b;
+          font-size: 11px;
+          font-weight: 600;
+          line-height: 1.45;
+        }
+
+        .credential-modal {
+          width: min(620px, calc(100vw - 40px));
+          padding: 26px;
+          overflow: visible;
+        }
+
+        .credential-success-icon {
+          width: 54px;
+          height: 54px;
+          display: grid;
+          place-items: center;
+          border-radius: 18px;
+          background: linear-gradient(145deg, #10b981, #047857);
+          color: #ffffff;
+          box-shadow: 0 14px 32px rgba(5, 150, 105, 0.22);
+          font-size: 26px;
+          font-weight: 900;
+        }
+
+        .credential-heading { margin-top: 18px; }
+        .credential-heading > span {
+          color: #047857;
+          font-size: 11px;
+          font-weight: 900;
+          letter-spacing: 0.09em;
+        }
+        .credential-heading h3 {
+          margin: 6px 0 0;
+          color: #0f172a;
+          font-size: 24px;
+          letter-spacing: -0.02em;
+        }
+        .credential-heading p {
+          margin: 7px 0 0;
+          color: #64748b;
+          font-size: 13px;
+          line-height: 1.6;
+        }
+
+        .credential-person {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-top: 20px;
+          padding: 14px;
+          border: 1px solid #dfe9e4;
+          border-radius: 16px;
+          background: #f8fffb;
+        }
+        .credential-avatar {
+          width: 44px;
+          height: 44px;
+          display: grid;
+          place-items: center;
+          border-radius: 14px;
+          background: #047857;
+          color: #fff;
+          font-weight: 900;
+        }
+        .credential-person strong,
+        .credential-person span { display: block; }
+        .credential-person strong { color: #0f172a; }
+        .credential-person span { margin-top: 2px; color: #64748b; font-size: 12px; }
+
+        .credential-password-card {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto auto;
+          align-items: end;
+          gap: 10px;
+          margin-top: 14px;
+          padding: 14px;
+          border: 1px solid #dbe5e0;
+          border-radius: 16px;
+          background: #ffffff;
+        }
+        .credential-password-copy small {
+          display: block;
+          margin-bottom: 7px;
+          color: #64748b;
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: .06em;
+        }
+        .credential-password-copy input {
+          width: 100%;
+          height: 42px;
+          border: 1px solid #d8e2dd;
+          border-radius: 12px;
+          background: #f8fafc;
+          padding: 0 12px;
+          color: #0f172a;
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          font-weight: 800;
+        }
+        .credential-icon-btn,
+        .credential-copy-btn {
+          height: 42px;
+          border: 0;
+          border-radius: 12px;
+          padding: 0 13px;
+          cursor: pointer;
+          font-weight: 850;
+        }
+        .credential-icon-btn { background: #f1f5f9; color: #334155; }
+        .credential-copy-btn { background: #ecfdf5; color: #047857; }
+
+        .credential-security-note {
+          display: grid;
+          gap: 3px;
+          margin-top: 14px;
+          padding: 12px 14px;
+          border-radius: 14px;
+          background: #f8fafc;
+          color: #64748b;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+        .credential-security-note strong { color: #334155; }
+        .credential-actions {
+          display: flex;
+          justify-content: flex-end;
+          margin-top: 18px;
+        }
+
         .modal-actions {
           display: flex;
           justify-content: flex-end;
@@ -1610,10 +1891,13 @@ export default function UsersPage() {
         .file-button input { position: absolute; opacity: 0; pointer-events: none; }
 
         .profile-modal {
-          width: min(940px, 100%);
+          width: min(1040px, calc(100vw - 40px));
+          max-height: calc(100dvh - 40px);
           padding: 0;
-          overflow: hidden;
+          overflow-y: auto;
+          overflow-x: hidden;
           border: 1px solid rgba(203, 213, 225, 0.9);
+          background: #f8fafc;
         }
 
         .profile-hero {
@@ -1757,9 +2041,10 @@ export default function UsersPage() {
 
         .profile-overview-layout {
           display: grid;
-          grid-template-columns: 250px minmax(0, 1fr);
-          gap: 18px;
+          grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+          gap: 20px;
           padding: 24px;
+          background: #f8fafc;
         }
 
         .profile-photo-card,
@@ -1830,16 +2115,19 @@ export default function UsersPage() {
         .profile-detail-grid,
         .licence-summary-grid {
           display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 10px;
+          grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+          gap: 12px;
         }
 
         .profile-field {
-          min-height: 68px;
-          padding: 12px 13px;
-          border-radius: 14px;
+          min-height: 78px;
+          padding: 14px 15px;
+          border-radius: 16px;
           background: #f8fafc;
-          border: 1px solid #edf1f4;
+          border: 1px solid #e7edf1;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
         }
 
         .profile-field small,
@@ -1862,6 +2150,92 @@ export default function UsersPage() {
           line-height: 1.35;
           overflow-wrap: anywhere;
         }
+
+        .profile-identity-badges {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: center;
+          gap: 8px;
+          margin-top: 16px;
+        }
+
+        .vehicle-pill {
+          display: inline-flex;
+          align-items: center;
+          min-height: 28px;
+          padding: 0 10px;
+          border-radius: 999px;
+          background: #ecfdf5;
+          color: #047857;
+          font-size: 11px;
+          font-weight: 850;
+        }
+
+        .profile-security-card {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          align-items: center;
+          gap: 14px;
+          margin-top: 16px;
+          padding: 16px;
+          border: 1px solid #dce8e2;
+          border-radius: 18px;
+          background: linear-gradient(135deg, #f0fdf7, #ffffff);
+        }
+
+        .profile-security-icon {
+          width: 44px;
+          height: 44px;
+          display: grid;
+          place-items: center;
+          border-radius: 14px;
+          background: #dcfce7;
+          color: #047857;
+        }
+
+        .profile-security-icon svg {
+          width: 22px;
+          height: 22px;
+          fill: none;
+          stroke: currentColor;
+          stroke-width: 1.9;
+          stroke-linecap: round;
+          stroke-linejoin: round;
+        }
+
+        .profile-security-copy small,
+        .profile-security-copy strong { display: block; }
+        .profile-security-copy small {
+          color: #047857;
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: .06em;
+        }
+        .profile-security-copy strong {
+          margin-top: 4px;
+          color: #0f172a;
+          font-size: 14px;
+        }
+        .profile-security-copy p {
+          margin: 4px 0 0;
+          color: #64748b;
+          font-size: 11px;
+          line-height: 1.5;
+        }
+
+        .security-action {
+          min-height: 38px;
+          padding: 0 13px;
+          border: 1px solid #a7f3d0;
+          border-radius: 12px;
+          background: #ffffff;
+          color: #047857;
+          cursor: pointer;
+          font-size: 12px;
+          font-weight: 850;
+          white-space: nowrap;
+        }
+        .security-action:hover { background: #ecfdf5; }
 
         .licence-section {
           margin: 24px;
@@ -2027,6 +2401,25 @@ export default function UsersPage() {
           }
         }
 
+        @media (max-width: 840px) {
+          .profile-overview-layout {
+            grid-template-columns: 1fr;
+          }
+
+          .profile-photo-card {
+            min-height: auto;
+          }
+
+          .profile-security-card {
+            grid-template-columns: auto minmax(0, 1fr);
+          }
+
+          .profile-security-card .security-action {
+            grid-column: 1 / -1;
+            width: 100%;
+          }
+        }
+
         @media (max-width: 640px) {
           .users-stats-grid {
             grid-template-columns: 1fr;
@@ -2039,6 +2432,14 @@ export default function UsersPage() {
 
           .form-grid {
             grid-template-columns: 1fr;
+          }
+
+          .credential-password-card {
+            grid-template-columns: 1fr 1fr;
+          }
+
+          .credential-password-copy {
+            grid-column: 1 / -1;
           }
 
           .license-picker,
@@ -2094,7 +2495,7 @@ function DriverFields({
   form,
   setForm,
   includePassword = false,
-  passwordLabel = "Password",
+  passwordLabel = "Temporary Password",
 }: {
   form: DriverFormState;
   setForm: (value: DriverFormState) => void;
@@ -2162,6 +2563,11 @@ function DriverFields({
               )}
             </button>
           </span>
+          <small className="field-help">
+            {passwordLabel.includes("Optional")
+              ? "Use the eye button to verify a new password. Leave blank to keep the current password."
+              : "Use the eye button to verify the password before saving. It will be shown once after account creation."}
+          </small>
         </label>
       )}
     </div>
