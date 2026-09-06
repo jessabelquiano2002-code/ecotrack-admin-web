@@ -354,6 +354,7 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
         android: {
           priority: "high",
           ttl: content.ttl,
+          directBootOk: true,
           collapseKey: `metrowaste-${safeKey(context.sessionId)}-${candidate.stage}`,
         },
       };
@@ -515,33 +516,30 @@ export async function POST(request) {
       coverageAreas.map((area) => area.barangayKey).filter(Boolean),
     )];
     /*
-     * Keep the original Barangay-scoped FCM registry for compatibility, but also
-     * read device_tokens because ResidentTokenRegistrar defines it as the canonical
-     * device registry. This restores background push reliability when the legacy
-     * Barangay mirror is stale or was not rewritten after a settings/location edit.
+     * BACKGROUND PUSH COMPATIBILITY
+     *
+     * The previous MetroWaste build that successfully notified residents while
+     * the app was not open used resident_fcm_tokens/{barangayKey}. Keep that
+     * proven registry as the PRIMARY source. Only fall back to device_tokens if
+     * no Barangay-scoped token records are available.
      */
-    const [canonicalTokenSnapshot, ...tokenSnapshots] = await Promise.all([
-      database.ref("device_tokens").get(),
-      ...coverageBarangays.map((barangayKey) =>
-        database.ref(`resident_fcm_tokens/${safeKey(barangayKey)}`).get(),
-      ),
-    ]);
+    const tokenSnapshots = await Promise.all(coverageBarangays.map((barangayKey) =>
+      database.ref(`resident_fcm_tokens/${safeKey(barangayKey)}`).get(),
+    ));
 
     const tokenMap = {};
-
-    // Compatibility registry first. Canonical device_tokens wins on duplicates.
     tokenSnapshots.forEach((snapshot) => {
       const value = snapshot.val();
       if (!value || typeof value !== "object") return;
       Object.assign(tokenMap, value);
     });
 
-    const canonicalTokens = canonicalTokenSnapshot.val();
-    if (canonicalTokens && typeof canonicalTokens === "object") {
-      Object.assign(tokenMap, canonicalTokens);
-    }
+    let devices = tokenRecords(tokenMap);
 
-    const devices = tokenRecords(tokenMap);
+    if (!devices.length) {
+      const canonicalTokenSnapshot = await database.ref("device_tokens").get();
+      devices = tokenRecords(canonicalTokenSnapshot.val());
+    }
 
     const candidates = await buildCandidates({
       database,
