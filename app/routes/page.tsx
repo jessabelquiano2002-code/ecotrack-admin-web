@@ -4,6 +4,9 @@ import { onValue, push, ref, update } from "@/lib/offlineFirebaseDatabase";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
+import { ScheduleDialog } from "../schedules/ScheduleDialog";
+import { ScheduleIcon } from "../schedules/ScheduleIcons";
+import styles from "../schedules/schedules.module.css";
 import {
   CATBALOGAN_BOUNDARY_SOURCE,
   findOfficialBarangay,
@@ -206,6 +209,33 @@ function getRouteAreas(route: RouteRecord): RouteArea[] {
   );
 }
 
+function groupRouteAreasByBarangay(route: RouteRecord): Array<{ barangay: string; puroks: string[] }> {
+  const groups = new Map<string, { barangay: string; puroks: string[] }>();
+  getRouteAreas(route).forEach((area) => {
+    const barangay = String(area.barangay || "").trim();
+    const purok = String(area.purok || "").trim();
+    if (!barangay) return;
+    const key = makeBarangayKey(barangay);
+    const current = groups.get(key) || { barangay, puroks: [] };
+    if (purok && !current.puroks.includes(purok)) current.puroks.push(purok);
+    groups.set(key, current);
+  });
+  return [...groups.values()].map((group) => ({
+    ...group,
+    puroks: group.puroks.sort(
+      (left, right) => Number(left.match(/\d+/)?.[0] || 0) - Number(right.match(/\d+/)?.[0] || 0),
+    ),
+  }));
+}
+
+const ROUTE_STEPS = [
+  { label: "Service areas", hint: "Choose the Barangays", icon: "pin" as const },
+  { label: "Purok coverage", hint: "Choose exact collection areas", icon: "route" as const },
+  { label: "Driver & truck", hint: "Name and assign the route", icon: "users" as const },
+  { label: "Map preview", hint: "Verify Barangay destinations", icon: "pin" as const },
+  { label: "Review", hint: "Confirm before saving", icon: "check" as const },
+] as const;
+
 function isAssignmentReady(route: RouteRecord): boolean {
   const status = String(route.status || "ready").toLowerCase();
   return (
@@ -359,9 +389,6 @@ function RouteMapPreview({
     fitToPoints();
   }, [ready, points, fitToPoints]);
 
-  const serviceCoordinateCount = points.filter(
-    (point) => point.coordinateSource === "service-areas",
-  ).length;
   const verifiedCoordinateCount = points.filter(
     (point) =>
       point.coordinateSource === "service-areas" ||
@@ -411,11 +438,13 @@ export default function RoutesPage() {
   const [form, setForm] = useState<RouteForm>(EMPTY_FORM);
   const [selectedBarangays, setSelectedBarangays] = useState<string[]>([]);
   const [selectedAreaIds, setSelectedAreaIds] = useState<string[]>([]);
-  const [barangayMenuOpen, setBarangayMenuOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
+  const [routeAreaSearch, setRouteAreaSearch] = useState("");
+  const [routeStep, setRouteStep] = useState(0);
+  const [routeStepError, setRouteStepError] = useState("");
   const [notice, setNotice] = useState("");
-  const barangayPickerRef = useRef<HTMLDivElement | null>(null);
+  const routeStepHeadingRef = useRef<HTMLHeadingElement | null>(null);
 
   useEffect(() => {
     const unsubscribeRoutes = onValue(ref(db, "routes"), (snapshot) => {
@@ -762,22 +791,6 @@ export default function RoutesPage() {
     );
   }, [availableAreaIds]);
 
-  useEffect(() => {
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (
-        target &&
-        barangayPickerRef.current &&
-        !barangayPickerRef.current.contains(target)
-      ) {
-        setBarangayMenuOpen(false);
-      }
-    };
-
-    document.addEventListener("mousedown", onPointerDown);
-    return () => document.removeEventListener("mousedown", onPointerDown);
-  }, []);
-
   const activeDrivers = useMemo(
     () =>
       drivers.filter(
@@ -788,6 +801,18 @@ export default function RoutesPage() {
       ),
     [drivers],
   );
+
+  const visibleConfiguredBarangays = useMemo(() => {
+    const query = routeAreaSearch.trim().toLowerCase();
+    if (!query) return configuredBarangays;
+    return configuredBarangays.filter((barangay) => barangay.toLowerCase().includes(query));
+  }, [configuredBarangays, routeAreaSearch]);
+
+  useEffect(() => {
+    if (!editorOpen) return;
+    routeStepHeadingRef.current?.focus();
+    setRouteStepError("");
+  }, [editorOpen, routeStep]);
 
   const filteredRoutes = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -806,7 +831,9 @@ export default function RoutesPage() {
     setForm(EMPTY_FORM);
     setSelectedBarangays([]);
     setSelectedAreaIds([]);
-    setBarangayMenuOpen(false);
+    setRouteAreaSearch("");
+    setRouteStep(0);
+    setRouteStepError("");
     setSaving(false);
   };
 
@@ -848,7 +875,9 @@ export default function RoutesPage() {
     });
     setSelectedBarangays(routeBarangays);
     setSelectedAreaIds(routeAreaIds);
-    setBarangayMenuOpen(false);
+    setRouteAreaSearch("");
+    setRouteStep(0);
+    setRouteStepError("");
     setEditorOpen(true);
   };
 
@@ -887,6 +916,85 @@ export default function RoutesPage() {
     );
   };
 
+  const selectedDriver = activeDrivers.find((driver) => driver.id === form.assignedDriverId);
+  const hasPurokPerBarangay = selectedBarangays.length > 0 && selectedBarangays.every((barangay) =>
+    selectedServiceAreas.some((area) => area.barangayKey === makeBarangayKey(barangay)),
+  );
+  const routeCanAdvance = [
+    selectedBarangays.length > 0,
+    selectedServiceAreas.length > 0 && hasPurokPerBarangay,
+    Boolean(form.routeName.trim() && selectedDriver),
+    selectedBarangayMapPoints.length === selectedBarangays.length && selectedBarangays.length > 0,
+    true,
+  ];
+  const routeAllStepsValid = routeCanAdvance.slice(0, 4).every(Boolean);
+  const highestRouteStep = (() => {
+    const invalid = routeCanAdvance.slice(0, 4).findIndex((valid) => !valid);
+    return invalid === -1 ? 4 : invalid;
+  })();
+  const nextRouteStep = () => {
+    if (!routeCanAdvance[routeStep]) {
+      setRouteStepError([
+        "Choose at least one Barangay from Service Areas.",
+        "Choose at least one Purok for every selected Barangay.",
+        "Enter a route name and assign an active driver.",
+        "Every selected Barangay needs a valid Service Area map coordinate.",
+      ][routeStep] || "Complete the required route information.");
+      return;
+    }
+    setRouteStep((current) => Math.min(current + 1, 4));
+  };
+  const requestCloseEditor = () => {
+    if (saving) return;
+    const dirty = Boolean(form.routeName.trim() || form.assignedDriverId || selectedBarangays.length || selectedAreaIds.length);
+    if (!dirty || window.confirm("Discard unsaved route changes?")) closeEditor();
+  };
+
+  const sendRouteDriverPush = async ({
+    driverId,
+    title,
+    message,
+    routeId,
+    routeName,
+    assignmentRole,
+  }: {
+    driverId: string;
+    title: string;
+    message: string;
+    routeId: string;
+    routeName: string;
+    assignmentRole: string;
+  }) => {
+    if (!driverId) return;
+    try {
+      const admin = auth.currentUser;
+      if (!admin) return;
+      const idToken = await admin.getIdToken();
+      const response = await fetch("/api/send-alert", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          title,
+          message,
+          type: "driver_route_assignment",
+          target: "driver",
+          targetUid: driverId,
+          routeId,
+          routeName,
+          assignmentRole,
+        }),
+      });
+      if (!response.ok) {
+        console.warn("Route saved, but driver push was not confirmed:", await response.text());
+      }
+    } catch (error) {
+      console.warn("Route saved, but driver push failed:", error);
+    }
+  };
+
   const saveRoute = async () => {
     const routeName = form.routeName.trim();
     const driver = activeDrivers.find(
@@ -903,6 +1011,12 @@ export default function RoutesPage() {
     if (!driver) return alert("Assign an active driver.");
     if (!selectedServiceAreas.length) {
       return alert("Unable to build the selected route coverage from Service Areas.");
+    }
+    const uncoveredBarangays = selectedBarangays.filter((barangay) =>
+      !selectedServiceAreas.some((area) => area.barangayKey === makeBarangayKey(barangay)),
+    );
+    if (uncoveredBarangays.length) {
+      return alert(`Select at least one Purok for each Barangay. Missing: ${uncoveredBarangays.join(", ")}.`);
     }
 
     const areas = selectedServiceAreas.map((area, order) => ({
@@ -1067,8 +1181,37 @@ export default function RoutesPage() {
     try {
       setSaving(true);
       await update(ref(db), rootUpdates);
+
+      const coverageLabel = barangays
+        .map((barangay) => {
+          const barangayKey = makeBarangayKey(barangay);
+          const barangayAreas = areas.filter((area) => area.barangayKey === barangayKey);
+          return `${barangay}: ${barangayAreas.map((area) => area.purok).filter(Boolean).join(", ")}`;
+        })
+        .join(" • ");
+
+      await sendRouteDriverPush({
+        driverId: driver.id,
+        title: existing ? "Route assignment updated" : "New route assigned",
+        message: `${routeName}. Coverage: ${coverageLabel}. Truck: ${vehicle || "not recorded"}. Collection days and times will follow the active schedule assigned by Admin.`,
+        routeId,
+        routeName,
+        assignmentRole: "regular_route_driver",
+      });
+
+      if (existing?.assignedDriverId && existing.assignedDriverId !== driver.id) {
+        await sendRouteDriverPush({
+          driverId: existing.assignedDriverId,
+          title: "Route assignment changed",
+          message: `You are no longer the regular driver assigned to ${existing.routeName || routeName}.`,
+          routeId,
+          routeName: existing.routeName || routeName,
+          assignmentRole: "previous_route_driver",
+        });
+      }
+
       setNotice(
-        "Route assignment saved. The Driver will follow an automatic road route from live phone GPS through /api/gps; no manual Purok pins are required.",
+        "Route saved and ready for scheduling. The assigned driver was notified; live GPS still follows the active schedule through /api/gps.",
       );
       closeEditor();
     } catch (error) {
@@ -1111,1335 +1254,392 @@ export default function RoutesPage() {
   };
 
   return (
-    <DashboardShell
-      title="Routes & Assignments"
-      description="Assign a driver and truck to selected Barangays and Puroks. No map points are required."
-    >
-      <main className="route-page">
+    <DashboardShell title={""} description={""}>
+      <section className={styles.workspace} aria-labelledby="route-page-title">
+        <div className={styles.pageHeader}>
+          <div>
+            <p className={styles.eyebrow}>Collection operations</p>
+            <h1 id="route-page-title">Routes & assignments</h1>
+            <p className={styles.subtitle}>
+              Build verified Barangay/Purok coverage, assign a regular driver and truck,
+              and keep each route ready for scheduling and live GPS collection.
+            </p>
+          </div>
+          <button type="button" className={styles.primaryButton} onClick={openCreateEditor}>
+            <ScheduleIcon name="plus" size={18} /> Create route
+          </button>
+        </div>
+
         {notice ? (
-          <div className="notice">
-            <span>✓ {notice}</span>
-            <button type="button" onClick={() => setNotice("")}>×</button>
+          <div className={styles.successNotice} role="status">
+            <ScheduleIcon name="check" size={18} />
+            <span>{notice}</span>
+            <button type="button" className={styles.iconButton} aria-label="Dismiss confirmation" onClick={() => setNotice("")}>
+              <ScheduleIcon name="close" size={18} />
+            </button>
           </div>
         ) : null}
 
-        <section className="route-summary">
-          <div><span>Total assignments</span><strong>{routes.length}</strong></div>
-          <div><span>Ready</span><strong>{routes.filter(isAssignmentReady).length}</strong></div>
-          <div><span>Needs review</span><strong>{routes.filter((route) => !isAssignmentReady(route)).length}</strong></div>
+        <section className={styles.metrics} aria-label="Route overview">
+          <div className={styles.metric}>
+            <div className={styles.metricHeading}><span>Total routes</span><ScheduleIcon name="route" size={18} /></div>
+            <strong className={styles.metricValue}>{routes.length}</strong>
+            <span className={styles.metricCaption}>Saved route assignments</span>
+          </div>
+          <div className={styles.metric}>
+            <div className={styles.metricHeading}><span>Ready</span><ScheduleIcon name="check" size={18} /></div>
+            <strong className={styles.metricValue}>{routes.filter(isAssignmentReady).length}</strong>
+            <span className={styles.metricCaption}>Verified and driver-assigned</span>
+          </div>
+          <div className={styles.metric}>
+            <div className={styles.metricHeading}><span>Needs review</span><ScheduleIcon name="info" size={18} /></div>
+            <strong className={styles.metricValue}>{routes.filter((route) => !isAssignmentReady(route)).length}</strong>
+            <span className={styles.metricCaption}>Incomplete or inactive routes</span>
+          </div>
+          <div className={styles.metric}>
+            <div className={styles.metricHeading}><span>Service Barangays</span><ScheduleIcon name="pin" size={18} /></div>
+            <strong className={styles.metricValue}>{configuredBarangays.length}</strong>
+            <span className={styles.metricCaption}>Available from Service Areas</span>
+          </div>
         </section>
 
-        <section className="route-card">
-          <header className="toolbar">
+        <section className={styles.registry} aria-labelledby="route-registry-title">
+          <div className={styles.registryIntro}>
             <div>
-              <h2>Route assignments</h2>
-              <p>Coverage is based only on the selected Barangays and Puroks.</p>
+              <h2 id="route-registry-title">Route registry</h2>
+              <p>Select a route to review its exact Purok coverage and regular assignment.</p>
             </div>
-            <div className="toolbar-actions">
-              <input
-                type="search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search route or driver"
-              />
-              <button className="primary" type="button" onClick={openCreateEditor}>
-                ＋ Create assignment
-              </button>
+            <span className={styles.recordCount}>{filteredRoutes.length} of {routes.length}</span>
+          </div>
+          <div className={styles.registryTools}>
+            <div />
+            <label className={styles.searchField}>
+              <ScheduleIcon name="search" size={18} />
+              <span className={styles.srOnly}>Search routes</span>
+              <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search route, Barangay, or driver" />
+            </label>
+          </div>
+
+          {filteredRoutes.length ? (
+            <div className={styles.scheduleList}>
+              {filteredRoutes.map((route) => {
+                const areas = getRouteAreas(route);
+                const groups = groupRouteAreasByBarangay(route);
+                const barangays = groups.map((group) => group.barangay);
+                const ready = isAssignmentReady(route);
+                return (
+                  <details className={styles.scheduleRow} key={route.id}>
+                    <summary className={styles.scheduleSummary}>
+                      <span className={styles.rowIcon}><ScheduleIcon name="route" /></span>
+                      <span className={styles.rowIdentity}>
+                        <strong>{route.routeName || "Unnamed route"}</strong>
+                        <span>{barangays.join(" · ") || normalizeArray(route.barangays).join(" · ") || route.barangay || "Coverage not recorded"}</span>
+                      </span>
+                      <span className={styles.rowWhen}>
+                        <strong>{areas.length} Purok area{areas.length === 1 ? "" : "s"}</strong>
+                        <span>{route.assignedDriverName || "Driver not assigned"}{route.assignedVehicle ? ` · ${route.assignedVehicle}` : ""}</span>
+                      </span>
+                      <span className={styles.rowState}>
+                        <span className={styles.statusBadge} data-active={ready}>
+                          <span aria-hidden="true" />{ready ? "Ready" : "Needs review"}
+                        </span>
+                      </span>
+                      <ScheduleIcon name="chevron" size={17} className={styles.rowChevron} />
+                    </summary>
+                    <div className={styles.scheduleDetail}>
+                      <div className={styles.detailColumns}>
+                        <section className={styles.detailSection} aria-label="Route coverage">
+                          <h3><ScheduleIcon name="pin" size={17} /> Master route coverage</h3>
+                          <div className={styles.coverageList}>
+                            {groups.length ? groups.map((group) => (
+                              <div className={styles.coverageRow} key={group.barangay}>
+                                <strong>{group.barangay}</strong>
+                                <span>{group.puroks.join(", ") || "Purok details not recorded"}</span>
+                              </div>
+                            )) : <p className={styles.subtitle}>No Barangay/Purok coverage recorded.</p>}
+                          </div>
+                        </section>
+                        <section className={styles.detailSection} aria-label="Route assignment">
+                          <h3><ScheduleIcon name="users" size={17} /> Regular assignment</h3>
+                          <dl className={styles.facts}>
+                            <div><dt>Driver</dt><dd>{route.assignedDriverName || "Not assigned"}</dd></div>
+                            <div><dt>Truck / plate</dt><dd>{route.assignedVehicle || "Not recorded"}</dd></div>
+                            <div><dt>Validation</dt><dd>{route.routeValidation?.status || "Not verified"}</dd></div>
+                            <div><dt>Updated</dt><dd>{formatDate(route.updatedAt || route.createdAt)}</dd></div>
+                          </dl>
+                        </section>
+                      </div>
+                      <div className={styles.detailActions}>
+                        <button type="button" className={styles.secondaryButton} onClick={() => openEditEditor(route)}>
+                          <ScheduleIcon name="route" size={17} /> Edit route
+                        </button>
+                        <button type="button" className={styles.dangerButton} onClick={() => void deleteRoute(route)}>
+                          <ScheduleIcon name="trash" size={17} /> Delete route
+                        </button>
+                      </div>
+                    </div>
+                  </details>
+                );
+              })}
             </div>
+          ) : (
+            <div className={styles.emptyState}>
+              <ScheduleIcon name="route" size={28} />
+              <h3>{routes.length ? "No matching routes" : "No routes yet"}</h3>
+              <p>{routes.length ? "Change the search to see other route assignments." : "Create a verified route before building a collection schedule."}</p>
+              {routes.length ? <button type="button" className={styles.secondaryButton} onClick={() => setSearch("")}>Clear search</button> : null}
+            </div>
+          )}
+          <div className={styles.registryFootnote}>
+            <ScheduleIcon name="info" size={16} />
+            <span>Routes are master coverage templates. Schedule-specific Purok selections are saved separately in the Schedule planner.</span>
+          </div>
+        </section>
+      </section>
+
+      {editorOpen ? (
+        <ScheduleDialog fullScreen labelledBy="route-planner-title" busy={saving} onDismiss={requestCloseEditor}>
+          <header className={styles.dialogHeader}>
+            <div className={styles.dialogTitleGroup}>
+              <span className={styles.brandMark}><ScheduleIcon name="route" size={22} /></span>
+              <div>
+                <span className={styles.eyebrow}>MetroWaste · Route planner</span>
+                <h2 id="route-planner-title" data-dialog-heading tabIndex={-1}>{editingRouteId ? "Edit route assignment" : "Create a route assignment"}</h2>
+              </div>
+            </div>
+            <button type="button" className={styles.iconButton} aria-label="Close route planner" disabled={saving} onClick={requestCloseEditor}>
+              <ScheduleIcon name="close" />
+            </button>
           </header>
 
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Assignment</th>
-                  <th>Coverage</th>
-                  <th>Driver / truck</th>
-                  <th>Status</th>
-                  <th>Updated</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRoutes.length ? (
-                  filteredRoutes.map((route) => {
-                    const areas = getRouteAreas(route);
-                    return (
-                      <tr key={route.id}>
-                        <td><strong>{route.routeName || "Unnamed assignment"}</strong><small>{route.id}</small></td>
-                        <td><span>{areas.length} Barangay/Purok area{areas.length === 1 ? "" : "s"}</span><small>{normalizeArray(route.barangays).join(" • ") || route.barangay || "No coverage"}</small></td>
-                        <td><strong>{route.assignedDriverName || "Unassigned"}</strong><small>{route.assignedVehicle || "No truck"}</small></td>
-                        <td><span className={isAssignmentReady(route) ? "status ready" : "status review"}>{isAssignmentReady(route) ? "Ready" : "Needs review"}</span></td>
-                        <td>{formatDate(route.updatedAt || route.createdAt)}</td>
-                        <td><div className="row-actions"><button type="button" onClick={() => openEditEditor(route)}>Edit</button><button type="button" className="danger" onClick={() => void deleteRoute(route)}>Delete</button></div></td>
-                      </tr>
-                    );
-                  })
-                ) : (
-                  <tr><td colSpan={6} className="empty">No route assignments found.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+          <div className={styles.plannerLayout}>
+            <aside className={styles.plannerSidebar} aria-label="Route creation steps">
+              <p className={styles.sidebarCaption}>Route setup</p>
+              <ol className={styles.stepNav}>
+                {ROUTE_STEPS.map((item, index) => (
+                  <li key={item.label}>
+                    <button type="button" className={styles.stepNavButton} aria-current={routeStep === index ? "step" : undefined}
+                      disabled={saving || index > highestRouteStep} onClick={() => setRouteStep(index)}>
+                      <span className={styles.stepNumber} data-complete={index < routeStep && routeCanAdvance[index]}>
+                        {index < routeStep && routeCanAdvance[index] ? <ScheduleIcon name="check" size={16} /> : index + 1}
+                      </span>
+                      <span><strong>{item.label}</strong><small>{item.hint}</small></span>
+                    </button>
+                  </li>
+                ))}
+              </ol>
+              <div className={styles.sidebarNote}><ScheduleIcon name="info" size={18} />
+                <p>The master route defines allowed Barangay/Purok coverage. Individual schedules can use a subset of these Puroks.</p>
+              </div>
+            </aside>
 
-        {editorOpen ? (
-          <div
-            className="modal"
-            role="presentation"
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) closeEditor();
-            }}
-          >
-            <section
-              className="editor"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Route assignment editor"
-            >
-              <header className="editor-head">
-                <div>
-                  <span>{editingRouteId ? "EDIT ROUTE" : "NEW ROUTE"}</span>
-                  <h2>
-                    {editingRouteId
-                      ? "Edit service area route"
-                      : "Create service area route"}
-                  </h2>
-                  <p>
-                    Barangays and Puroks load directly from Service Areas. Select
-                    the coverage, assign a driver, then verify it on the larger map.
-                  </p>
+            <div className={styles.plannerScroll} key={routeStep}>
+              <div className={styles.stepContent}>
+                <div className={styles.stepTitle}>
+                  <span className={styles.stepCounter}>Step {routeStep + 1} of {ROUTE_STEPS.length}</span>
+                  <h2 ref={routeStepHeadingRef} tabIndex={-1}>{[
+                    "Which Barangays belong to this route?",
+                    "Which Puroks can this route serve?",
+                    "Who is responsible for this route?",
+                    "Are the Barangay destinations ready?",
+                    "Does the route look correct?",
+                  ][routeStep]}</h2>
+                  <p>{[
+                    "Choose one or more active Barangays from Service Areas.",
+                    "Choose the exact Puroks allowed on this master route. Every selected Barangay needs at least one Purok.",
+                    "Give the route a clear name, assign its regular driver, and confirm the truck or plate number.",
+                    "Verify the automatic Barangay reference points used by the Driver map. No manual Purok pins are required.",
+                    "Review master coverage and assignment before saving it for use by the Schedule planner.",
+                  ][routeStep]}</p>
                 </div>
-                <button
-                  className="editor-close"
-                  type="button"
-                  onClick={closeEditor}
-                  aria-label="Close route editor"
-                >
-                  ×
-                </button>
-              </header>
 
-              <div className="editor-body">
-                <div className="editor-form-column">
-                  <div className="assignment-grid">
-                  <label className="field route-name-field">
-                    <span>Route name</span>
-                    <input
-                      value={form.routeName}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          routeName: event.target.value,
-                        }))
-                      }
-                      placeholder="Example: Canlapwas Purok 1–5"
-                    />
-                  </label>
+                {routeStepError ? <div className={styles.errorNotice} role="alert"><ScheduleIcon name="info" size={18} />{routeStepError}</div> : null}
 
-                  <div className="field barangay-field">
-                    <span>Barangays</span>
-                    <div className="barangay-picker" ref={barangayPickerRef}>
-                      <button
-                        className="picker-trigger"
-                        type="button"
-                        onClick={() =>
-                          setBarangayMenuOpen((current) => !current)
-                        }
-                        aria-expanded={barangayMenuOpen}
-                        disabled={!configuredBarangays.length}
-                      >
-                        <strong>
-                          {selectedBarangays.length
-                            ? `${selectedBarangays.length} Barangay${selectedBarangays.length === 1 ? "" : "s"} selected`
-                            : configuredBarangays.length
-                              ? "Select Barangays"
-                              : "No active Service Areas"}
-                        </strong>
-                        <span className="picker-meta">
-                          {selectedBarangays.length ? (
-                            <b>{selectedBarangays.length}</b>
-                          ) : null}
-                          <i>{barangayMenuOpen ? "⌃" : "⌄"}</i>
-                        </span>
+                <fieldset className={styles.formFields} disabled={saving}>
+                  <legend className={styles.srOnly}>{ROUTE_STEPS[routeStep].label}</legend>
+
+                  {routeStep === 0 ? <>
+                    <label className={styles.searchField}>
+                      <ScheduleIcon name="search" size={18} /><span className={styles.srOnly}>Find a Barangay</span>
+                      <input type="search" value={routeAreaSearch} onChange={(event) => setRouteAreaSearch(event.target.value)} placeholder="Find a Barangay…" />
+                    </label>
+                    <div className={styles.selectionCaption}>
+                      <span><strong>{selectedBarangays.length}</strong> Barangay{selectedBarangays.length === 1 ? "" : "s"} selected</span>
+                      <button type="button" className={styles.textButton} disabled={!configuredBarangays.length} onClick={toggleAllBarangays}>
+                        {selectedBarangays.length === configuredBarangays.length && configuredBarangays.length ? "Clear all" : "Select all"}
                       </button>
+                    </div>
+                    <div className={styles.areaChoices}>
+                      {visibleConfiguredBarangays.map((barangay) => {
+                        const checked = selectedBarangays.includes(barangay);
+                        return <label className={styles.choice} data-selected={checked} key={barangay}>
+                          <input type="checkbox" checked={checked} onChange={() => toggleBarangay(barangay)} />
+                          <span><strong>{barangay}</strong><small>Active Service Area</small></span>
+                        </label>;
+                      })}
+                    </div>
+                    {!visibleConfiguredBarangays.length ? <div className={styles.helpNotice}>
+                      {configuredBarangays.length ? "No Barangay matches that search." : "No active Barangays/Puroks are configured in Service Areas."}
+                    </div> : null}
+                    {selectedBarangays.length ? <div className={styles.selectionReview}>
+                      <strong>Selected Barangays</strong><p>{selectedBarangays.join(" · ")}</p>
+                      <span>Continue to choose exact Purok coverage.</span>
+                    </div> : null}
+                  </> : null}
 
-                      {selectedBarangays.length ? (
-                        <div className="barangay-chips">
-                          {selectedBarangays.map((barangay) => (
-                            <button
-                              type="button"
-                              key={barangay}
-                              onClick={() => toggleBarangay(barangay)}
-                              title={`Remove ${barangay}`}
-                            >
-                              {barangay} <span>×</span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-
-                      {barangayMenuOpen ? (
-                        <div className="barangay-menu">
-                          <div className="barangay-menu-head">
-                            <span>{configuredBarangays.length} from Service Areas</span>
-                            <button type="button" onClick={toggleAllBarangays}>
-                              {selectedBarangays.length === configuredBarangays.length
-                                ? "Clear all"
-                                : "Select all"}
-                            </button>
+                  {routeStep === 1 ? <>
+                    <div className={styles.contextLine}><ScheduleIcon name="pin" size={17} /><span>{selectedBarangays.join(" · ")}</span>
+                      <button type="button" className={styles.textButton} onClick={() => setRouteStep(0)}>Change Barangays</button>
+                    </div>
+                    <div className={styles.selectionCaption}>
+                      <span><strong>{selectedServiceAreas.length}</strong> Purok area{selectedServiceAreas.length === 1 ? "" : "s"} selected</span>
+                      <button type="button" className={styles.textButton} disabled={!availableAreaIds.length} onClick={toggleAllAreas}>
+                        {availableAreaIds.length > 0 && selectedAreaIds.length === availableAreaIds.length ? "Clear all" : "Select all"}
+                      </button>
+                    </div>
+                    <div className={styles.coverageEditor}>
+                      {availableAreasByBarangay.map((group) => {
+                        const selectedCount = group.areas.filter((area) => selectedAreaIds.includes(area.id)).length;
+                        const allSelected = group.areas.length > 0 && selectedCount === group.areas.length;
+                        return <section className={styles.coverageEditorGroup} key={group.barangayKey}>
+                          <div className={styles.coverageEditorHead}>
+                            <div><strong>{group.barangay}</strong><small>{selectedCount} of {group.areas.length} active Puroks selected</small></div>
+                            <button type="button" className={styles.textButton} onClick={() => {
+                              const ids = group.areas.map((area) => area.id);
+                              setSelectedAreaIds((current) => {
+                                const withoutGroup = current.filter((id) => !ids.includes(id));
+                                return allSelected ? withoutGroup : [...withoutGroup, ...ids];
+                              });
+                            }}>{allSelected ? "Clear Barangay" : "Select Barangay"}</button>
                           </div>
-                          <div className="barangay-options">
-                            {configuredBarangays.map((barangay) => {
-                              const selected = selectedBarangays.includes(barangay);
-                              return (
-                                <button
-                                  type="button"
-                                  className={selected ? "selected" : ""}
-                                  key={barangay}
-                                  onClick={() => toggleBarangay(barangay)}
-                                >
-                                  <span className="picker-check">
-                                    {selected ? "✓" : ""}
-                                  </span>
-                                  <strong>{barangay}</strong>
-                                </button>
-                              );
+                          <div className={styles.purokChoices}>
+                            {group.areas.map((area) => {
+                              const checked = selectedAreaIds.includes(area.id);
+                              return <label className={styles.purokChoice} data-selected={checked} key={area.id}>
+                                <input type="checkbox" checked={checked} onChange={() => toggleArea(area.id)} />
+                                <span><strong>{area.purok}</strong><small>{group.barangay}</small></span>
+                              </label>;
                             })}
                           </div>
-                        </div>
-                      ) : null}
+                        </section>;
+                      })}
                     </div>
-                  </div>
+                    <div className={styles.helpNotice}><ScheduleIcon name="info" size={20} /><div><strong>Source: Service Areas</strong>
+                      <p>Routes do not create new Barangays or Puroks. Add or activate missing areas in Service Areas first.</p></div>
+                    </div>
+                  </> : null}
 
-                  <label className="field">
-                    <span>Assigned driver</span>
-                    <select
-                      value={form.assignedDriverId}
-                      onChange={(event) => {
-                        const driver = drivers.find(
-                          (item) => item.id === event.target.value,
-                        );
-                        setForm((current) => ({
-                          ...current,
-                          assignedDriverId: event.target.value,
-                          assignedVehicle:
-                            current.assignedVehicle || driver?.truck || "",
-                        }));
-                      }}
-                    >
-                      <option value="">Select driver</option>
-                      {activeDrivers.map((driver) => (
-                        <option key={driver.id} value={driver.id}>
-                          {driver.name || driver.id}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  {routeStep === 2 ? <>
+                    <div className={styles.contextLine}><ScheduleIcon name="route" size={17} /><span>{selectedBarangays.length} Barangay{selectedBarangays.length === 1 ? "" : "s"} · {selectedServiceAreas.length} Purok area{selectedServiceAreas.length === 1 ? "" : "s"}</span>
+                      <button type="button" className={styles.textButton} onClick={() => setRouteStep(1)}>Change coverage</button>
+                    </div>
+                    <label className={styles.field}><span>Route name</span>
+                      <input value={form.routeName} onChange={(event) => setForm((current) => ({ ...current, routeName: event.target.value }))} placeholder="Example: Bunuanan North Collection Route" />
+                      <small>Use a clear operational name that admins and drivers can recognize.</small>
+                    </label>
+                    <div className={styles.twoFields}>
+                      <label className={styles.field}><span>Regular driver</span>
+                        <select value={form.assignedDriverId} onChange={(event) => {
+                          const driver = activeDrivers.find((item) => item.id === event.target.value);
+                          setForm((current) => ({ ...current, assignedDriverId: event.target.value, assignedVehicle: current.assignedVehicle || driver?.truck || "" }));
+                        }}>
+                          <option value="">Choose an active driver</option>
+                          {activeDrivers.map((driver) => <option key={driver.id} value={driver.id}>{driver.name || driver.id}</option>)}
+                        </select>
+                        <small>This is the route default. A Schedule still saves its own assigned driver.</small>
+                      </label>
+                      <label className={styles.field}><span>Truck / plate <small>Optional if driver has a saved truck</small></span>
+                        <input value={form.assignedVehicle} onChange={(event) => setForm((current) => ({ ...current, assignedVehicle: event.target.value }))} placeholder={selectedDriver?.truck || "Enter truck / plate"} />
+                        <small>{selectedDriver?.truck ? `Driver profile truck: ${selectedDriver.truck}` : "Confirm the collection vehicle."}</small>
+                      </label>
+                    </div>
+                    <div className={styles.neutralNotice}><ScheduleIcon name="users" size={20} /><p>Schedules created from this route remain authoritative for the Driver App: each schedule saves routeId, assignedDriverId, truckId, and its actual Purok areas.</p></div>
+                  </> : null}
 
-                  <label className="field">
-                    <span>Truck / plate number</span>
-                    <input
-                      value={form.assignedVehicle}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          assignedVehicle: event.target.value,
-                        }))
-                      }
-                      placeholder="Optional"
-                    />
-                  </label>
-                </div>
+                  {routeStep === 3 ? <>
+                    <div className={styles.contextLine}><ScheduleIcon name="pin" size={17} /><span>{selectedBarangays.length} Barangay destination{selectedBarangays.length === 1 ? "" : "s"}</span>
+                      <button type="button" className={styles.textButton} onClick={() => setRouteStep(0)}>Change areas</button>
+                    </div>
+                    <div className="route-step-map">
+                      <RouteMapPreview points={selectedBarangayMapPoints} selectedBarangayCount={selectedBarangays.length} />
+                    </div>
+                    {selectedBarangayMapPoints.length !== selectedBarangays.length ? <div className={styles.errorNotice} role="alert">
+                      <ScheduleIcon name="info" size={18} />Some selected Barangays do not have valid coordinates. Update those Service Areas before saving this route.
+                    </div> : <div className={styles.helpNotice}><ScheduleIcon name="check" size={20} /><div><strong>Destinations ready</strong><p>The Driver map can resolve the selected Barangay destinations. Purok pins are intentionally not required.</p></div></div>}
+                  </> : null}
 
-                  <section className="purok-panel">
-                    <header>
-                      <div>
-                        <h3>Actual Purok coverage per Barangay</h3>
-                        <p>
-                          {!selectedBarangays.length
-                            ? "Select Barangays first. Actual Puroks are loaded from Service Areas."
-                            : availableAreaIds.length
-                              ? "Choose the exact Puroks for each Barangay. Different Barangays can have different Purok coverage."
-                              : "No active local Puroks are configured for the selected Barangays."}
-                        </p>
+                  {routeStep === 4 ? <>
+                    <div className={styles.reviewTitle}><ScheduleIcon name="route" size={25} />
+                      <div><strong>{form.routeName.trim() || "Unnamed route"}</strong><span>Verified service-area route</span></div>
+                    </div>
+                    <section className={styles.reviewSection}>
+                      <div className={styles.reviewHeading}><h3>Master coverage</h3><button type="button" className={styles.textButton} onClick={() => setRouteStep(1)}>Change</button></div>
+                      <div className={styles.coverageList}>
+                        {selectedBarangays.map((barangay) => {
+                          const areas = selectedServiceAreas.filter((area) => area.barangayKey === makeBarangayKey(barangay));
+                          return <div className={styles.coverageRow} key={barangay}><strong>{barangay}</strong><span>{areas.map((area) => area.purok).join(", ") || "No Purok selected"}</span></div>;
+                        })}
                       </div>
-                      <button
-                        type="button"
-                        onClick={toggleAllAreas}
-                        disabled={!availableAreaIds.length}
-                      >
-                        {availableAreaIds.length > 0 &&
-                        selectedAreaIds.length === availableAreaIds.length
-                          ? "Clear all"
-                          : "Select all"}
-                      </button>
-                    </header>
-                    <div className="purok-by-barangay-grid">
-                      {availableAreasByBarangay.map((group) => (
-                        <article className="purok-group-card" key={group.barangayKey}>
-                          <div className="purok-group-head">
-                            <strong>{group.barangay}</strong>
-                            <small>{group.areas.length} active local Purok{group.areas.length === 1 ? "" : "s"}</small>
-                          </div>
-                          <div className="purok-grid">
-                            {group.areas.length ? group.areas.map((area) => {
-                              const selected = selectedAreaIds.includes(area.id);
-                              return (
-                                <button
-                                  type="button"
-                                  className={selected ? "selected" : ""}
-                                  key={area.id}
-                                  onClick={() => toggleArea(area.id)}
-                                  title={`${area.barangay} • ${area.purok}`}
-                                >
-                                  <span>{selected ? "✓" : "+"}</span>
-                                  {area.purok}
-                                </button>
-                              );
-                            }) : <p className="no-local-puroks">No active Puroks. Add them in Service Areas.</p>}
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                  </section>
-
-                  <div className="service-area-source">
-                    <span>✓</span>
-                    <div>
-                      <strong>Coverage source: Service Areas</strong>
-                      <p>
-                        Route Assignment does not create new Barangays or Puroks.
-                        Add or activate them in Service Areas first.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <RouteMapPreview
-                  points={selectedBarangayMapPoints}
-                  selectedBarangayCount={selectedBarangays.length}
-                />
+                    </section>
+                    <section className={styles.reviewSection}>
+                      <div className={styles.reviewHeading}><h3>Regular assignment</h3><button type="button" className={styles.textButton} onClick={() => setRouteStep(2)}>Change</button></div>
+                      <dl className={styles.facts}>
+                        <div><dt>Driver</dt><dd>{selectedDriver?.name || "Not selected"}</dd></div>
+                        <div><dt>Truck / plate</dt><dd>{form.assignedVehicle.trim() || selectedDriver?.truck || "Not recorded"}</dd></div>
+                        <div><dt>Barangays</dt><dd>{selectedBarangays.length}</dd></div>
+                        <div><dt>Purok areas</dt><dd>{selectedServiceAreas.length}</dd></div>
+                        <div><dt>Tracking</dt><dd>Live GPS · service-area route</dd></div>
+                      </dl>
+                    </section>
+                    <div className={styles.neutralNotice}><ScheduleIcon name="info" size={20} /><p>Saving updates the master route and Barangay assignments. Existing Schedule records keep their saved schedule-specific Purok coverage and driver assignment.</p></div>
+                    {!routeAllStepsValid ? <div className={styles.errorNotice} role="alert">An earlier route selection changed. Review the previous steps before saving.</div> : null}
+                  </> : null}
+                </fieldset>
               </div>
-
-              <footer className="editor-foot">
-                <div className="editor-selection-summary">
-                  <strong>{selectedBarangays.length}</strong> Barangay
-                  {selectedBarangays.length === 1 ? "" : "s"} ·{` `}
-                  <strong>{selectedServiceAreas.length}</strong> Purok coverage
-                  {selectedServiceAreas.length === 1 ? "" : "s"} ·{` `}
-                  <strong>{selectedServiceAreas.length}</strong> coverage area
-                  {selectedServiceAreas.length === 1 ? "" : "s"}
-                </div>
-                <div>
-                  <button type="button" onClick={closeEditor}>
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className="primary"
-                    disabled={
-                      saving ||
-                      !form.routeName.trim() ||
-                      !form.assignedDriverId ||
-                      !selectedServiceAreas.length
-                    }
-                    onClick={() => void saveRoute()}
-                  >
-                    {saving ? "Saving…" : "Save route assignment"}
-                  </button>
-                </div>
-              </footer>
-            </section>
+            </div>
           </div>
-        ) : null}
-      </main>
+
+          <footer className={styles.plannerFooter}>
+            <span className={styles.footerProgress}>Step {routeStep + 1} of {ROUTE_STEPS.length} · {ROUTE_STEPS[routeStep].label}</span>
+            <div className={styles.footerActions}>
+              <button type="button" className={styles.secondaryButton} disabled={saving} onClick={() => routeStep === 0 ? requestCloseEditor() : setRouteStep((current) => current - 1)}>
+                {routeStep > 0 ? <ScheduleIcon name="arrowLeft" size={17} /> : null}{routeStep === 0 ? "Cancel" : "Back"}
+              </button>
+              {routeStep < 4 ? <button type="button" className={styles.primaryButton} disabled={saving} onClick={nextRouteStep}>Continue<ScheduleIcon name="arrowRight" size={17} /></button>
+                : <button type="button" className={styles.primaryButton} disabled={saving || !routeAllStepsValid} onClick={() => void saveRoute()}>
+                  {saving ? <span className={styles.spinner} aria-hidden="true" /> : <ScheduleIcon name="check" size={17} />}
+                  {saving ? "Saving route…" : editingRouteId ? "Save route changes" : "Confirm & create"}
+                </button>}
+            </div>
+          </footer>
+        </ScheduleDialog>
+      ) : null}
 
       <style jsx global>{`
-        .route-page {
-          max-width: 1500px;
-          margin: 0 auto;
-          display: grid;
-          gap: 16px;
-          color: #172a20;
-        }
-
-        .notice {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          padding: 13px 15px;
-          border: 1px solid #a7dfbd;
-          border-radius: 12px;
-          background: #f0fdf4;
-          color: #166534;
-        }
-
-        .notice button {
-          border: 0;
-          background: transparent;
-          font-size: 22px;
-          cursor: pointer;
-        }
-
-        .route-summary {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 14px;
-        }
-
-        .route-summary div {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 18px;
-          border: 1px solid #dce7e0;
-          border-radius: 15px;
-          background: #fff;
-        }
-
-        .route-summary span {
-          color: #64776c;
-          font-size: 12px;
-          font-weight: 800;
-        }
-
-        .route-summary strong {
-          order: -1;
-          color: #168a4a;
-          font-size: 27px;
-        }
-
-        .route-card {
-          overflow: hidden;
-          border: 1px solid #dce7e0;
-          border-radius: 17px;
-          background: #fff;
-        }
-
-        .toolbar {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 18px;
-          padding: 18px;
-          border-bottom: 1px solid #e4ece7;
-        }
-
-        .toolbar h2,
-        .toolbar p {
-          margin: 0;
-        }
-
-        .toolbar p {
-          margin-top: 5px;
-          color: #718078;
-          font-size: 13px;
-        }
-
-        .toolbar-actions {
-          display: flex;
-          gap: 10px;
-        }
-
-        .toolbar input {
-          min-height: 44px;
-          border: 1px solid #cedbd3;
-          border-radius: 10px;
-          padding: 0 12px;
-          background: #fff;
-          color: #16291f;
-        }
-
-        .primary {
-          border: 1px solid #168a4a !important;
-          background: #168a4a !important;
-          color: #fff !important;
-          font-weight: 850;
-        }
-
-        .toolbar button,
-        .editor-foot button {
-          min-height: 44px;
-          border: 1px solid #d4dfd8;
-          border-radius: 10px;
-          padding: 0 15px;
-          background: #fff;
-          cursor: pointer;
-        }
-
-        .primary:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
-
-        .table-wrap {
-          overflow: auto;
-        }
-
-        .route-card table {
-          width: 100%;
-          border-collapse: collapse;
-        }
-
-        .route-card th,
-        .route-card td {
-          padding: 14px 16px;
-          border-bottom: 1px solid #e8eeea;
-          text-align: left;
-          font-size: 13px;
-        }
-
-        .route-card th {
-          color: #62736a;
-          background: #f8fbf9;
-          font-size: 11px;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }
-
-        .route-card td strong,
-        .route-card td small {
-          display: block;
-        }
-
-        .route-card td small {
-          margin-top: 4px;
-          color: #718078;
-        }
-
-        .status {
-          display: inline-flex;
-          padding: 6px 9px;
-          border-radius: 999px;
-          font-weight: 850;
-        }
-
-        .status.ready {
-          background: #e8f7ee;
-          color: #137744;
-        }
-
-        .status.review {
-          background: #fff0e6;
-          color: #b45309;
-        }
-
-        .row-actions {
-          display: flex;
-          gap: 7px;
-        }
-
-        .row-actions button {
-          border: 1px solid #d4dfd8;
-          border-radius: 8px;
-          padding: 7px 9px;
-          background: #fff;
-          cursor: pointer;
-        }
-
-        .danger {
-          color: #b42318 !important;
-        }
-
-        .empty {
-          padding: 28px !important;
-          color: #718078;
-          text-align: center !important;
-        }
-
-        .modal {
-          position: fixed;
-          inset: 0;
-          z-index: 999999;
-          display: grid;
-          place-items: center;
-          padding: 10px;
-          box-sizing: border-box;
-          overflow: hidden;
-          background: rgba(15, 27, 21, 0.58);
-          backdrop-filter: blur(5px);
-          overscroll-behavior: contain;
-        }
-
-        .editor {
-          width: min(1680px, calc(100vw - 20px));
-          height: calc(100% - 20px);
-          max-width: none;
-          max-height: calc(100% - 20px);
-          display: grid;
-          grid-template-rows: auto minmax(0, 1fr) 72px;
-          overflow: hidden;
-          border: 1px solid #d6e2da;
-          border-radius: 20px;
-          background: #f8fbf9;
-          box-shadow: 0 28px 90px rgba(7, 20, 13, 0.34);
-        }
-
-        .editor-head {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 18px;
-          padding: 16px 22px 14px;
-          border-bottom: 1px solid #e2ebe5;
-          background: #fff;
-        }
-
-        .editor-head > div {
-          min-width: 0;
-        }
-
-        .editor-head > div > span {
-          display: block;
-          color: #168a4a;
-          font-size: 10px;
-          font-weight: 900;
-          letter-spacing: 0.16em;
-        }
-
-        .editor-head h2,
-        .editor-head p {
-          margin: 0;
-        }
-
-        .editor-head h2 {
-          margin-top: 5px;
-          color: #102b1d;
-          font-size: 22px;
-          line-height: 1.2;
-        }
-
-        .editor-head p {
-          max-width: 900px;
-          margin-top: 7px;
-          color: #65776d;
-          font-size: 13px;
-          line-height: 1.45;
-        }
-
-        .editor-close {
-          width: 38px;
-          height: 38px;
-          display: grid;
-          place-items: center;
-          flex: 0 0 auto;
-          border: 0;
-          border-radius: 50%;
-          background: #f1f5f2;
-          color: #56665d;
-          font-size: 20px;
-          cursor: pointer;
-        }
-
-        .editor-close:hover {
-          background: #e9efeb;
-          color: #21362a;
-        }
-
-        .editor-body {
-          min-height: 0;
-          overflow: hidden;
-          display: grid;
-          grid-template-columns: minmax(500px, 0.82fr) minmax(640px, 1.18fr);
-          gap: 16px;
-          padding: 16px;
-          background: #f8fbf9;
-        }
-
-        .editor-form-column {
-          min-width: 0;
-          min-height: 0;
-          overflow-y: auto;
-          overflow-x: hidden;
-          display: grid;
-          align-content: start;
-          gap: 14px;
-          padding: 1px 6px 1px 1px;
-          scrollbar-width: thin;
-          scrollbar-color: #b8c9bf transparent;
-        }
-
-        .editor-form-column::-webkit-scrollbar {
-          width: 7px;
-        }
-
-        .editor-form-column::-webkit-scrollbar-thumb {
-          border-radius: 999px;
-          background: #b8c9bf;
-        }
-
-        .assignment-grid {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-          gap: 13px;
-          align-items: start;
-          padding: 16px;
-          border: 1px solid #d9e5dd;
-          border-radius: 15px;
-          background: #fff;
-        }
-
-        .field {
-          min-width: 0;
-          display: grid;
-          gap: 7px;
-          color: #253d30;
-          font-size: 11px;
-          font-weight: 850;
-        }
-
-        .field > span {
-          line-height: 1.2;
-        }
-
-        .field input,
-        .field select,
-        .picker-trigger {
-          width: 100%;
-          min-height: 45px;
-          border: 1px solid #cbd9d1;
-          border-radius: 10px;
-          padding: 0 12px;
-          outline: none;
-          background: #fff;
-          color: #172a20;
-          font: inherit;
-          font-size: 13px;
-          font-weight: 500;
-          transition: border-color 0.16s ease, box-shadow 0.16s ease;
-        }
-
-        .field input::placeholder {
-          color: #73827a;
-        }
-
-        .field input:focus,
-        .field select:focus,
-        .picker-trigger:focus-visible {
-          border-color: #168a4a;
-          box-shadow: 0 0 0 3px rgba(22, 138, 74, 0.1);
-        }
-
-        .route-name-field input {
-          min-height: 45px;
-          padding: 0 13px;
-        }
-
-        .barangay-picker {
-          position: relative;
-          min-width: 0;
-          display: grid;
-          gap: 7px;
-        }
-
-        .picker-trigger {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 10px;
-          cursor: pointer;
-        }
-
-        .picker-trigger:disabled {
-          cursor: not-allowed;
-          background: #f7f9f8;
-          color: #87958d;
-        }
-
-        .picker-trigger > strong {
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          font-size: 13px;
-        }
-
-        .picker-meta {
-          display: flex;
-          align-items: center;
-          gap: 9px;
-          flex: 0 0 auto;
-        }
-
-        .picker-meta b {
-          min-width: 22px;
-          height: 22px;
-          display: grid;
-          place-items: center;
-          border-radius: 999px;
-          background: #eaf7ef;
-          color: #168a4a;
-          font-size: 10px;
-        }
-
-        .picker-meta i {
-          color: #53665b;
-          font-size: 14px;
-          font-style: normal;
-        }
-
-        .barangay-chips {
-          min-height: 27px;
-          display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
-        }
-
-        .barangay-chips button {
-          min-height: 27px;
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          border: 1px solid #b9d4ff;
-          border-radius: 999px;
-          padding: 3px 9px;
-          background: #edf5ff;
-          color: #1752c5;
-          font-size: 11px;
-          font-weight: 800;
-          cursor: pointer;
-        }
-
-        .barangay-chips button span {
-          font-size: 14px;
-          line-height: 1;
-        }
-
-        .barangay-menu {
-          position: absolute;
-          top: 51px;
-          left: 0;
-          right: 0;
-          z-index: 30;
-          overflow: hidden;
-          border: 1px solid #cbd9d1;
-          border-radius: 12px;
-          background: #fff;
-          box-shadow: 0 16px 40px rgba(18, 46, 31, 0.18);
-        }
-
-        .barangay-menu-head {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 10px;
-          padding: 10px 11px;
-          border-bottom: 1px solid #e7ede9;
-          background: #f8fbf9;
-        }
-
-        .barangay-menu-head span {
-          color: #718078;
-          font-size: 10px;
-          font-weight: 800;
-        }
-
-        .barangay-menu-head button {
-          border: 0;
-          background: transparent;
-          color: #168a4a;
-          font-size: 10px;
-          font-weight: 900;
-          cursor: pointer;
-        }
-
-        .barangay-options {
-          max-height: 235px;
-          overflow: auto;
-          padding: 6px;
-        }
-
-        .barangay-options > button {
-          width: 100%;
-          min-height: 38px;
-          display: flex;
-          align-items: center;
-          gap: 9px;
-          border: 0;
-          border-radius: 8px;
-          padding: 0 8px;
-          background: #fff;
-          color: #2f4338;
-          text-align: left;
-          cursor: pointer;
-        }
-
-        .barangay-options > button:hover,
-        .barangay-options > button.selected {
-          background: #f0f8f3;
-          color: #126b3e;
-        }
-
-        .barangay-options > button strong {
-          font-size: 12px;
-        }
-
-        .picker-check {
-          width: 18px;
-          height: 18px;
-          display: grid;
-          place-items: center;
-          flex: 0 0 auto;
-          border: 1px solid #bfd0c6;
-          border-radius: 5px;
-          color: #fff;
-          font-size: 11px;
-        }
-
-        .barangay-options > button.selected .picker-check {
-          border-color: #168a4a;
-          background: #168a4a;
-        }
-
-        .purok-panel,
-        .route-map-preview {
-          overflow: hidden;
-          border: 1px solid #d9e5dd;
-          border-radius: 15px;
-          background: #fff;
-        }
-
-        .purok-panel {
-          padding: 15px;
-          background: #fff;
-        }
-
-        .purok-panel > header,
-        .route-map-preview > header {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 14px;
-        }
-
-        .purok-panel h3,
-        .purok-panel p,
-        .route-map-preview h3,
-        .route-map-preview p {
-          margin: 0;
-        }
-
-        .purok-panel h3,
-        .route-map-preview h3 {
-          color: #163124;
-          font-size: 15px;
-        }
-
-        .purok-panel p,
-        .route-map-preview p {
-          margin-top: 5px;
-          color: #6d7c74;
-          font-size: 11px;
-          line-height: 1.4;
-        }
-
-        .purok-panel > header > button,
-        .route-map-preview > header > button {
-          min-height: 38px;
-          flex: 0 0 auto;
-          border: 1px solid #d4dfd8;
-          border-radius: 9px;
-          padding: 0 12px;
-          background: #fff;
-          color: #253c30;
-          font-size: 11px;
-          font-weight: 850;
-          cursor: pointer;
-        }
-
-        .route-map-preview > header > button:disabled,
-        .purok-panel > header > button:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-        }
-
-        .purok-by-barangay-grid {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 10px;
-          margin-top: 14px;
-        }
-
-        .purok-group-card {
-          min-width: 0;
-          padding: 11px;
-          border: 1px solid #e1e9e4;
-          border-radius: 12px;
-          background: #fbfdfc;
-        }
-
-        .purok-group-head {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 10px;
-        }
-
-        .purok-group-head strong,
-        .purok-group-head small {
-          display: block;
-        }
-
-        .purok-group-head strong {
-          color: #173227;
-          font-size: 12px;
-        }
-
-        .purok-group-head small {
-          color: #718078;
-          font-size: 9px;
-          text-align: right;
-        }
-
-        .purok-group-card .purok-grid {
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          margin-top: 9px;
-        }
-
-        .no-local-puroks {
-          grid-column: 1 / -1;
-          margin: 0 !important;
-          padding: 10px;
-          border: 1px dashed #d5dfd8;
-          border-radius: 9px;
-          background: #fff;
-          text-align: center;
-        }
-
-        .purok-grid {
-          display: grid;
-          grid-template-columns: repeat(5, minmax(0, 1fr));
-          gap: 8px;
-          margin-top: 14px;
-        }
-
-        .purok-grid > button {
-          min-height: 40px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 7px;
-          border: 1px solid #d5e0d9;
-          border-radius: 9px;
-          background: #fff;
-          color: #243a2e;
-          font-size: 11px;
-          font-weight: 800;
-          cursor: pointer;
-        }
-
-        .purok-grid > button:hover {
-          border-color: #a8c9b5;
-          background: #f7fbf8;
-        }
-
-        .purok-grid > button.selected {
-          border-color: #4ba976;
-          background: #eaf7ef;
-          color: #116b3d;
-          box-shadow: inset 0 0 0 1px rgba(22, 138, 74, 0.08);
-        }
-
-        .purok-grid > button.unavailable,
-        .purok-grid > button:disabled {
-          border-style: dashed;
-          border-color: #dfe6e1;
-          background: #f7f9f8;
-          color: #9aa69f;
-          cursor: not-allowed;
-          box-shadow: none;
-        }
-
-        .purok-grid > button span {
-          font-size: 12px;
-          line-height: 1;
-        }
-
-        .route-map-preview {
-          min-width: 0;
-          min-height: 0;
-          height: 100%;
-          display: grid;
-          grid-template-rows: auto minmax(0, 1fr);
-          box-shadow: 0 8px 28px rgba(22, 52, 35, 0.06);
-        }
-
-        .route-map-preview > header {
-          padding: 16px 18px;
-          background: #fff;
-        }
-
-        .route-map-preview h3 {
-          font-size: 16px;
-        }
-
-        .route-map-canvas {
-          width: 100%;
-          height: 100%;
-          min-height: 0;
-          border-top: 1px solid #e4ebe6;
-          background: #edf3ef;
-        }
-
-        .route-preview-marker {
-          position: relative;
-          width: 30px;
-          height: 30px;
-          display: grid;
-          place-items: center;
-          border: 3px solid #fff;
-          border-radius: 50%;
-          background: #2868df;
-          color: #fff;
-          box-shadow: 0 3px 10px rgba(18, 55, 122, 0.34);
-          cursor: pointer;
-        }
-
-        .route-preview-marker::after {
-          content: "";
-          position: absolute;
-          left: 50%;
-          bottom: -7px;
-          width: 0;
-          height: 0;
-          border-left: 6px solid transparent;
-          border-right: 6px solid transparent;
-          border-top: 8px solid #2868df;
-          transform: translateX(-50%);
-        }
-
-        .route-preview-marker--primary {
-          background: #18a85c;
-          box-shadow: 0 3px 10px rgba(16, 113, 61, 0.34);
-        }
-
-        .route-preview-marker--primary::after {
-          border-top-color: #18a85c;
-        }
-
-        .route-preview-marker span {
-          position: relative;
-          z-index: 1;
-          font-size: 10px;
-          font-weight: 900;
-          line-height: 1;
-        }
-
-        .route-map-preview .maplibregl-ctrl-top-left {
-          top: 8px;
-          left: 8px;
-        }
-
-        .route-map-preview .maplibregl-ctrl-group {
-          overflow: hidden;
-          border-radius: 7px;
-          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
-        }
-
-        .service-area-source {
-          display: flex;
-          align-items: flex-start;
-          gap: 10px;
-          padding: 12px 13px;
-          border: 1px solid #bcdcc8;
-          border-radius: 12px;
-          background: #f2fbf5;
-        }
-
-        .service-area-source > span {
-          width: 24px;
-          height: 24px;
-          display: grid;
-          place-items: center;
-          flex: 0 0 auto;
-          border-radius: 7px;
-          background: #168a4a;
-          color: #fff;
-          font-size: 11px;
-          font-weight: 900;
-        }
-
-        .service-area-source strong {
-          display: block;
-          color: #1a3b2a;
-          font-size: 11px;
-        }
-
-        .service-area-source p {
-          margin: 3px 0 0;
-          color: #63766b;
-          font-size: 10px;
-          line-height: 1.4;
-        }
-
-        .editor-foot {
-          position: relative;
-          z-index: 80;
-          min-height: 72px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 14px;
-          padding: 12px 22px;
-          border-top: 1px solid #d7e3dc;
-          background: rgba(255, 255, 255, 0.99);
-          box-shadow: 0 -10px 26px rgba(18, 46, 31, 0.08);
-        }
-
-        .editor-foot > div:last-child {
-          display: flex;
-          align-items: center;
-          gap: 9px;
-        }
-
-        .editor-foot > div:last-child .primary {
-          min-width: 205px;
-        }
-
-        .editor-foot > div:last-child .primary:disabled {
-          opacity: 0.55;
-          filter: saturate(0.8);
-        }
-
-        .editor-selection-summary {
-          color: #738078;
-          font-size: 11px;
-        }
-
-        .editor-selection-summary strong {
-          color: #244032;
-        }
-
-        @media (max-height: 720px) and (min-width: 1121px) {
-          .modal {
-            padding: 6px;
-          }
-
-          .editor {
-            width: calc(100vw - 12px);
-            height: calc(100% - 12px);
-            border-radius: 15px;
-          }
-
-          .editor-head {
-            padding-top: 12px;
-            padding-bottom: 11px;
-          }
-
-          .editor-head p {
-            margin-top: 4px;
-          }
-
-          .editor-body {
-            padding: 12px;
-            gap: 12px;
-          }
-        }
-
-        @media (max-width: 1120px) {
-          .modal {
-            padding: 8px;
-          }
-
-          .editor {
-            width: calc(100vw - 16px);
-            height: calc(100% - 16px);
-            max-height: none;
-          }
-
-          .editor-body {
-            overflow-y: auto;
-            overflow-x: hidden;
-            grid-template-columns: 1fr;
-          }
-
-          .editor-form-column {
-            overflow: visible;
-            padding-right: 1px;
-          }
-
-          .route-map-preview {
-            min-height: 460px;
-          }
-
-          .route-map-canvas {
-            height: 420px;
-            min-height: 420px;
-          }
-        }
-
-        @media (max-width: 900px) {
-          .editor {
-            grid-template-rows: auto minmax(0, 1fr) auto;
-          }
-
-          .route-summary,
-          .assignment-grid {
-            grid-template-columns: 1fr;
-          }
-
-          .toolbar,
-          .toolbar-actions {
-            align-items: stretch;
-            flex-direction: column;
-          }
-
-          .purok-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-          }
-
-          .modal {
-            padding: 8px;
-          }
-
-          .editor {
-            width: 100%;
-            height: calc(100% - 16px);
-            max-height: none;
-            border-radius: 14px;
-          }
-
-          .editor-head,
-          .editor-body,
-          .editor-foot {
-            padding-left: 14px;
-            padding-right: 14px;
-          }
-
-          .editor-foot {
-            align-items: stretch;
-            flex-direction: column;
-          }
-
-          .editor-foot > div:last-child {
-            justify-content: flex-end;
-          }
-
-          .route-map-canvas {
-            height: 330px;
-            min-height: 330px;
-          }
-        }
-
-        @media (max-width: 560px) {
-          .purok-panel > header,
-          .route-map-preview > header {
-            align-items: stretch;
-            flex-direction: column;
-          }
-
-          .purok-panel > header > button,
-          .route-map-preview > header > button {
-            width: fit-content;
-          }
-
-          .barangay-menu {
-            position: fixed;
-            top: 20%;
-            left: 16px;
-            right: 16px;
-          }
+        .route-step-map { min-height: 470px; }
+        .route-step-map .route-map-preview { min-height: 470px; height: 470px; }
+        .route-map-preview { min-width: 0; overflow: hidden; display: grid; grid-template-rows: auto minmax(0,1fr); border: 1px solid #dfe6e2; border-radius: 10px; background: #fff; }
+        .route-map-preview > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 16px 18px; background: #fff; }
+        .route-map-preview h3, .route-map-preview p { margin: 0; }
+        .route-map-preview h3 { color: #29483a; font-size: 15px; font-weight: 650; }
+        .route-map-preview p { margin-top: 5px; color: #607068; font-size: 12px; line-height: 1.55; }
+        .route-map-preview small { display: block; margin-top: 6px; color: #7a8b80; font-size: 10px; }
+        .route-map-preview > header > button { min-height: 38px; flex: 0 0 auto; border: 1px solid #cfdad3; border-radius: 8px; padding: 0 12px; background: #fff; color: #29483a; font-size: 12px; font-weight: 600; cursor: pointer; }
+        .route-map-preview > header > button:disabled { opacity: .5; cursor: not-allowed; }
+        .route-map-canvas { width: 100%; height: 100%; min-height: 330px; border-top: 1px solid #e4ebe6; background: #edf3ef; }
+        .route-preview-marker { position: relative; width: 30px; height: 30px; display: grid; place-items: center; border: 3px solid #fff; border-radius: 50%; background: #2868df; color: #fff; box-shadow: 0 3px 10px rgba(18,55,122,.34); cursor: pointer; }
+        .route-preview-marker::after { content: ""; position: absolute; left: 50%; bottom: -7px; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 8px solid #2868df; transform: translateX(-50%); }
+        .route-preview-marker--primary { background: #18a85c; box-shadow: 0 3px 10px rgba(16,113,61,.34); }
+        .route-preview-marker--primary::after { border-top-color: #18a85c; }
+        .route-preview-marker span { position: relative; z-index: 1; font-size: 10px; font-weight: 900; line-height: 1; }
+        .route-map-preview .maplibregl-ctrl-top-left { top: 8px; left: 8px; }
+        .route-map-preview .maplibregl-ctrl-group { overflow: hidden; border-radius: 7px; box-shadow: 0 1px 4px rgba(0,0,0,.18); }
+        @media (max-width: 800px) { .route-step-map, .route-step-map .route-map-preview { min-height: 390px; height: 390px; } }
+        @media (max-width: 520px) {
+          .route-map-preview > header { flex-direction: column; align-items: stretch; }
+          .route-map-preview > header > button { width: fit-content; }
+          .route-step-map, .route-step-map .route-map-preview { min-height: 340px; height: 340px; }
+          .route-map-canvas { min-height: 250px; }
         }
       `}</style>
     </DashboardShell>

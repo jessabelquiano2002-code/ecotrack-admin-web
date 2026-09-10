@@ -7,6 +7,87 @@ import { findOfficialBarangay } from "../../service-areas/catalog";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+
+/**
+ * Server-side resident push bridge.
+ *
+ * IMPORTANT: resident notification dispatch must not depend only on the
+ * Driver Android app making a second HTTP request after /api/gps succeeds.
+ * Once the authoritative GPS request reaches this server, the server itself
+ * invokes /api/resident-proximity with the same authenticated driver token.
+ *
+ * Any failure remains best-effort and NEVER blocks GPS tracking.
+ */
+async function dispatchResidentPushFromGps(
+  request: NextRequest,
+  payload: {
+    scheduleId: string;
+    routeId: string;
+    sessionId: string;
+    event: "start" | "point" | "finish";
+    latitude: number;
+    longitude: number;
+    accuracy: number;
+    speed: number;
+    heading: number;
+    timestamp: number;
+  },
+): Promise<{
+  attempted: boolean;
+  ok: boolean;
+  status?: number;
+  sent?: number;
+  failed?: number;
+  reason?: string;
+}> {
+  const authorization = request.headers.get("authorization") || "";
+  if (!authorization) {
+    return { attempted: false, ok: false, reason: "missing_authorization" };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const endpoint = new URL("/api/resident-proximity", request.url);
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: authorization,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-WasteTrack-Source": "gps-server",
+      },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    const body = await response.json().catch(() => ({} as Record<string, unknown>));
+    return {
+      attempted: true,
+      ok: response.ok,
+      status: response.status,
+      sent: Number(body?.sent || 0),
+      failed: Number(body?.failed || 0),
+      reason: response.ok
+        ? String(body?.reason || "")
+        : String(body?.error || body?.reason || `HTTP ${response.status}`),
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      ok: false,
+      reason:
+        error instanceof Error
+          ? error.message
+          : "resident_push_dispatch_failed",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 const HISTORY_MIN_DISTANCE_METERS = 8;
 const HISTORY_MAX_INTERVAL_MS = 10_000;
 const MAX_ACCEPTED_ACCURACY_METERS = 60;
@@ -365,58 +446,27 @@ async function upgradeLegacyCoverageRoute(
   assignedAreas: Record<string, unknown>[],
   destinations: BarangayDestination[],
 ): Promise<void> {
-  const storedDestinationKeys = new Set(
-    readBarangayDestinations(route).map((destination) =>
-      normalizeBarangayKey(destination.barangayKey || destination.barangay),
-    ),
-  );
-  const hasEveryDestination = assignedBarangays.every((barangay) =>
-    storedDestinationKeys.has(normalizeBarangayKey(barangay)),
-  );
-  const routeValidation = asRecord(route.routeValidation || route.validation);
-  const alreadyCurrent =
-    isCoverageRoute(route) &&
-    route.verified === true &&
-    String(routeValidation.status || "").toLowerCase() === "verified" &&
-    orderedValues(route.areas).length > 0 &&
-    hasEveryDestination;
-  const scheduleAlreadyCurrent =
-    isCoverageRoute(schedule) && schedule.routeVerified === true;
-  if (alreadyCurrent && scheduleAlreadyCurrent) return;
-
   const now = Date.now();
-  const destinationPayload = destinations.map((destination) => ({
-    barangay: destination.barangay,
-    barangayKey: destination.barangayKey,
-    psgcCode: destination.psgcCode,
-    latitude: destination.lat,
-    longitude: destination.lng,
-    order: destination.order,
-  }));
-  const updates: Record<string, unknown> = {
-    [`routes/${routeId}/routeModel`]: "service-area-live-gps",
-    [`routes/${routeId}/routeType`]: "service-area-route",
-    [`routes/${routeId}/trackingMode`]: "live-gps",
-    [`routes/${routeId}/navigationMode`]: "api-gps-road-route",
-    [`routes/${routeId}/coverageOnly`]: true,
-    [`routes/${routeId}/requiresDrawnPath`]: false,
-    [`routes/${routeId}/requiresManualPins`]: false,
-    [`routes/${routeId}/manualPurokPinsRequired`]: false,
-    [`routes/${routeId}/manualRoadPathRequired`]: false,
-    [`routes/${routeId}/verified`]: true,
-    [`routes/${routeId}/status`]: "ready",
-    [`routes/${routeId}/barangay`]: assignedBarangays[0] || "",
-    [`routes/${routeId}/barangays`]: assignedBarangays,
-    [`routes/${routeId}/puroks`]: assignedPuroks.map(normalizePurokLabel),
-    [`routes/${routeId}/areas`]: assignedAreas,
-    [`routes/${routeId}/barangayDestinations`]: destinationPayload,
-    [`routes/${routeId}/routeValidation/status`]: "verified",
-    [`routes/${routeId}/routeValidation/method`]:
-      "server-upgraded-service-area-live-gps",
-    [`routes/${routeId}/routeValidation/verifiedAt`]: now,
-    [`routes/${routeId}/routeValidation/coverageAreaCount`]: assignedAreas.length,
-    [`routes/${routeId}/routeValidation/barangayPinCount`]: destinations.length,
-    [`routes/${routeId}/updatedAt`]: now,
+
+  // IMPORTANT: assignedAreas/assignedBarangays above represent the CURRENT
+  // SCHEDULE occurrence. They may be only a subset of the route's master
+  // coverage. Never write those schedule-specific areas back into routes/.
+  // Doing that would permanently shrink a master route when an Admin edits a
+  // schedule's Puroks.
+  const routeOwnBarangays = firstNonEmptyStringArray(
+    route.barangays,
+    route.barangay,
+  );
+  const routeOwnPuroks = firstNonEmptyStringArray(route.puroks);
+  const routeOwnAreas = buildAssignedCoverageAreas(
+    {},
+    route,
+    routeOwnBarangays,
+    routeOwnPuroks,
+    readServiceStops(route),
+  );
+
+  const scheduleUpdates: Record<string, unknown> = {
     [`schedules/${scheduleId}/routeModel`]: "service-area-live-gps",
     [`schedules/${scheduleId}/routeType`]: "service-area-route",
     [`schedules/${scheduleId}/trackingMode`]: "live-gps",
@@ -429,7 +479,85 @@ async function upgradeLegacyCoverageRoute(
     [`schedules/${scheduleId}/updatedAt`]: now,
   };
 
-  await adminDb.ref().update(updates);
+  const routeUpdates: Record<string, unknown> = {};
+
+  // Only migrate the route when we can reconstruct coverage from the ROUTE
+  // itself (route.areas, legacy route.puroks/barangays, or service stops).
+  // This keeps the master route independent from schedule-level flexibility.
+  if (routeOwnAreas.length > 0) {
+    const ownBarangays = Array.from(
+      new Set(
+        routeOwnAreas
+          .map((area) => String(area.barangay || "").trim())
+          .filter(Boolean),
+      ),
+    );
+    const ownPuroks = Array.from(
+      new Set(
+        routeOwnAreas
+          .map((area) => normalizePurokLabel(area.purok))
+          .filter(Boolean),
+      ),
+    );
+    const ownDestinations = ownBarangays.length > 0
+      ? await resolveBarangayDestinations(route, ownBarangays)
+      : readBarangayDestinations(route);
+    const destinationPayload = ownDestinations.map((destination) => ({
+      barangay: destination.barangay,
+      barangayKey: destination.barangayKey,
+      psgcCode: destination.psgcCode,
+      latitude: destination.lat,
+      longitude: destination.lng,
+      order: destination.order,
+    }));
+
+    const routeValidation = asRecord(route.routeValidation || route.validation);
+    const alreadyCurrent =
+      isCoverageRoute(route) &&
+      route.verified === true &&
+      String(routeValidation.status || "").toLowerCase() === "verified" &&
+      orderedValues(route.areas).length > 0 &&
+      ownBarangays.every((barangay) =>
+        new Set(
+          readBarangayDestinations(route).map((destination) =>
+            normalizeBarangayKey(destination.barangayKey || destination.barangay),
+          ),
+        ).has(normalizeBarangayKey(barangay)),
+      );
+
+    if (!alreadyCurrent) {
+      Object.assign(routeUpdates, {
+        [`routes/${routeId}/routeModel`]: "service-area-live-gps",
+        [`routes/${routeId}/routeType`]: "service-area-route",
+        [`routes/${routeId}/trackingMode`]: "live-gps",
+        [`routes/${routeId}/navigationMode`]: "api-gps-road-route",
+        [`routes/${routeId}/coverageOnly`]: true,
+        [`routes/${routeId}/requiresDrawnPath`]: false,
+        [`routes/${routeId}/requiresManualPins`]: false,
+        [`routes/${routeId}/manualPurokPinsRequired`]: false,
+        [`routes/${routeId}/manualRoadPathRequired`]: false,
+        [`routes/${routeId}/verified`]: true,
+        [`routes/${routeId}/status`]: "ready",
+        [`routes/${routeId}/barangay`]: ownBarangays[0] || "",
+        [`routes/${routeId}/barangays`]: ownBarangays,
+        [`routes/${routeId}/puroks`]: ownPuroks,
+        [`routes/${routeId}/areas`]: routeOwnAreas,
+        [`routes/${routeId}/barangayDestinations`]: destinationPayload,
+        [`routes/${routeId}/routeValidation/status`]: "verified",
+        [`routes/${routeId}/routeValidation/method`]:
+          "server-upgraded-service-area-live-gps",
+        [`routes/${routeId}/routeValidation/verifiedAt`]: now,
+        [`routes/${routeId}/routeValidation/coverageAreaCount`]: routeOwnAreas.length,
+        [`routes/${routeId}/routeValidation/barangayPinCount`]: ownDestinations.length,
+        [`routes/${routeId}/updatedAt`]: now,
+      });
+    }
+  }
+
+  await adminDb.ref().update({
+    ...routeUpdates,
+    ...scheduleUpdates,
+  });
 }
 
 function coordinatePairsToRoute(
@@ -931,6 +1059,90 @@ function readGpsPoint(raw: Record<string, unknown>): GpsPoint | null {
   };
 }
 
+
+function manilaDateKey(timestamp: number): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Asia/Manila",
+  }).formatToParts(new Date(timestamp));
+
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function effectiveScheduleDriverId(
+  schedule: Record<string, unknown>,
+  timestamp: number,
+): string {
+  const dateKey = manilaDateKey(timestamp);
+  const rawOverrides =
+    schedule.driverOverrides && typeof schedule.driverOverrides === "object"
+      ? (schedule.driverOverrides as Record<string, unknown>)
+      : {};
+
+  const isActive = (value: Record<string, unknown> | null) => {
+    const status = String(value?.status || "active").trim().toLowerCase();
+    return !["cancelled", "inactive", "removed"].includes(status);
+  };
+
+  const exactRaw = rawOverrides[dateKey];
+  const exact =
+    exactRaw && typeof exactRaw === "object"
+      ? (exactRaw as Record<string, unknown>)
+      : null;
+
+  if (isActive(exact)) {
+    const exactDriver = String(exact?.substituteDriverId || "").trim();
+    if (exactDriver) return exactDriver;
+  }
+
+  // Compatibility fallback for older saved overrides that may preserve only
+  // their date/range fields rather than being keyed by the exact date.
+  let bestDriver = "";
+  let bestCreatedAt = -1;
+
+  Object.values(rawOverrides).forEach((raw) => {
+    if (!raw || typeof raw !== "object") return;
+    const override = raw as Record<string, unknown>;
+    if (!isActive(override)) return;
+
+    const substituteDriverId = String(
+      override.substituteDriverId || "",
+    ).trim();
+    if (!substituteDriverId) return;
+
+    const explicitDate = String(override.date || "").trim();
+    const rangeStart = String(override.rangeStartDate || "").trim();
+    const rangeEnd = String(override.rangeEndDate || "").trim();
+
+    const matches =
+      explicitDate === dateKey ||
+      (rangeStart &&
+        rangeEnd &&
+        dateKey >= rangeStart &&
+        dateKey <= rangeEnd);
+
+    if (!matches) return;
+
+    const createdAt = Number(override.createdAt || 0);
+    if (!bestDriver || createdAt >= bestCreatedAt) {
+      bestDriver = substituteDriverId;
+      bestCreatedAt = createdAt;
+    }
+  });
+
+  if (bestDriver) return bestDriver;
+
+  return String(
+    schedule.assignedDriverId ||
+      schedule.driverId ||
+      schedule.defaultDriverId ||
+      "",
+  ).trim();
+}
+
 export async function POST(request: NextRequest) {
   try {
     const driver = await requireDriver(request);
@@ -979,8 +1191,12 @@ export async function POST(request: NextRequest) {
     }
 
     const schedule = scheduleSnapshot.val() as Record<string, unknown>;
-    const assignedDriverId = String(
-      schedule.assignedDriverId || schedule.driverId || "",
+    // Authorization must use the current server-side Manila date, not the
+    // timestamp reported by the phone. A stale/cached GPS timestamp must never
+    // decide which driver is allowed to operate today's recurring schedule.
+    const assignedDriverId = effectiveScheduleDriverId(
+      schedule,
+      Date.now(),
     );
 
     if (assignedDriverId !== driver.uid) {
@@ -1719,6 +1935,47 @@ export async function POST(request: NextRequest) {
       await pendingSummaryReference.remove();
     }
 
+    /*
+     * CLOSED-APP RESIDENT NOTIFICATION
+     *
+     * Trigger resident FCM from the server that already accepted the driver's
+     * authoritative GPS update. This removes the old dependency on a second
+     * best-effort HTTP request from the Driver Android app.
+     *
+     * The existing Driver-side ResidentPushClient may still call the same
+     * endpoint; push_delivery_state transactions in resident-proximity safely
+     * deduplicate duplicate attempts.
+     */
+    const residentPushEvent: "start" | "point" | "finish" = finishRequested
+      ? "finish"
+      : isNewSession || body.event === "start"
+        ? "start"
+        : "point";
+
+    const residentPush = await dispatchResidentPushFromGps(request, {
+      scheduleId,
+      routeId,
+      sessionId,
+      event: residentPushEvent,
+      latitude: lat,
+      longitude: lng,
+      accuracy,
+      speed: Number.isFinite(Number(body.speed)) ? Number(body.speed) : 0,
+      heading: Number.isFinite(Number(body.heading)) ? Number(body.heading) : 0,
+      timestamp,
+    });
+
+    if (residentPush.attempted && !residentPush.ok) {
+      console.warn("Resident push dispatch failed after GPS update", {
+        scheduleId,
+        routeId,
+        sessionId,
+        event: residentPushEvent,
+        status: residentPush.status,
+        reason: residentPush.reason,
+      });
+    }
+
     return NextResponse.json({
       success: true,
       recordedInHistory: shouldRecord,
@@ -1731,6 +1988,13 @@ export async function POST(request: NextRequest) {
       routeDeviationMeters,
       visitedPuroks,
       distanceTravelledMeters: Math.round(travelledDistance),
+      residentPush: {
+        attempted: residentPush.attempted,
+        ok: residentPush.ok,
+        sent: residentPush.sent || 0,
+        failed: residentPush.failed || 0,
+        reason: residentPush.reason || "",
+      },
     });
   } catch (error: unknown) {
     const status = authErrorStatus(error);

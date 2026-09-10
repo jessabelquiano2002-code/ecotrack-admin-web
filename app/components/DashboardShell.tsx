@@ -141,6 +141,7 @@ const pageGuidance = [
   { path: "/agency-report", title: "Prepare the planning report", detail: "Review the selected period and included records before printing or sharing the report." },
   { path: "/analytics", title: "Review performance and unfinished work", detail: "Use the filters first, then compare collections, reports, schedules, and service areas." },
   { path: "/notifications", title: "Send a targeted resident update", detail: "Select the correct Barangay and Purok, use a clear message, then review before sending." },
+  { path: "/driver-messages", title: "Coordinate directly with drivers", detail: "Use this private channel for operational instructions and driver replies. Formal incidents still belong in Complaints & Reports." },
   { path: "/profile", title: "Maintain the administrator profile", detail: "Keep the displayed name and contact information accurate for accountability." },
   { path: "/settings", title: "Review system information", detail: "Only change settings you understand; operational records are managed from the pages in the sidebar." },
 ];
@@ -328,6 +329,13 @@ const IconBell = () => (
   </svg>
 );
 
+const IconMessages = () => (
+  <svg viewBox="0 0 24 24" className="admin-svg-icon">
+    <path d="M4 4h16v12H9l-5 4V4Zm3 4v2h10V8H7Zm0 4v2h7v-2H7Z" />
+  </svg>
+);
+
+
 const IconUsers = () => (
   <svg viewBox="0 0 24 24" className="admin-svg-icon">
     <path d="M9 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-3.3 0-6 1.7-6 3.8V20h12v-2.2C15 15.7 12.3 14 9 14Zm7.5-2a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm0 2c-.7 0-1.3.1-1.9.2 1.5.9 2.4 2.1 2.4 3.6V20h5v-2.2c0-2.1-2.5-3.8-5.5-3.8Z" />
@@ -456,6 +464,13 @@ const links: SidebarLink[] = [
     icon: <IconAnalytics />,
   },
   {
+    href: "/driver-messages",
+    label: "Driver Messages",
+    help: "Private real-time communication with collection drivers.",
+    group: "REPORTS & MESSAGES",
+    icon: <IconMessages />,
+  },
+  {
     href: "/notifications",
     label: "Send Notifications",
     help: "Send targeted alerts to residents.",
@@ -486,6 +501,7 @@ export function DashboardShell({
   const pathname = usePathname();
 
   const [notifCount, setNotifCount] = useState(0);
+  const [driverMessageUnreadCount, setDriverMessageUnreadCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [searchValue, setSearchValue] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -544,6 +560,22 @@ export function DashboardShell({
             (item as Record<string, unknown>).adminVisible !== false,
         ).length,
       );
+    });
+
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onValue(ref(db, "driver_admin_chat_meta"), (snap) => {
+      const val = snap.val() || {};
+      const unread = Object.values(val).reduce<number>((sum, raw) => {
+        if (!raw || typeof raw !== "object") return sum;
+        const count = Number(
+          (raw as Record<string, unknown>).unreadForAdmin || 0,
+        );
+        return sum + (Number.isFinite(count) && count > 0 ? count : 0);
+      }, 0);
+      setDriverMessageUnreadCount(unread);
     });
 
     return () => unsub();
@@ -860,6 +892,11 @@ export function DashboardShell({
                         {link.href === "/notifications" && notifCount > 0 && (
                           <span className="admin-badge">
                             {notifCount > 99 ? "99+" : notifCount}
+                          </span>
+                        )}
+                        {link.href === "/driver-messages" && driverMessageUnreadCount > 0 && (
+                          <span className="admin-badge">
+                            {driverMessageUnreadCount > 99 ? "99+" : driverMessageUnreadCount}
                           </span>
                         )}
                       </Link>

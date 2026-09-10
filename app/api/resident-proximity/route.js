@@ -19,7 +19,8 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MAX_GPS_ACCURACY_METERS = 100;
+const MAX_APPROACH_GPS_ACCURACY_METERS = 250;
+const MAX_ARRIVAL_GPS_ACCURACY_METERS = 150;
 const MAX_LOCATION_AGE_MS = 10 * 60 * 1000;
 const MAX_RESIDENT_LIVE_LOCATION_AGE_MS = 2 * 60 * 1000;
 const FCM_BATCH_SIZE = 500;
@@ -277,7 +278,11 @@ async function buildCandidates({
     return candidates;
   }
 
-  if (event !== "point" || accuracy > MAX_GPS_ACCURACY_METERS) return candidates;
+  // Do not discard a useful 500 m approach update just because GPS is
+  // slightly less accurate than 100 m.  Arrival remains stricter below.
+  if (event !== "point" || accuracy > MAX_APPROACH_GPS_ACCURACY_METERS) {
+    return candidates;
+  }
 
   const residents = new Map();
   const residentIds = [...new Set(matching
@@ -303,7 +308,12 @@ async function buildCandidates({
       location.longitude,
     );
     const threshold = approachDistanceMeters(device);
-    const stage = proximityStage(distance, threshold);
+    let stage = proximityStage(distance, threshold);
+    if (stage === "arrived" && accuracy > MAX_ARRIVAL_GPS_ACCURACY_METERS) {
+      // A coarse GPS point is still useful for the approaching alert, but
+      // it is not precise enough to claim that the truck has arrived.
+      stage = distance <= threshold ? "approaching" : null;
+    }
     if (!stage) continue;
 
     candidates.push({
@@ -331,8 +341,26 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
     const batch = claimed.slice(offset, offset + FCM_BATCH_SIZE);
     const messages = batch.map((candidate) => {
       const content = candidateMessage(candidate, routeName, coverageAreas);
+      const soundEnabled = booleanValue(candidate.soundEnabled, true);
+      const channelId = soundEnabled
+        ? "waste_alerts_sound_v3"
+        : "waste_alerts_silent_v3";
+
       return {
         token: stringValue(candidate.token),
+
+        /*
+         * CRITICAL CLOSED-APP DELIVERY FIX
+         *
+         * A notification payload lets the Android FCM SDK/system display the
+         * alert when the Resident process is not running (for example after
+         * the app is removed from Recent Apps).  The data payload is retained
+         * so foreground handling and navigation still have the same context.
+         */
+        notification: {
+          title: content.title,
+          body: content.message,
+        },
         data: {
           type: content.type,
           title: content.title,
@@ -349,6 +377,9 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
           triggerDistanceMeters: candidate.threshold ? String(candidate.threshold) : "",
           alertLocationMode: stringValue(candidate.locationMode),
           alertLocationSource: stringValue(candidate.locationSource),
+          screen: candidate.stage === "started" || candidate.stage === "finished"
+            ? "notifications"
+            : "home",
           timestamp: String(Date.now()),
         },
         android: {
@@ -356,6 +387,15 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
           ttl: content.ttl,
           directBootOk: true,
           collapseKey: `metrowaste-${safeKey(context.sessionId)}-${candidate.stage}`,
+          notification: {
+            channelId,
+            icon: "ic_notification_truck",
+            priority: "high",
+            visibility: "public",
+            defaultSound: soundEnabled,
+            defaultVibrateTimings: soundEnabled,
+            tag: `metrowaste-${safeKey(context.sessionId)}-${candidate.stage}`,
+          },
         },
       };
     });
@@ -382,19 +422,27 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
           : database.ref("notifications").push().key;
         if (notificationId) {
           recordedNotifications.add(notificationDedupeKey);
-          updates[`notifications/${notificationId}`] = {
+
+          const targetResidentId = stringValue(candidate.residentId, candidate.uid);
+          const targetUid = stringValue(candidate.uid, candidate.residentId);
+          const barangay = stringValue(candidate.barangay);
+          const barangayKey = normalizeBarangay(candidate.barangayKey || candidate.barangay);
+          const purok = stringValue(candidate.purokLabel, candidate.purok);
+          const purokKey = normalizePurok(candidate.purokLabel || candidate.purok);
+
+          const notificationRecord = {
             id: notificationId,
             title: content.title,
             message: content.message,
             type: content.type,
             alertStage: candidate.stage,
             targetType: "resident",
-            targetResidentId: stringValue(candidate.residentId, candidate.uid),
-            targetUid: stringValue(candidate.uid, candidate.residentId),
-            barangay: stringValue(candidate.barangay),
-            barangayKey: normalizeBarangay(candidate.barangayKey || candidate.barangay),
-            purok: stringValue(candidate.purokLabel, candidate.purok),
-            purokKey: normalizePurok(candidate.purokLabel || candidate.purok),
+            targetResidentId,
+            targetUid,
+            barangay,
+            barangayKey,
+            purok,
+            purokKey,
             driverId: context.driverId,
             scheduleId: context.scheduleId,
             routeId: context.routeId,
@@ -410,6 +458,22 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
             createdAt: now,
             source: "vercel_fcm_dispatcher",
           };
+
+          updates[`notifications/${notificationId}`] = notificationRecord;
+
+          // Mirror to the narrow inboxes used by the fast Resident Alerts UI.
+          if (barangayKey) {
+            updates[`notificationsByBarangay/${safeKey(barangayKey)}/${notificationId}`] = notificationRecord;
+            if (purokKey) {
+              updates[`notificationsByArea/${safeKey(barangayKey)}/${safeKey(purokKey)}/${notificationId}`] = notificationRecord;
+            }
+          }
+          if (targetUid) {
+            updates[`residentNotifications/${safeKey(targetUid)}/${notificationId}`] = notificationRecord;
+          }
+          if (targetResidentId && targetResidentId !== targetUid) {
+            updates[`residentNotifications/${safeKey(targetResidentId)}/${notificationId}`] = notificationRecord;
+          }
         }
       } else {
         failed += 1;
@@ -438,6 +502,43 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
 
   if (Object.keys(updates).length) await database.ref().update(updates);
   return { sent, failed };
+}
+
+
+function manilaDateKey(timestamp) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Asia/Manila",
+  }).formatToParts(new Date(timestamp));
+
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function effectiveScheduleDriverId(schedule, timestamp) {
+  const dateKey = manilaDateKey(timestamp);
+  const overrides =
+    schedule && typeof schedule.driverOverrides === "object"
+      ? schedule.driverOverrides
+      : {};
+  const override =
+    overrides && typeof overrides[dateKey] === "object"
+      ? overrides[dateKey]
+      : null;
+
+  const status = String(override?.status || "active").toLowerCase();
+  const substitute =
+    status === "active"
+      ? stringValue(override?.substituteDriverId)
+      : "";
+
+  return substitute || stringValue(
+    schedule?.assignedDriverId,
+    schedule?.driverId,
+    schedule?.defaultDriverId,
+  );
 }
 
 export async function POST(request) {
@@ -487,10 +588,9 @@ export async function POST(request) {
       return NextResponse.json({ error: "The assigned schedule was not found." }, { status: 404 });
     }
 
-    const assignedDriverId = stringValue(
-      schedule.assignedDriverId,
-      schedule.driverId,
-      schedule.driverUid,
+    const assignedDriverId = effectiveScheduleDriverId(
+      schedule,
+      timestamp,
     );
     if (!assignedDriverId || assignedDriverId !== driverId) {
       return NextResponse.json({ error: "This schedule is not assigned to the signed-in driver." }, { status: 403 });
@@ -516,30 +616,42 @@ export async function POST(request) {
       coverageAreas.map((area) => area.barangayKey).filter(Boolean),
     )];
     /*
-     * BACKGROUND PUSH COMPATIBILITY
+     * TOKEN REGISTRY FIX
      *
-     * The previous MetroWaste build that successfully notified residents while
-     * the app was not open used resident_fcm_tokens/{barangayKey}. Keep that
-     * proven registry as the PRIMARY source. Only fall back to device_tokens if
-     * no Barangay-scoped token records are available.
+     * Merge BOTH registries.  The older code used the Barangay registry first
+     * and consulted device_tokens only when it was completely empty.  A stale
+     * legacy record could therefore hide a newer valid canonical token.
      */
-    const tokenSnapshots = await Promise.all(coverageBarangays.map((barangayKey) =>
-      database.ref(`resident_fcm_tokens/${safeKey(barangayKey)}`).get(),
-    ));
+    const [canonicalTokenSnapshot, ...tokenSnapshots] = await Promise.all([
+      database.ref("device_tokens").get(),
+      ...coverageBarangays.map((barangayKey) =>
+        database.ref(`resident_fcm_tokens/${safeKey(barangayKey)}`).get(),
+      ),
+    ]);
 
-    const tokenMap = {};
+    const legacyTokenMap = {};
     tokenSnapshots.forEach((snapshot) => {
       const value = snapshot.val();
       if (!value || typeof value !== "object") return;
-      Object.assign(tokenMap, value);
+      Object.assign(legacyTokenMap, value);
     });
 
-    let devices = tokenRecords(tokenMap);
+    const byToken = new Map();
+    [
+      ...tokenRecords(legacyTokenMap),
+      ...tokenRecords(canonicalTokenSnapshot.val()),
+    ].forEach((device) => {
+      const token = stringValue(device.token);
+      if (!token) return;
+      const existing = byToken.get(token);
+      const existingUpdatedAt = Number(existing?.updatedAt || 0);
+      const nextUpdatedAt = Number(device.updatedAt || 0);
+      if (!existing || nextUpdatedAt >= existingUpdatedAt) {
+        byToken.set(token, device);
+      }
+    });
 
-    if (!devices.length) {
-      const canonicalTokenSnapshot = await database.ref("device_tokens").get();
-      devices = tokenRecords(canonicalTokenSnapshot.val());
-    }
+    const devices = [...byToken.values()];
 
     const candidates = await buildCandidates({
       database,

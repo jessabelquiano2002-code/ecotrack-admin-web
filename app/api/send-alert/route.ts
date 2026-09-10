@@ -12,6 +12,7 @@ type TokenRecord = {
   barangayKey?: string;
   purok?: string | number;
   enabled?: boolean;
+  soundEnabled?: boolean;
 };
 
 function buildDeviceIdentityIndex(...trees: unknown[]) {
@@ -209,6 +210,7 @@ export async function POST(request: NextRequest) {
     ];
 
     const tokenSet = new Set<string>();
+    const soundPreferenceByToken = new Map<string, boolean>();
 
     candidates.forEach((item) => {
       const token = String(item.token || "").trim();
@@ -238,6 +240,8 @@ export async function POST(request: NextRequest) {
       }
 
       tokenSet.add(token);
+      // Last matching record wins; both token registries are already merged above.
+      soundPreferenceByToken.set(token, item.soundEnabled !== false);
     });
 
     const tokens = Array.from(tokenSet);
@@ -248,29 +252,44 @@ export async function POST(request: NextRequest) {
         sent: 0,
         failed: 0,
         warning:
-          "No matching resident FCM tokens were found. Open the Resident app once after installing this patch so its phone token can register.",
+          `No matching ${target} FCM tokens were found. Open the target app once so its phone token can register.`,
       });
     }
 
-    const chunks: string[][] = [];
-    for (let i = 0; i < tokens.length; i += 500) {
-      chunks.push(tokens.slice(i, i + 500));
-    }
+    const deliveryGroups: Array<{ tokens: string[]; soundEnabled: boolean }> =
+      target === "resident"
+        ? [
+            {
+              tokens: tokens.filter((token) => soundPreferenceByToken.get(token) !== false),
+              soundEnabled: true,
+            },
+            {
+              tokens: tokens.filter((token) => soundPreferenceByToken.get(token) === false),
+              soundEnabled: false,
+            },
+          ].filter((group) => group.tokens.length > 0)
+        : [{ tokens, soundEnabled: true }];
 
     let sent = 0;
     let failed = 0;
 
-    for (const chunk of chunks) {
-      /*
-       * DATA-ONLY + HIGH priority is deliberate.
-       *
-       * It lets MyFirebaseMessagingService.onMessageReceived() create the
-       * notification even while the resident is not using the app. This also
-       * lets schedule messages call ResidentScheduleReminderCoordinator.resyncOnce().
-       */
-      const response = await adminMessaging.sendEachForMulticast({
-        tokens: chunk,
-        data: {
+    for (const group of deliveryGroups) {
+      for (let offset = 0; offset < group.tokens.length; offset += 500) {
+        const chunk = group.tokens.slice(offset, offset + 500);
+        const residentSystemNotification = target === "resident";
+
+        /*
+         * Resident pushes use NOTIFICATION + DATA.  Android can therefore show
+         * them from the FCM SDK/system tray even when the app process is gone.
+         * Driver pushes remain data-only because their custom Android service
+         * owns assignment/voice handling.
+         */
+        const response = await adminMessaging.sendEachForMulticast({
+          tokens: chunk,
+          ...(residentSystemNotification
+            ? { notification: { title, body: message } }
+            : {}),
+          data: {
           source: "admin",
           title,
           message,
@@ -294,25 +313,52 @@ export async function POST(request: NextRequest) {
                 : [],
           ),
           scheduleId: String(body.scheduleId || ""),
+          scheduleTitle: String(body.scheduleTitle || ""),
+          routeId: String(body.routeId || ""),
+          routeName: String(body.routeName || ""),
+          substituteFrom: String(body.substituteFrom || ""),
+          substituteUntil: String(body.substituteUntil || ""),
+          affectedDates: JSON.stringify(
+            Array.isArray(body.affectedDates) ? body.affectedDates : [],
+          ),
+          reason: String(body.reason || ""),
+          assignmentRole: String(body.assignmentRole || ""),
           screen:
-            type.toLowerCase().includes("schedule")
-              ? "schedule"
-              : type.toLowerCase().includes("approach") ||
-                  type.toLowerCase().includes("truck")
-                ? "home"
-                : "notifications",
+            target === "driver"
+              ? "home"
+              : type.toLowerCase().includes("schedule")
+                ? "schedule"
+                : type.toLowerCase().includes("approach") ||
+                    type.toLowerCase().includes("truck")
+                  ? "home"
+                  : "notifications",
           timestamp: String(Date.now()),
           targetUid: requestedTargetUids.length === 1 ? requestedTargetUids[0] : "",
           targetUids: JSON.stringify(requestedTargetUids),
         },
-        android: {
-          priority: "high",
-          ttl: 60 * 60 * 1000,
-        },
-      });
+          android: {
+            priority: "high",
+            ttl: 60 * 60 * 1000,
+            ...(residentSystemNotification
+              ? {
+                  notification: {
+                    channelId: group.soundEnabled
+                      ? "waste_alerts_sound_v3"
+                      : "waste_alerts_silent_v3",
+                    icon: "ic_notification_truck",
+                    priority: "high" as const,
+                    visibility: "public" as const,
+                    defaultSound: group.soundEnabled,
+                    defaultVibrateTimings: group.soundEnabled,
+                  },
+                }
+              : {}),
+          },
+        });
 
-      sent += response.successCount;
-      failed += response.failureCount;
+        sent += response.successCount;
+        failed += response.failureCount;
+      }
     }
 
     return NextResponse.json({
