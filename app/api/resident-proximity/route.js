@@ -401,6 +401,21 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
     });
 
     const response = await getMessaging().sendEach(messages);
+
+    /*
+     * CLOSED-APP VOICE DELIVERY
+     *
+     * Android automatically displays the notification payload while the app is
+     * backgrounded / removed from recents. In that state the Firebase SDK does
+     * not normally invoke onMessageReceived() for that notification message, so
+     * Resident-side TextToSpeech never gets a chance to run.
+     *
+     * For ARRIVED only, send a second high-priority DATA-ONLY trigger. This wakes
+     * MyFirebaseMessagingService so it can run the local spoken alert, while the
+     * first message remains responsible for the visible system notification.
+     */
+    const arrivalVoiceMessages = [];
+
     response.responses.forEach((item, index) => {
       const candidate = batch[index];
       const content = candidateMessage(candidate, routeName, coverageAreas);
@@ -408,6 +423,38 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
 
       if (item.success) {
         sent += 1;
+
+        if (candidate.stage === "arrived") {
+          arrivalVoiceMessages.push({
+            token: stringValue(candidate.token),
+            data: {
+              voiceOnly: "true",
+              type: "truck_arrival_voice",
+              title: content.title,
+              message: content.message,
+              body: content.message,
+              sessionId: context.sessionId,
+              scheduleId: context.scheduleId,
+              routeId: context.routeId,
+              driverId: context.driverId,
+              stage: "arrived",
+              distanceMeters: Number.isFinite(candidate.distance)
+                ? String(Math.round(candidate.distance))
+                : "",
+              triggerDistanceMeters: candidate.threshold
+                ? String(candidate.threshold)
+                : "",
+              timestamp: String(now),
+            },
+            android: {
+              priority: "high",
+              ttl: 2 * 60 * 1000,
+              directBootOk: true,
+              collapseKey: `metrowaste-arrival-voice-${safeKey(context.sessionId)}`,
+            },
+          });
+        }
+
         updates[`${candidate.statePath}/sentAt`] = now;
         updates[`${candidate.statePath}/messageId`] = item.messageId || "";
 
@@ -500,8 +547,27 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
     });
   }
 
+  let voiceSent = 0;
+  let voiceFailed = 0;
+
+  if (arrivalVoiceMessages.length) {
+    try {
+      for (let offset = 0; offset < arrivalVoiceMessages.length; offset += FCM_BATCH_SIZE) {
+        const voiceBatch = arrivalVoiceMessages.slice(offset, offset + FCM_BATCH_SIZE);
+        const voiceResponse = await getMessaging().sendEach(voiceBatch);
+        for (const item of voiceResponse.responses) {
+          if (item.success) voiceSent += 1;
+          else voiceFailed += 1;
+        }
+      }
+    } catch (voiceError) {
+      voiceFailed += arrivalVoiceMessages.length - voiceSent;
+      console.error("Resident arrival voice trigger failed", voiceError);
+    }
+  }
+
   if (Object.keys(updates).length) await database.ref().update(updates);
-  return { sent, failed };
+  return { sent, failed, voiceSent, voiceFailed };
 }
 
 
