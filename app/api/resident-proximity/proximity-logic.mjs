@@ -2,6 +2,19 @@ const ALLOWED_APPROACH_METERS = new Set([500, 1000, 2000, 3000, 4000, 5000]);
 
 export const ARRIVAL_DISTANCE_METERS = 100;
 
+/**
+ * Keep server-side ARRIVED detection aligned with the Resident Android
+ * TruckArrivalAlertPolicy.NEAR stage.  This is critical for closed-app
+ * delivery because ResidentHomeActivity is not running to calculate distance.
+ *
+ * 500 m selected distance  -> 100 m arrival/near boundary
+ * 1 km or more             -> 150 m arrival/near boundary
+ */
+export function arrivalDistanceMeters(configuredDistance) {
+  const threshold = Math.max(100, Number(configuredDistance) || 500);
+  return Math.min(150, Math.max(75, threshold * 0.20));
+}
+
 export function normalizeBarangay(value) {
   let key = String(value ?? "")
     .toLowerCase()
@@ -135,8 +148,12 @@ export function distanceMeters(lat1, lng1, lat2, lng2) {
 
 export function proximityStage(distance, configuredDistance) {
   if (!Number.isFinite(distance) || distance < 0) return null;
-  if (distance <= ARRIVAL_DISTANCE_METERS) return "arrived";
-  if (distance <= configuredDistance) return "approaching";
+
+  const threshold = Math.max(100, Number(configuredDistance) || 500);
+  const arrivalThreshold = arrivalDistanceMeters(threshold);
+
+  if (distance <= arrivalThreshold) return "arrived";
+  if (distance <= threshold) return "approaching";
   return null;
 }
 

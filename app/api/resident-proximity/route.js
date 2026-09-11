@@ -6,6 +6,7 @@ import { getMessaging } from "firebase-admin/messaging";
 
 import {
   approachDistanceMeters,
+  arrivalDistanceMeters,
   distanceMeters,
   extractCoverageAreas,
   formatDistance,
@@ -20,7 +21,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_APPROACH_GPS_ACCURACY_METERS = 250;
-const MAX_ARRIVAL_GPS_ACCURACY_METERS = 150;
 const MAX_LOCATION_AGE_MS = 10 * 60 * 1000;
 const MAX_RESIDENT_LIVE_LOCATION_AGE_MS = 2 * 60 * 1000;
 const FCM_BATCH_SIZE = 500;
@@ -278,8 +278,11 @@ async function buildCandidates({
     return candidates;
   }
 
-  // Do not discard a useful 500 m approach update just because GPS is
-  // slightly less accurate than 100 m.  Arrival remains stricter below.
+  // Closed-app proximity is server-authoritative. Accept the same GPS point
+  // for both APPROACHING and ARRIVED as long as it passes the overall 250 m
+  // quality ceiling. The old extra 150 m arrival gate caused the exact bug
+  // where approach worked in the background but arrival appeared only after
+  // ResidentHomeActivity opened and calculated distance locally.
   if (event !== "point" || accuracy > MAX_APPROACH_GPS_ACCURACY_METERS) {
     return candidates;
   }
@@ -308,12 +311,8 @@ async function buildCandidates({
       location.longitude,
     );
     const threshold = approachDistanceMeters(device);
-    let stage = proximityStage(distance, threshold);
-    if (stage === "arrived" && accuracy > MAX_ARRIVAL_GPS_ACCURACY_METERS) {
-      // A coarse GPS point is still useful for the approaching alert, but
-      // it is not precise enough to claim that the truck has arrived.
-      stage = distance <= threshold ? "approaching" : null;
-    }
+    const arrivalThreshold = arrivalDistanceMeters(threshold);
+    const stage = proximityStage(distance, threshold);
     if (!stage) continue;
 
     candidates.push({
@@ -322,6 +321,8 @@ async function buildCandidates({
       stage,
       distance,
       threshold,
+      arrivalThreshold,
+      gpsAccuracyMeters: accuracy,
       driverName,
       locationMode: location.mode,
       locationSource: location.source,
@@ -375,6 +376,12 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
             ? String(Math.round(candidate.distance))
             : "",
           triggerDistanceMeters: candidate.threshold ? String(candidate.threshold) : "",
+          arrivalDistanceMeters: candidate.arrivalThreshold
+            ? String(Math.round(candidate.arrivalThreshold))
+            : "",
+          gpsAccuracyMeters: Number.isFinite(candidate.gpsAccuracyMeters)
+            ? String(Math.round(candidate.gpsAccuracyMeters))
+            : "",
           alertLocationMode: stringValue(candidate.locationMode),
           alertLocationSource: stringValue(candidate.locationSource),
           screen: candidate.stage === "started" || candidate.stage === "finished"
@@ -449,6 +456,12 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
               ? Math.round(candidate.distance)
               : null,
             triggerDistanceMeters: candidate.threshold || null,
+            arrivalDistanceMeters: candidate.arrivalThreshold
+              ? Math.round(candidate.arrivalThreshold)
+              : null,
+            gpsAccuracyMeters: Number.isFinite(candidate.gpsAccuracyMeters)
+              ? Math.round(candidate.gpsAccuracyMeters)
+              : null,
             alertLocationMode: stringValue(candidate.locationMode),
             alertLocationSource: stringValue(candidate.locationSource),
             seen: false,
