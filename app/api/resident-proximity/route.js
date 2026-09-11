@@ -334,33 +334,33 @@ async function buildCandidates({
 async function sendClaimedCandidates({ database, claimed, context, coverageAreas, routeName }) {
   let sent = 0;
   let failed = 0;
+  let arrivalPushSent = 0;
+  let arrivalPushFailed = 0;
   const updates = {};
   const recordedNotifications = new Set();
 
   for (let offset = 0; offset < claimed.length; offset += FCM_BATCH_SIZE) {
     const batch = claimed.slice(offset, offset + FCM_BATCH_SIZE);
+
+    /*
+     * IMPORTANT: SEND DATA-ONLY FCM.
+     *
+     * A notification+data message is displayed by Google Play services while the
+     * app is backgrounded, but that path normally bypasses onMessageReceived().
+     * MetroWaste needs onMessageReceived() because the Resident app must:
+     *   1) create the visible notification itself, and
+     *   2) start the reliable truck-arrival voice path.
+     *
+     * HIGH priority is appropriate here because these are time-sensitive,
+     * user-visible collection/arrival events. The Android client posts a visible
+     * notification immediately when this message is received.
+     */
     const messages = batch.map((candidate) => {
       const content = candidateMessage(candidate, routeName, coverageAreas);
       const soundEnabled = booleanValue(candidate.soundEnabled, true);
-      const channelId = soundEnabled
-        ? "waste_alerts_sound_v3"
-        : "waste_alerts_silent_v3";
 
       return {
         token: stringValue(candidate.token),
-
-        /*
-         * CRITICAL CLOSED-APP DELIVERY FIX
-         *
-         * A notification payload lets the Android FCM SDK/system display the
-         * alert when the Resident process is not running (for example after
-         * the app is removed from Recent Apps).  The data payload is retained
-         * so foreground handling and navigation still have the same context.
-         */
-        notification: {
-          title: content.title,
-          body: content.message,
-        },
         data: {
           type: content.type,
           title: content.title,
@@ -380,41 +380,20 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
           screen: candidate.stage === "started" || candidate.stage === "finished"
             ? "notifications"
             : "home",
+          soundEnabled: String(soundEnabled),
+          deliveryMode: "data_only_v2",
           timestamp: String(Date.now()),
         },
         android: {
           priority: "high",
           ttl: content.ttl,
-          directBootOk: true,
-          collapseKey: `metrowaste-${safeKey(context.sessionId)}-${candidate.stage}`,
-          notification: {
-            channelId,
-            icon: "ic_notification_truck",
-            priority: "high",
-            visibility: "public",
-            defaultSound: soundEnabled,
-            defaultVibrateTimings: soundEnabled,
-            tag: `metrowaste-${safeKey(context.sessionId)}-${candidate.stage}`,
-          },
+          // Four stable collapse groups avoid exhausting FCM's collapse-key limit.
+          collapseKey: `metrowaste-${candidate.stage}`,
         },
       };
     });
 
     const response = await getMessaging().sendEach(messages);
-
-    /*
-     * CLOSED-APP VOICE DELIVERY
-     *
-     * Android automatically displays the notification payload while the app is
-     * backgrounded / removed from recents. In that state the Firebase SDK does
-     * not normally invoke onMessageReceived() for that notification message, so
-     * Resident-side TextToSpeech never gets a chance to run.
-     *
-     * For ARRIVED only, send a second high-priority DATA-ONLY trigger. This wakes
-     * MyFirebaseMessagingService so it can run the local spoken alert, while the
-     * first message remains responsible for the visible system notification.
-     */
-    const arrivalVoiceMessages = [];
 
     response.responses.forEach((item, index) => {
       const candidate = batch[index];
@@ -423,40 +402,11 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
 
       if (item.success) {
         sent += 1;
-
-        if (candidate.stage === "arrived") {
-          arrivalVoiceMessages.push({
-            token: stringValue(candidate.token),
-            data: {
-              voiceOnly: "true",
-              type: "truck_arrival_voice",
-              title: content.title,
-              message: content.message,
-              body: content.message,
-              sessionId: context.sessionId,
-              scheduleId: context.scheduleId,
-              routeId: context.routeId,
-              driverId: context.driverId,
-              stage: "arrived",
-              distanceMeters: Number.isFinite(candidate.distance)
-                ? String(Math.round(candidate.distance))
-                : "",
-              triggerDistanceMeters: candidate.threshold
-                ? String(candidate.threshold)
-                : "",
-              timestamp: String(now),
-            },
-            android: {
-              priority: "high",
-              ttl: 2 * 60 * 1000,
-              directBootOk: true,
-              collapseKey: `metrowaste-arrival-voice-${safeKey(context.sessionId)}`,
-            },
-          });
-        }
+        if (candidate.stage === "arrived") arrivalPushSent += 1;
 
         updates[`${candidate.statePath}/sentAt`] = now;
         updates[`${candidate.statePath}/messageId`] = item.messageId || "";
+        updates[`${candidate.statePath}/deliveryMode`] = "data_only_v2";
 
         const notificationOwner = stringValue(
           candidate.residentId,
@@ -467,6 +417,7 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
         const notificationId = recordedNotifications.has(notificationDedupeKey)
           ? null
           : database.ref("notifications").push().key;
+
         if (notificationId) {
           recordedNotifications.add(notificationDedupeKey);
 
@@ -503,7 +454,7 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
             seen: false,
             timestamp: now,
             createdAt: now,
-            source: "vercel_fcm_dispatcher",
+            source: "vercel_fcm_data_only_v2",
           };
 
           updates[`notifications/${notificationId}`] = notificationRecord;
@@ -524,7 +475,11 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
         }
       } else {
         failed += 1;
+        if (candidate.stage === "arrived") arrivalPushFailed += 1;
+
+        // Clear the claim so the next driver GPS point can retry the stage.
         updates[candidate.statePath] = null;
+
         const code = item.error?.code || "";
         if (code === "messaging/registration-token-not-registered"
             || code === "messaging/invalid-registration-token") {
@@ -547,29 +502,16 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
     });
   }
 
-  let voiceSent = 0;
-  let voiceFailed = 0;
-
-  if (arrivalVoiceMessages.length) {
-    try {
-      for (let offset = 0; offset < arrivalVoiceMessages.length; offset += FCM_BATCH_SIZE) {
-        const voiceBatch = arrivalVoiceMessages.slice(offset, offset + FCM_BATCH_SIZE);
-        const voiceResponse = await getMessaging().sendEach(voiceBatch);
-        for (const item of voiceResponse.responses) {
-          if (item.success) voiceSent += 1;
-          else voiceFailed += 1;
-        }
-      }
-    } catch (voiceError) {
-      voiceFailed += arrivalVoiceMessages.length - voiceSent;
-      console.error("Resident arrival voice trigger failed", voiceError);
-    }
-  }
-
   if (Object.keys(updates).length) await database.ref().update(updates);
-  return { sent, failed, voiceSent, voiceFailed };
-}
 
+  return {
+    sent,
+    failed,
+    arrivalPushSent,
+    arrivalPushFailed,
+    deliveryMode: "data_only_v2",
+  };
+}
 
 function manilaDateKey(timestamp) {
   const parts = new Intl.DateTimeFormat("en-CA", {

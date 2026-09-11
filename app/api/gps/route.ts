@@ -38,6 +38,9 @@ async function dispatchResidentPushFromGps(
   status?: number;
   sent?: number;
   failed?: number;
+  arrivalPushSent?: number;
+  arrivalPushFailed?: number;
+  deliveryMode?: string;
   reason?: string;
 }> {
   const authorization = request.headers.get("authorization") || "";
@@ -70,6 +73,9 @@ async function dispatchResidentPushFromGps(
       status: response.status,
       sent: Number(body?.sent || 0),
       failed: Number(body?.failed || 0),
+      arrivalPushSent: Number(body?.arrivalPushSent || 0),
+      arrivalPushFailed: Number(body?.arrivalPushFailed || 0),
+      deliveryMode: String(body?.deliveryMode || ""),
       reason: response.ok
         ? String(body?.reason || "")
         : String(body?.error || body?.reason || `HTTP ${response.status}`),
@@ -1993,6 +1999,9 @@ export async function POST(request: NextRequest) {
         ok: residentPush.ok,
         sent: residentPush.sent || 0,
         failed: residentPush.failed || 0,
+        arrivalPushSent: residentPush.arrivalPushSent || 0,
+        arrivalPushFailed: residentPush.arrivalPushFailed || 0,
+        deliveryMode: residentPush.deliveryMode || "",
         reason: residentPush.reason || "",
       },
     });
