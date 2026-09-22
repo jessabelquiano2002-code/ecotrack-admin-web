@@ -1,0 +1,954 @@
+/* ================================================================
+   METRO WASTE ADMIN — PROFESSIONAL OFFICE SHELL
+   Transitional shell layer intentionally scoped to .office-shell.
+   It is imported after the legacy global/admin readability styles so
+   existing page logic stays intact while the shared frame is normalized.
+   ================================================================ */
+
+:root {
+  --office-bg: #f4f7f5;
+  --office-surface: #ffffff;
+  --office-surface-soft: #f8faf9;
+  --office-sidebar: #0b2a20;
+  --office-sidebar-hover: #123a2d;
+  --office-sidebar-active: #e9f6ee;
+  --office-primary: #0b7a4f;
+  --office-primary-dark: #075f3c;
+  --office-primary-soft: #e7f5ed;
+  --office-text: #17251f;
+  --office-muted: #68776f;
+  --office-line: #dfe7e2;
+  --office-line-strong: #cfdad4;
+  --office-danger: #b42318;
+  --office-warning: #a15c00;
+  --office-radius: 12px;
+  --office-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+html,
+body {
+  background: var(--office-bg) !important;
+  color: var(--office-text);
+}
+
+body .admin-shell.office-shell {
+  display: flex !important;
+  min-height: 100vh !important;
+  background: var(--office-bg) !important;
+}
+
+/* ---------- Sidebar ---------- */
+body .office-shell .admin-sidebar {
+  position: sticky !important;
+  top: 0 !important;
+  width: 260px !important;
+  min-width: 260px !important;
+  height: 100vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  background: var(--office-sidebar) !important;
+  border: 0 !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: none !important;
+  isolation: auto !important;
+}
+
+body .office-shell .admin-sidebar::before,
+body .office-shell .admin-sidebar::after {
+  display: none !important;
+}
+
+body .office-shell .admin-brand-wrap {
+  position: relative !important;
+  min-height: 82px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 14px 14px 14px 16px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  background: rgba(255, 255, 255, 0.015) !important;
+}
+
+body .office-shell .admin-brand-hero {
+  min-width: 0 !important;
+  flex: 1 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+}
+
+body .office-shell .office-brand-expanded {
+  display: flex !important;
+  align-items: center !important;
+  gap: 11px !important;
+  width: 100% !important;
+  height: auto !important;
+  padding: 0 !important;
+  background: transparent !important;
+}
+
+body .office-shell .office-brand-logo {
+  width: 48px !important;
+  height: 48px !important;
+  flex: 0 0 48px !important;
+  display: block !important;
+  object-fit: cover !important;
+  border: 2px solid rgba(255, 255, 255, 0.82) !important;
+  border-radius: 50% !important;
+  background: #ffffff !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16) !important;
+}
+
+body .office-shell .office-brand-copy {
+  min-width: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+}
+
+body .office-shell .office-brand-copy strong {
+  color: #ffffff !important;
+  font-size: 14px !important;
+  line-height: 1.2 !important;
+  font-weight: 850 !important;
+  letter-spacing: 0.035em !important;
+  white-space: nowrap !important;
+}
+
+body .office-shell .office-brand-copy span {
+  color: #a9c3b7 !important;
+  font-size: 11px !important;
+  line-height: 1.25 !important;
+  font-weight: 650 !important;
+}
+
+body .office-shell .admin-brand-collapsed {
+  display: none !important;
+}
+
+body .office-shell .admin-sidebar-toggle {
+  position: static !important;
+  inset: auto !important;
+  width: 36px !important;
+  height: 36px !important;
+  flex: 0 0 36px !important;
+  display: inline-grid !important;
+  place-items: center !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  border-radius: 9px !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: #dce9e3 !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+body .office-shell .admin-sidebar-toggle:hover {
+  background: rgba(255, 255, 255, 0.11) !important;
+  border-color: rgba(255, 255, 255, 0.23) !important;
+}
+
+body .office-shell .admin-sidebar-toggle .admin-svg-icon {
+  width: 17px !important;
+  height: 17px !important;
+  fill: currentColor !important;
+}
+
+body .office-shell .admin-nav {
+  flex: 1 !important;
+  min-height: 0 !important;
+  display: block !important;
+  overflow-y: auto !important;
+  padding: 12px 10px 18px !important;
+  margin: 0 !important;
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent !important;
+}
+
+body .office-shell .admin-nav-group {
+  display: grid !important;
+  gap: 3px !important;
+  margin: 0 !important;
+  padding: 8px 0 10px !important;
+  border: 0 !important;
+}
+
+body .office-shell .admin-nav-group + .admin-nav-group {
+  border-top: 1px solid rgba(255, 255, 255, 0.065) !important;
+}
+
+body .office-shell .admin-nav-group-title {
+  display: block !important;
+  margin: 0 0 5px !important;
+  padding: 0 10px !important;
+  color: #7fa393 !important;
+  font-size: 10px !important;
+  line-height: 1.4 !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.09em !important;
+}
+
+body .office-shell .admin-nav-link {
+  position: relative !important;
+  min-height: 44px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  margin: 0 !important;
+  padding: 0 10px !important;
+  border: 1px solid transparent !important;
+  border-radius: 9px !important;
+  background: transparent !important;
+  color: #d8e6df !important;
+  font-size: 13px !important;
+  line-height: 1.25 !important;
+  font-weight: 680 !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+body .office-shell .admin-nav-link::before {
+  display: none !important;
+}
+
+body .office-shell .admin-nav-link:hover {
+  background: var(--office-sidebar-hover) !important;
+  color: #ffffff !important;
+  border-color: rgba(255, 255, 255, 0.05) !important;
+  transform: none !important;
+}
+
+body .office-shell .admin-nav-link.active {
+  background: var(--office-sidebar-active) !important;
+  color: #0a613e !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  box-shadow: none !important;
+}
+
+body .office-shell .admin-nav-icon {
+  width: 20px !important;
+  height: 20px !important;
+  flex: 0 0 20px !important;
+  display: inline-grid !important;
+  place-items: center !important;
+  color: #9bc0ad !important;
+}
+
+body .office-shell .admin-nav-link.active .admin-nav-icon {
+  color: var(--office-primary) !important;
+}
+
+body .office-shell .admin-nav-icon .admin-svg-icon {
+  width: 18px !important;
+  height: 18px !important;
+  fill: currentColor !important;
+}
+
+body .office-shell .admin-nav-label {
+  min-width: 0 !important;
+  flex: 1 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+body .office-shell .admin-badge {
+  min-width: 20px !important;
+  height: 20px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 5px !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: #e84646 !important;
+  color: #ffffff !important;
+  font-size: 9px !important;
+  line-height: 1 !important;
+  font-weight: 850 !important;
+}
+
+body .office-shell .admin-sidebar-footer {
+  padding: 12px !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+  background: rgba(0, 0, 0, 0.06) !important;
+}
+
+body .office-shell .admin-user-card {
+  width: 100% !important;
+  min-height: 54px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 7px !important;
+  border: 1px solid rgba(255, 255, 255, 0.09) !important;
+  border-radius: 10px !important;
+  background: rgba(255, 255, 255, 0.045) !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+
+body .office-shell .admin-user-card:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+body .office-shell .admin-user-avatar {
+  width: 38px !important;
+  height: 38px !important;
+  flex: 0 0 38px !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-radius: 9px !important;
+  overflow: hidden !important;
+  background: #1f5f48 !important;
+}
+
+body .office-shell .admin-user-info {
+  min-width: 0 !important;
+  flex: 1 !important;
+}
+
+body .office-shell .admin-user-name {
+  display: block !important;
+  color: #ffffff !important;
+  font-size: 12px !important;
+  font-weight: 750 !important;
+}
+
+body .office-shell .admin-user-email {
+  display: block !important;
+  max-width: 150px !important;
+  margin-top: 2px !important;
+  color: #99b5a8 !important;
+  font-size: 10px !important;
+  font-weight: 550 !important;
+}
+
+body .office-shell .admin-user-arrow {
+  color: #92ad9f !important;
+  font-size: 18px !important;
+}
+
+/* ---------- Main / topbar ---------- */
+body .office-shell .admin-main {
+  min-width: 0 !important;
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background: var(--office-bg) !important;
+}
+
+body .office-shell .admin-topbar {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 80 !important;
+  width: 100% !important;
+  height: 68px !important;
+  min-height: 68px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 16px !important;
+  padding: 0 24px !important;
+  background: rgba(255, 255, 255, 0.98) !important;
+  backdrop-filter: blur(10px) !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--office-line) !important;
+  box-shadow: none !important;
+}
+
+body .office-shell .admin-search-wrap {
+  width: min(460px, 48vw) !important;
+  height: 42px !important;
+  min-height: 42px !important;
+  display: flex !important;
+  align-items: center !important;
+  border: 1px solid var(--office-line-strong) !important;
+  border-radius: 10px !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+
+body .office-shell .admin-search-wrap:focus-within {
+  border-color: #7bb99a !important;
+  box-shadow: 0 0 0 3px rgba(11, 122, 79, 0.09) !important;
+}
+
+body .office-shell .admin-search {
+  min-height: 40px !important;
+  height: 40px !important;
+  padding-right: 80px !important;
+  color: var(--office-text) !important;
+  font-size: 13px !important;
+  font-weight: 550 !important;
+  background: transparent !important;
+}
+
+body .office-shell .admin-search::placeholder {
+  color: #84918b !important;
+}
+
+body .office-shell .admin-search-shortcut {
+  right: 8px !important;
+  padding: 4px 7px !important;
+  border: 1px solid #e4e9e6 !important;
+  border-radius: 6px !important;
+  background: #f6f8f7 !important;
+  color: #66736d !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+}
+
+body .office-shell .admin-search-clear {
+  right: 8px !important;
+}
+
+body .office-shell .admin-topbar-actions {
+  margin-left: auto !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+body .office-shell .admin-guide-trigger,
+body .office-shell .admin-icon-btn,
+body .office-shell .admin-profile-mini {
+  min-height: 40px !important;
+  height: 40px !important;
+  border: 1px solid var(--office-line) !important;
+  border-radius: 9px !important;
+  background: #ffffff !important;
+  color: #365148 !important;
+  box-shadow: none !important;
+}
+
+body .office-shell .admin-guide-trigger {
+  padding: 0 11px !important;
+  gap: 7px !important;
+  font-size: 12px !important;
+  font-weight: 750 !important;
+}
+
+body .office-shell .admin-guide-trigger:hover,
+body .office-shell .admin-icon-btn:hover,
+body .office-shell .admin-profile-mini:hover {
+  background: #f6faf8 !important;
+  border-color: #c7d7cf !important;
+  transform: none !important;
+}
+
+body .office-shell .admin-icon-btn {
+  width: 40px !important;
+  min-width: 40px !important;
+  padding: 0 !important;
+}
+
+body .office-shell .admin-notif-dot {
+  top: -5px !important;
+  right: -5px !important;
+  min-width: 19px !important;
+  height: 19px !important;
+  padding: 0 4px !important;
+  border: 2px solid #ffffff !important;
+  font-size: 8px !important;
+}
+
+body .office-shell .admin-profile-mini {
+  padding: 0 8px 0 6px !important;
+  gap: 8px !important;
+}
+
+body .office-shell .admin-profile-avatar {
+  width: 30px !important;
+  height: 30px !important;
+  flex: 0 0 30px !important;
+  border-radius: 7px !important;
+  background: var(--office-primary) !important;
+}
+
+body .office-shell .admin-profile-name {
+  color: #1d3028 !important;
+  font-size: 11px !important;
+  font-weight: 760 !important;
+}
+
+body .office-shell .admin-profile-role {
+  color: #7a8881 !important;
+  font-size: 9px !important;
+  font-weight: 600 !important;
+}
+
+body .office-shell .admin-dropdown {
+  top: calc(100% + 8px) !important;
+  right: 0 !important;
+  width: 260px !important;
+  padding: 8px !important;
+  border: 1px solid var(--office-line) !important;
+  border-radius: 11px !important;
+  background: #ffffff !important;
+  box-shadow: 0 12px 30px rgba(16, 24, 40, 0.12) !important;
+}
+
+/* ---------- Content / page heading ---------- */
+body .office-shell .admin-content {
+  flex: 1 !important;
+  width: 100% !important;
+  max-width: 1680px !important;
+  margin: 0 auto !important;
+  padding: 24px 28px 42px !important;
+  background: transparent !important;
+}
+
+body .office-shell .office-page-head {
+  min-height: 76px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 18px !important;
+  margin: 0 0 14px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+body .office-shell .office-page-title {
+  min-width: 0 !important;
+}
+
+body .office-shell .office-page-kicker {
+  display: block !important;
+  margin-bottom: 4px !important;
+  color: #698176 !important;
+  font-size: 9px !important;
+  line-height: 1.25 !important;
+  font-weight: 850 !important;
+  letter-spacing: 0.11em !important;
+}
+
+body .office-shell .admin-page-head h1 {
+  margin: 0 !important;
+  color: var(--office-text) !important;
+  font-size: clamp(24px, 2.2vw, 30px) !important;
+  line-height: 1.15 !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.025em !important;
+}
+
+body .office-shell .admin-page-head p {
+  max-width: 760px !important;
+  margin: 5px 0 0 !important;
+  color: var(--office-muted) !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+  font-weight: 500 !important;
+}
+
+body .office-shell .office-page-head-tools {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  flex: 0 0 auto !important;
+}
+
+body .office-shell .admin-update-status {
+  min-height: 36px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  margin: 0 !important;
+  padding: 0 10px !important;
+  border: 1px solid #d8e5de !important;
+  border-radius: 8px !important;
+  background: #ffffff !important;
+  color: #51645a !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  white-space: nowrap !important;
+}
+
+body .office-shell .admin-live-dot {
+  width: 7px !important;
+  height: 7px !important;
+  flex: 0 0 7px !important;
+  background: #16a05d !important;
+  box-shadow: none !important;
+}
+
+body .office-shell .admin-update-status.is-offline .admin-live-dot {
+  background: #d04444 !important;
+}
+
+body .office-shell .admin-update-status.is-syncing .admin-live-dot {
+  background: #d99210 !important;
+}
+
+body .office-shell .office-page-help-button {
+  min-height: 36px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 0 10px !important;
+  border: 1px solid #d8e5de !important;
+  border-radius: 8px !important;
+  background: #ffffff !important;
+  color: var(--office-primary-dark) !important;
+  font-size: 11px !important;
+  font-weight: 750 !important;
+  cursor: pointer !important;
+}
+
+body .office-shell .office-page-help-button:hover {
+  background: #f0f7f3 !important;
+  border-color: #bcd2c6 !important;
+}
+
+body .office-shell .office-page-help-button .admin-svg-icon {
+  width: 15px !important;
+  height: 15px !important;
+  fill: currentColor !important;
+}
+
+body .office-shell .office-page-guidance {
+  min-height: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  margin: 0 0 20px !important;
+  padding: 10px 12px !important;
+  border: 1px solid #dbe8e1 !important;
+  border-radius: 10px !important;
+  background: #f8fbf9 !important;
+  box-shadow: none !important;
+}
+
+body .office-shell .office-page-guidance .admin-page-guidance-icon {
+  width: 30px !important;
+  height: 30px !important;
+  flex: 0 0 30px !important;
+  border-radius: 7px !important;
+  background: #e9f4ee !important;
+  color: var(--office-primary) !important;
+}
+
+body .office-shell .office-page-guidance .admin-page-guidance-icon .admin-svg-icon {
+  width: 16px !important;
+  height: 16px !important;
+}
+
+body .office-shell .office-page-guidance .admin-page-guidance-copy {
+  display: block !important;
+  min-width: 0 !important;
+  flex: 1 !important;
+}
+
+body .office-shell .office-page-guidance .admin-page-guidance-copy strong {
+  margin-right: 7px !important;
+  color: #304b3f !important;
+  font-size: 11px !important;
+  font-weight: 780 !important;
+}
+
+body .office-shell .office-page-guidance .admin-page-guidance-copy span {
+  color: #718078 !important;
+  font-size: 11px !important;
+  line-height: 1.45 !important;
+}
+
+body .office-shell .office-page-guidance > button {
+  min-height: 30px !important;
+  padding: 0 9px !important;
+  border: 0 !important;
+  border-radius: 7px !important;
+  background: transparent !important;
+  color: var(--office-primary) !important;
+  font-size: 10px !important;
+  font-weight: 750 !important;
+}
+
+body .office-shell .office-page-guidance > button:hover {
+  background: #eaf4ee !important;
+}
+
+/* ---------- Shared office visual normalization ---------- */
+body .office-shell :where(.card, [class*="Card"], [class*="card"]) {
+  --office-card-shadow: var(--office-shadow);
+}
+
+body .office-shell :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  border-color: #d6e0db;
+}
+
+/* ---------- Collapsed desktop sidebar ---------- */
+body .office-shell.sidebar-collapsed .admin-sidebar {
+  width: 76px !important;
+  min-width: 76px !important;
+}
+
+body .office-shell.sidebar-collapsed .admin-brand-wrap {
+  min-height: 82px !important;
+  justify-content: center !important;
+  padding: 13px 10px !important;
+}
+
+body .office-shell.sidebar-collapsed .admin-brand-expanded {
+  display: none !important;
+}
+
+body .office-shell.sidebar-collapsed .admin-brand-collapsed {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+body .office-shell.sidebar-collapsed .office-brand-logo-collapsed {
+  width: 42px !important;
+  height: 42px !important;
+  flex: 0 0 42px !important;
+}
+
+body .office-shell.sidebar-collapsed .admin-sidebar-toggle {
+  position: absolute !important;
+  right: -15px !important;
+  top: 23px !important;
+  width: 30px !important;
+  height: 30px !important;
+  border-color: #d3ded8 !important;
+  background: #ffffff !important;
+  color: #466057 !important;
+  box-shadow: 0 2px 8px rgba(16, 24, 40, 0.09) !important;
+}
+
+body .office-shell.sidebar-collapsed .admin-nav {
+  padding: 12px 9px 16px !important;
+}
+
+body .office-shell.sidebar-collapsed .admin-nav-group {
+  padding: 7px 0 9px !important;
+}
+
+body .office-shell.sidebar-collapsed .admin-nav-group-title,
+body .office-shell.sidebar-collapsed .admin-nav-label,
+body .office-shell.sidebar-collapsed .admin-user-info,
+body .office-shell.sidebar-collapsed .admin-user-arrow {
+  display: none !important;
+}
+
+body .office-shell.sidebar-collapsed .admin-nav-link {
+  width: 48px !important;
+  min-height: 44px !important;
+  justify-content: center !important;
+  padding: 0 !important;
+  margin: 0 auto 3px !important;
+}
+
+body .office-shell.sidebar-collapsed .admin-nav-link::after {
+  left: calc(100% + 12px) !important;
+  z-index: 1200 !important;
+  border-radius: 7px !important;
+  background: #102d23 !important;
+  color: #ffffff !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+}
+
+body .office-shell.sidebar-collapsed .admin-sidebar-footer {
+  padding: 10px 9px !important;
+}
+
+body .office-shell.sidebar-collapsed .admin-user-card {
+  width: 48px !important;
+  min-height: 48px !important;
+  justify-content: center !important;
+  padding: 5px !important;
+  margin: 0 auto !important;
+}
+
+body .office-shell.sidebar-collapsed .admin-user-avatar {
+  width: 36px !important;
+  height: 36px !important;
+  flex: 0 0 36px !important;
+}
+
+/* ---------- Tablet / mobile ---------- */
+@media (max-width: 980px) {
+  body .admin-shell.office-shell {
+    display: block !important;
+  }
+
+  body .office-shell .admin-sidebar,
+  body .office-shell.sidebar-collapsed .admin-sidebar {
+    position: fixed !important;
+    inset: 0 auto 0 0 !important;
+    z-index: 1100 !important;
+    width: min(278px, 86vw) !important;
+    min-width: min(278px, 86vw) !important;
+    height: 100dvh !important;
+    transform: translateX(-103%) !important;
+    transition: transform 180ms ease !important;
+    box-shadow: 18px 0 44px rgba(5, 25, 18, 0.26) !important;
+  }
+
+  body .office-shell.mobile-sidebar-open .admin-sidebar,
+  body .office-shell.sidebar-collapsed.mobile-sidebar-open .admin-sidebar {
+    transform: translateX(0) !important;
+  }
+
+  body .office-shell .admin-sidebar-backdrop {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 1090 !important;
+    display: block !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    background: rgba(7, 20, 15, 0.46) !important;
+    transition: opacity 160ms ease, visibility 160ms ease !important;
+  }
+
+  body .office-shell.mobile-sidebar-open .admin-sidebar-backdrop {
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+
+  body .office-shell.sidebar-collapsed .admin-brand-expanded {
+    display: flex !important;
+  }
+
+  body .office-shell.sidebar-collapsed .admin-brand-collapsed {
+    display: none !important;
+  }
+
+  body .office-shell.sidebar-collapsed .admin-nav-group-title,
+  body .office-shell.sidebar-collapsed .admin-nav-label,
+  body .office-shell.sidebar-collapsed .admin-user-info,
+  body .office-shell.sidebar-collapsed .admin-user-arrow {
+    display: initial !important;
+  }
+
+  body .office-shell.sidebar-collapsed .admin-nav-link {
+    width: auto !important;
+    justify-content: flex-start !important;
+    padding: 0 10px !important;
+    margin: 0 !important;
+  }
+
+  body .office-shell.sidebar-collapsed .admin-user-card {
+    width: 100% !important;
+    justify-content: flex-start !important;
+    padding: 7px !important;
+  }
+
+  body .office-shell.sidebar-collapsed .admin-sidebar-toggle,
+  body .office-shell .admin-sidebar-toggle {
+    display: none !important;
+  }
+
+  body .office-shell .admin-mobile-menu {
+    width: 40px !important;
+    height: 40px !important;
+    flex: 0 0 40px !important;
+    display: inline-grid !important;
+    place-items: center !important;
+    border: 1px solid var(--office-line) !important;
+    border-radius: 9px !important;
+    background: #ffffff !important;
+    color: #355146 !important;
+    box-shadow: none !important;
+  }
+
+  body .office-shell .admin-topbar {
+    padding: 0 16px !important;
+  }
+
+  body .office-shell .admin-search-wrap {
+    width: min(420px, calc(100vw - 310px)) !important;
+  }
+
+  body .office-shell .admin-content {
+    padding: 20px 18px 34px !important;
+  }
+}
+
+@media (max-width: 720px) {
+  body .office-shell .admin-topbar {
+    gap: 9px !important;
+    padding: 0 12px !important;
+  }
+
+  body .office-shell .admin-search-wrap {
+    width: auto !important;
+    flex: 1 !important;
+    min-width: 0 !important;
+  }
+
+  body .office-shell .admin-search-shortcut,
+  body .office-shell .admin-guide-trigger,
+  body .office-shell .admin-profile-text,
+  body .office-shell .admin-chevron {
+    display: none !important;
+  }
+
+  body .office-shell .admin-profile-mini {
+    width: 40px !important;
+    min-width: 40px !important;
+    padding: 0 !important;
+    justify-content: center !important;
+  }
+
+  body .office-shell .office-page-head {
+    min-height: 0 !important;
+    align-items: flex-start !important;
+    flex-direction: column !important;
+    gap: 11px !important;
+    margin-bottom: 12px !important;
+  }
+
+  body .office-shell .office-page-head-tools {
+    width: 100% !important;
+    justify-content: space-between !important;
+  }
+
+  body .office-shell .admin-update-status {
+    white-space: normal !important;
+  }
+
+  body .office-shell .office-page-guidance {
+    align-items: flex-start !important;
+    flex-wrap: wrap !important;
+  }
+
+  body .office-shell .office-page-guidance .admin-page-guidance-copy {
+    flex-basis: calc(100% - 44px) !important;
+  }
+
+  body .office-shell .office-page-guidance > button {
+    margin-left: 40px !important;
+  }
+
+  body .office-shell .admin-content {
+    padding: 18px 12px 30px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  body .office-shell .admin-icon-btn {
+    display: none !important;
+  }
+
+  body .office-shell .admin-page-head h1 {
+    font-size: 24px !important;
+  }
+
+  body .office-shell .office-page-kicker {
+    font-size: 8px !important;
+  }
+
+  body .office-shell .office-page-help-button span {
+    display: none !important;
+  }
+}

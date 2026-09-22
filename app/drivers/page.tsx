@@ -1,9 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { onValue, ref, remove } from "@/lib/offlineFirebaseDatabase";
 import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
+import { ScheduleDialog } from "../schedules/ScheduleDialog";
+import { ScheduleIcon } from "../schedules/ScheduleIcons";
+import styles from "../schedules/schedules.module.css";
 
 type Driver = {
   id: string;
@@ -54,6 +58,30 @@ type UserRow = {
 
 type TabType = "all" | "drivers" | "residents";
 
+const makeBarangayFilterKey = (value?: string) =>
+  (value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+const getResidentPurokLabel = (resident?: Resident) => {
+  const savedLabel = String(resident?.purokLabel || "").trim();
+  if (savedLabel) return savedLabel;
+
+  const rawPurok = String(resident?.purok ?? "").trim();
+  if (!rawPurok) return "Unassigned Purok";
+
+  return /^purok\b/i.test(rawPurok) ? rawPurok : `Purok ${rawPurok}`;
+};
+
+const makePurokFilterKey = (resident?: Resident) =>
+  getResidentPurokLabel(resident)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "unassigned_purok";
+
 type DriverApiResponse = {
   success?: boolean;
   uid?: string;
@@ -73,25 +101,42 @@ const emptyForm = {
 const MAX_LICENSE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_LICENSE_TYPES = new Set(["image/jpeg", "image/png"]);
 
+const DRIVER_STEPS = [
+  { label: "Driver details", hint: "Identity, contact, vehicle, and sign in" },
+  { label: "Driver licence", hint: "Licence details and both image sides" },
+  { label: "Review", hint: "Confirm everything before creating" },
+] as const;
+
 export default function UsersPage() {
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [residents, setResidents] = useState<Resident[]>([]);
 
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<TabType>("all");
+  const [selectedBarangay, setSelectedBarangay] = useState("all");
+  const [selectedPurok, setSelectedPurok] = useState("all");
 
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [licenseFile, setLicenseFile] = useState<File | null>(null);
   const [licensePreview, setLicensePreview] = useState("");
+  const [licenseBackFile, setLicenseBackFile] = useState<File | null>(null);
+  const [licenseBackPreview, setLicenseBackPreview] = useState("");
   const [formError, setFormError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [driverStep, setDriverStep] = useState(0);
+  const [highestDriverStep, setHighestDriverStep] = useState(0);
+  const [showCreatePassword, setShowCreatePassword] = useState(false);
 
   const [editDriverId, setEditDriverId] = useState<string | null>(null);
   const [profileDriver, setProfileDriver] = useState<Driver | null>(null);
   const [profileLicenseUrl, setProfileLicenseUrl] = useState("");
+  const [profileLicenseBackUrl, setProfileLicenseBackUrl] = useState("");
   const [isLicenseLoading, setIsLicenseLoading] = useState(false);
-  const [profileError, setProfileError] = useState("");
+  const [profileLicenseErrors, setProfileLicenseErrors] = useState({
+    front: "",
+    back: "",
+  });
   const [profileTab, setProfileTab] = useState<"overview" | "licence">("overview");
   const [createdCredential, setCreatedCredential] = useState<{
     name: string;
@@ -108,6 +153,14 @@ export default function UsersPage() {
       }
     };
   }, [profileLicenseUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (profileLicenseBackUrl) {
+        URL.revokeObjectURL(profileLicenseBackUrl);
+      }
+    };
+  }, [profileLicenseBackUrl]);
 
   /* ================= FETCH DRIVERS ================= */
   useEffect(() => {
@@ -174,9 +227,7 @@ export default function UsersPage() {
     }));
 
     const residentRows: UserRow[] = residents.map((resident) => {
-      const purokText =
-        resident.purokLabel ||
-        (resident.purok ? `Purok ${resident.purok}` : "No purok");
+      const purokText = getResidentPurokLabel(resident);
 
       return {
         id: resident.id,
@@ -197,6 +248,98 @@ export default function UsersPage() {
     });
   }, [drivers, residents]);
 
+  /* ================= RESIDENT BARANGAY / PUROK FOLDERS ================= */
+  const residentBarangayFolders = useMemo(() => {
+    const groups = new Map<
+      string,
+      { key: string; name: string; count: number; purokKeys: Set<string> }
+    >();
+
+    residents.forEach((resident) => {
+      const name = (resident.barangay || "Unassigned Barangay").trim();
+      const key = resident.barangayKey || makeBarangayFilterKey(name) || "unassigned";
+      const purokKey = makePurokFilterKey(resident);
+      const existing = groups.get(key);
+
+      if (existing) {
+        existing.count += 1;
+        existing.purokKeys.add(purokKey);
+      } else {
+        groups.set(key, { key, name, count: 1, purokKeys: new Set([purokKey]) });
+      }
+    });
+
+    return Array.from(groups.values())
+      .map((group) => ({
+        key: group.key,
+        name: group.name,
+        count: group.count,
+        purokCount: group.purokKeys.size,
+      }))
+      .sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+      );
+  }, [residents]);
+
+  const selectedBarangayFolder = useMemo(
+    () => residentBarangayFolders.find((folder) => folder.key === selectedBarangay) || null,
+    [residentBarangayFolders, selectedBarangay],
+  );
+
+  const residentPurokFolders = useMemo(() => {
+    if (selectedBarangay === "all") return [];
+
+    const groups = new Map<string, { key: string; name: string; count: number }>();
+
+    residents.forEach((resident) => {
+      const barangayName = (resident.barangay || "Unassigned Barangay").trim();
+      const barangayKey =
+        resident.barangayKey || makeBarangayFilterKey(barangayName) || "unassigned";
+
+      if (barangayKey !== selectedBarangay) return;
+
+      const name = getResidentPurokLabel(resident);
+      const key = makePurokFilterKey(resident);
+      const existing = groups.get(key);
+
+      if (existing) {
+        existing.count += 1;
+      } else {
+        groups.set(key, { key, name, count: 1 });
+      }
+    });
+
+    return Array.from(groups.values()).sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }),
+    );
+  }, [residents, selectedBarangay]);
+
+  useEffect(() => {
+    if (selectedBarangay === "all") {
+      setSelectedPurok("all");
+      return;
+    }
+
+    const stillExists = residentBarangayFolders.some(
+      (folder) => folder.key === selectedBarangay,
+    );
+
+    if (!stillExists) {
+      setSelectedBarangay("all");
+      setSelectedPurok("all");
+    }
+  }, [residentBarangayFolders, selectedBarangay]);
+
+  useEffect(() => {
+    if (selectedPurok === "all") return;
+
+    const stillExists = residentPurokFolders.some(
+      (folder) => folder.key === selectedPurok,
+    );
+
+    if (!stillExists) setSelectedPurok("all");
+  }, [residentPurokFolders, selectedPurok]);
+
   /* ================= FILTER ================= */
   const filteredUsers = useMemo(() => {
     let list = allUsers;
@@ -207,6 +350,26 @@ export default function UsersPage() {
 
     if (activeTab === "residents") {
       list = list.filter((user) => user.type === "resident");
+
+      if (selectedBarangay !== "all") {
+        list = list.filter((user) => {
+          const resident = user.rawResident;
+          if (!resident) return false;
+          const key =
+            resident.barangayKey ||
+            makeBarangayFilterKey(resident.barangay) ||
+            "unassigned";
+          return key === selectedBarangay;
+        });
+
+        if (selectedPurok !== "all") {
+          list = list.filter((user) =>
+            user.rawResident
+              ? makePurokFilterKey(user.rawResident) === selectedPurok
+              : false,
+          );
+        }
+      }
     }
 
     if (!search.trim()) return list;
@@ -226,7 +389,7 @@ export default function UsersPage() {
 
       return text.includes(keyword);
     });
-  }, [allUsers, activeTab, search]);
+  }, [allUsers, activeTab, search, selectedBarangay, selectedPurok]);
 
   /* ================= STATS ================= */
   const stats = useMemo(() => {
@@ -239,6 +402,91 @@ export default function UsersPage() {
       ).length,
     };
   }, [drivers, residents]);
+
+  const normalizedCreateEmail = form.email.trim().toLowerCase();
+  const driverAccountStepValid = Boolean(
+    form.name.trim() &&
+    normalizedCreateEmail &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedCreateEmail) &&
+    form.phone.trim() &&
+    form.truck.trim() &&
+    form.password.length >= 6,
+  );
+
+  const createLicenceExpiry = form.licenseExpirationDate
+    ? new Date(`${form.licenseExpirationDate}T23:59:59`)
+    : null;
+  const createLicenceDateValid = Boolean(
+    createLicenceExpiry &&
+    !Number.isNaN(createLicenceExpiry.getTime()) &&
+    createLicenceExpiry.getTime() >= Date.now(),
+  );
+  const driverLicenceStepValid = Boolean(
+    form.licenseNumber.trim() &&
+    createLicenceDateValid &&
+    licenseFile &&
+    licenseBackFile,
+  );
+  const driverAllStepsValid = driverAccountStepValid && driverLicenceStepValid;
+  const driverCanAdvance = [driverAccountStepValid, driverLicenceStepValid, driverAllStepsValid];
+
+  const getDriverStepError = (step: number): string => {
+    if (step === 0) {
+      if (!form.name.trim() || !normalizedCreateEmail || !form.phone.trim() || !form.truck.trim()) {
+        return "Full name, email, contact number, and assigned vehicle are required.";
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedCreateEmail)) {
+        return "Enter a valid email address, such as driver@example.com.";
+      }
+      if (form.password.length < 6) {
+        return "Password must contain at least 6 characters.";
+      }
+      return "";
+    }
+
+    if (step === 1) {
+      if (!form.licenseNumber.trim() || !form.licenseExpirationDate) {
+        return "Licence number and expiration date are required.";
+      }
+      if (!createLicenceExpiry || Number.isNaN(createLicenceExpiry.getTime())) {
+        return "Enter a valid licence expiration date.";
+      }
+      if (createLicenceExpiry.getTime() < Date.now()) {
+        return "The driver's licence is already expired.";
+      }
+      if (!licenseFile || !licenseBackFile) {
+        return "Upload both the front and back images of the driver's licence.";
+      }
+    }
+
+    return "";
+  };
+
+  const nextDriverStep = () => {
+    const error = getDriverStepError(driverStep);
+    if (error) {
+      setFormError(error);
+      return;
+    }
+
+    setFormError("");
+    setDriverStep((current) => {
+      const next = Math.min(current + 1, DRIVER_STEPS.length - 1);
+      setHighestDriverStep((highest) => Math.max(highest, next));
+      return next;
+    });
+  };
+
+  const requestCloseCreateDriver = () => {
+    if (isSaving) return;
+    setShowModal(false);
+    setForm(emptyForm);
+    setFormError("");
+    setDriverStep(0);
+    setHighestDriverStep(0);
+    setShowCreatePassword(false);
+    clearLicenseSelection();
+  };
 
   /* ================= CREATE DRIVER ================= */
   const createDriver = async () => {
@@ -258,6 +506,7 @@ export default function UsersPage() {
     !normalizedPhone ||
     !normalizedTruck
   ) {
+    setDriverStep(0);
     setFormError(
       "Full name, email, contact number, and assigned vehicle are required.",
     );
@@ -265,6 +514,7 @@ export default function UsersPage() {
   }
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    setDriverStep(0);
     setFormError(
       "Enter a valid email address, such as driver@example.com.",
     );
@@ -274,10 +524,13 @@ export default function UsersPage() {
   if (
     !normalizedLicenseNumber ||
     !form.licenseExpirationDate ||
-    !licenseFile
+    !licenseFile ||
+    !licenseBackFile
   ) {
+    setDriverStep(1);
+    setHighestDriverStep((highest) => Math.max(highest, 1));
     setFormError(
-      "Licence number, expiration date, and licence image are required.",
+      "Licence number, expiration date, and both front and back licence images are required.",
     );
     return;
   }
@@ -287,16 +540,19 @@ export default function UsersPage() {
   );
 
   if (Number.isNaN(expirationDate.getTime())) {
+    setDriverStep(1);
     setFormError("Enter a valid licence expiration date.");
     return;
   }
 
   if (expirationDate.getTime() < Date.now()) {
+    setDriverStep(1);
     setFormError("The driver's licence is already expired.");
     return;
   }
 
   if (form.password.length < 6) {
+    setDriverStep(0);
     setFormError(
       "Password must contain at least 6 characters.",
     );
@@ -320,6 +576,7 @@ export default function UsersPage() {
     const body = buildDriverFormData(
       normalizedForm,
       licenseFile,
+      licenseBackFile,
     );
 
     const response = await fetch("/api/create-driver", {
@@ -350,6 +607,9 @@ export default function UsersPage() {
     setCredentialCopied(false);
     setShowModal(false);
     setForm(emptyForm);
+    setDriverStep(0);
+    setHighestDriverStep(0);
+    setShowCreatePassword(false);
     clearLicenseSelection();
   } catch (error) {
     console.error("Create driver error:", error);
@@ -402,30 +662,56 @@ export default function UsersPage() {
 
   const clearLicenseSelection = () => {
     if (licensePreview) URL.revokeObjectURL(licensePreview);
+    if (licenseBackPreview) URL.revokeObjectURL(licenseBackPreview);
     setLicenseFile(null);
     setLicensePreview("");
+    setLicenseBackFile(null);
+    setLicenseBackPreview("");
   };
 
   const selectLicenseImage = (file: File | null) => {
     setFormError("");
-    clearLicenseSelection();
+    if (licensePreview) URL.revokeObjectURL(licensePreview);
+    setLicenseFile(null);
+    setLicensePreview("");
     if (!file) return;
     if (!ALLOWED_LICENSE_TYPES.has(file.type)) {
-      setFormError("Licence image must be JPG, JPEG, or PNG.");
+      setFormError("Front licence image must be JPG, JPEG, or PNG.");
       return;
     }
     if (file.size > MAX_LICENSE_BYTES) {
-      setFormError("Licence image must not exceed 5 MB.");
+      setFormError("Front licence image must not exceed 5 MB.");
       return;
     }
     setLicenseFile(file);
     setLicensePreview(URL.createObjectURL(file));
   };
 
+  const selectLicenseBackImage = (file: File | null) => {
+    setFormError("");
+    if (licenseBackPreview) URL.revokeObjectURL(licenseBackPreview);
+    setLicenseBackFile(null);
+    setLicenseBackPreview("");
+    if (!file) return;
+    if (!ALLOWED_LICENSE_TYPES.has(file.type)) {
+      setFormError("Back licence image must be JPG, JPEG, or PNG.");
+      return;
+    }
+    if (file.size > MAX_LICENSE_BYTES) {
+      setFormError("Back licence image must not exceed 5 MB.");
+      return;
+    }
+    setLicenseBackFile(file);
+    setLicenseBackPreview(URL.createObjectURL(file));
+  };
+
   const openCreateDriver = () => {
     clearLicenseSelection();
     setForm(emptyForm);
     setFormError("");
+    setDriverStep(0);
+    setHighestDriverStep(0);
+    setShowCreatePassword(false);
     setShowModal(true);
   };
 
@@ -448,10 +734,14 @@ export default function UsersPage() {
     if (profileLicenseUrl) {
       URL.revokeObjectURL(profileLicenseUrl);
     }
+    if (profileLicenseBackUrl) {
+      URL.revokeObjectURL(profileLicenseBackUrl);
+    }
 
     setProfileDriver(null);
     setProfileLicenseUrl("");
-    setProfileError("");
+    setProfileLicenseBackUrl("");
+    setProfileLicenseErrors({ front: "", back: "" });
     setProfileTab("overview");
     setIsLicenseLoading(false);
   };
@@ -460,62 +750,80 @@ export default function UsersPage() {
     if (profileLicenseUrl) {
       URL.revokeObjectURL(profileLicenseUrl);
     }
+    if (profileLicenseBackUrl) {
+      URL.revokeObjectURL(profileLicenseBackUrl);
+    }
 
     setProfileDriver(driver);
     setProfileLicenseUrl("");
-    setProfileError("");
+    setProfileLicenseBackUrl("");
+    setProfileLicenseErrors({ front: "", back: "" });
     setProfileTab("overview");
     setIsLicenseLoading(true);
 
     try {
       const token = await getAdminToken();
 
-      /*
-       * app/api/driver-license/route.ts is a non-dynamic route.
-       * The driver ID must therefore be passed as a query parameter.
-       */
-      const response = await fetch(
-        `/api/driver-license?driverId=${encodeURIComponent(driver.id)}`,
-        {
-          method: "GET",
-          headers: {
-            Accept: "image/jpeg,image/png,application/json",
-            Authorization: `Bearer ${token}`,
+      const loadLicenceSide = async (side: "front" | "back") => {
+        const response = await fetch(
+          `/api/driver-license?driverId=${encodeURIComponent(driver.id)}&side=${side}`,
+          {
+            method: "GET",
+            headers: {
+              Accept: "image/jpeg,image/png,application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            cache: "no-store",
           },
-          cache: "no-store",
-        },
-      );
+        );
 
-      if (response.status === 404) {
-        setProfileError("No driver licence image is currently stored.");
-        return;
-      }
+        if (!response.ok) {
+          const message = await readImageApiError(response);
+          return { side, url: "", error: message };
+        }
 
-      if (!response.ok) {
-        const message = await readImageApiError(response);
-        throw new Error(message);
-      }
+        const contentType = (response.headers.get("content-type") || "").toLowerCase();
 
-      const contentType = (response.headers.get("content-type") || "").toLowerCase();
+        if (!contentType.startsWith("image/")) {
+          return {
+            side,
+            url: "",
+            error: `The ${side} licence service returned an invalid image response.`,
+          };
+        }
 
-      if (!contentType.startsWith("image/")) {
-        throw new Error("The licence service returned an invalid image response.");
-      }
+        const blob = await response.blob();
 
-      const blob = await response.blob();
+        if (blob.size === 0) {
+          return {
+            side,
+            url: "",
+            error: `The stored ${side} licence image is empty.`,
+          };
+        }
 
-      if (blob.size === 0) {
-        throw new Error("The stored licence image is empty.");
-      }
+        return { side, url: URL.createObjectURL(blob), error: "" };
+      };
 
-      setProfileLicenseUrl(URL.createObjectURL(blob));
+      const [frontResult, backResult] = await Promise.all([
+        loadLicenceSide("front"),
+        loadLicenceSide("back"),
+      ]);
+
+      setProfileLicenseUrl(frontResult.url);
+      setProfileLicenseBackUrl(backResult.url);
+      setProfileLicenseErrors({
+        front: frontResult.error,
+        back: backResult.error,
+      });
     } catch (error) {
       console.error("Driver licence loading error:", error);
-      setProfileError(
+      const message =
         error instanceof Error
           ? error.message
-          : "The driver licence image could not be loaded.",
-      );
+          : "The driver licence images could not be loaded.";
+
+      setProfileLicenseErrors({ front: message, back: message });
     } finally {
       setIsLicenseLoading(false);
     }
@@ -636,7 +944,7 @@ export default function UsersPage() {
         <div className="users-tabs">
           <button
             className={activeTab === "all" ? "active" : ""}
-            onClick={() => setActiveTab("all")}
+            onClick={() => { setActiveTab("all"); setSelectedBarangay("all"); setSelectedPurok("all"); }}
           >
             All Users
             <span>{stats.totalUsers}</span>
@@ -644,7 +952,7 @@ export default function UsersPage() {
 
           <button
             className={activeTab === "drivers" ? "active" : ""}
-            onClick={() => setActiveTab("drivers")}
+            onClick={() => { setActiveTab("drivers"); setSelectedBarangay("all"); setSelectedPurok("all"); }}
           >
             Drivers
             <span>{stats.totalDrivers}</span>
@@ -652,12 +960,100 @@ export default function UsersPage() {
 
           <button
             className={activeTab === "residents" ? "active" : ""}
-            onClick={() => setActiveTab("residents")}
+            onClick={() => { setActiveTab("residents"); setSelectedBarangay("all"); setSelectedPurok("all"); }}
           >
             Residents
             <span>{stats.totalResidents}</span>
           </button>
         </div>
+
+        {activeTab === "residents" && (
+          <section className="barangay-folders" aria-label="Residents by Barangay and Purok">
+            <div className="barangay-folders-header">
+              <div>
+                <h3>Residents by Barangay</h3>
+                <p>Select a Barangay folder, then choose a Purok to narrow the resident list.</p>
+              </div>
+              <span className="barangay-folder-total">{stats.totalResidents} residents</span>
+            </div>
+
+            <div className="barangay-folder-grid">
+              <button
+                type="button"
+                className={`barangay-folder ${selectedBarangay === "all" ? "active" : ""}`}
+                onClick={() => { setSelectedBarangay("all"); setSelectedPurok("all"); }}
+              >
+                <span className="barangay-folder-icon" aria-hidden="true" />
+                <span className="barangay-folder-copy">
+                  <strong>All Barangays</strong>
+                  <small>{stats.totalResidents} residents · {residentBarangayFolders.length} barangays</small>
+                </span>
+              </button>
+
+              {residentBarangayFolders.map((folder) => (
+                <button
+                  type="button"
+                  key={folder.key}
+                  className={`barangay-folder ${selectedBarangay === folder.key ? "active" : ""}`}
+                  onClick={() => { setSelectedBarangay(folder.key); setSelectedPurok("all"); }}
+                >
+                  <span className="barangay-folder-icon" aria-hidden="true" />
+                  <span className="barangay-folder-copy">
+                    <strong>{folder.name}</strong>
+                    <small>
+                      {folder.count} {folder.count === 1 ? "resident" : "residents"} · {folder.purokCount} {folder.purokCount === 1 ? "purok" : "puroks"}
+                    </small>
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {selectedBarangay !== "all" && selectedBarangayFolder && (
+              <div className="purok-folder-section">
+                <div className="purok-folder-header">
+                  <div>
+                    <span className="purok-eyebrow">PUROK BREAKDOWN</span>
+                    <h4>{selectedBarangayFolder.name}</h4>
+                    <p>Choose a Purok folder to display only residents registered in that area.</p>
+                  </div>
+                  <span className="purok-total">
+                    {selectedBarangayFolder.count} {selectedBarangayFolder.count === 1 ? "resident" : "residents"}
+                  </span>
+                </div>
+
+                <div className="purok-folder-grid">
+                  <button
+                    type="button"
+                    className={`purok-folder ${selectedPurok === "all" ? "active" : ""}`}
+                    onClick={() => setSelectedPurok("all")}
+                  >
+                    <span className="purok-folder-number">ALL</span>
+                    <span className="purok-folder-copy">
+                      <strong>All Puroks</strong>
+                      <small>{selectedBarangayFolder.count} residents</small>
+                    </span>
+                  </button>
+
+                  {residentPurokFolders.map((folder, index) => (
+                    <button
+                      type="button"
+                      key={folder.key}
+                      className={`purok-folder ${selectedPurok === folder.key ? "active" : ""}`}
+                      onClick={() => setSelectedPurok(folder.key)}
+                    >
+                      <span className="purok-folder-number">{index + 1}</span>
+                      <span className="purok-folder-copy">
+                        <strong>{folder.name}</strong>
+                        <small>{folder.count} {folder.count === 1 ? "resident" : "residents"}</small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
 
         {/* TABLE */}
         <div className="users-table-card">
@@ -680,7 +1076,7 @@ export default function UsersPage() {
                   <td colSpan={7}>
                     <div className="empty-state">
                       <strong>No users found</strong>
-                      <span>Try changing your search or selected tab.</span>
+                      <span>Try changing your search, Barangay, Purok, or selected tab.</span>
                     </div>
                   </td>
                 </tr>
@@ -766,42 +1162,363 @@ export default function UsersPage() {
           </table>
         </div>
 
-        {/* ADD DRIVER MODAL */}
-        {showModal && (
-          <div className="modal-backdrop">
-            <div className="modal-card">
-              <div className="modal-header">
+        {/* ADD DRIVER — SAME FULL-SCREEN WORKSPACE AS SCHEDULES / ROUTES */}
+        {showModal ? (
+          <ScheduleDialog
+            fullScreen
+            labelledBy="create-driver-title"
+            busy={isSaving}
+            onDismiss={requestCloseCreateDriver}
+          >
+            <header className={styles.dialogHeader}>
+              <div className={styles.dialogTitleGroup}>
+                <span className={styles.brandMark}>
+                  <ScheduleIcon name="users" size={22} />
+                </span>
                 <div>
-                  <h3>Create Driver Account</h3>
-                  <p>Add a new collection driver to the system.</p>
+                  <span className={styles.eyebrow}>MetroWaste · Driver management</span>
+                  <h2 id="create-driver-title" data-dialog-heading tabIndex={-1}>
+                    Create driver account
+                  </h2>
                 </div>
-
-                <button className="modal-close" onClick={() => { setShowModal(false); clearLicenseSelection(); }}>
-                  ×
-                </button>
               </div>
+              <button
+                type="button"
+                className={styles.iconButton}
+                aria-label="Close driver creator"
+                disabled={isSaving}
+                onClick={requestCloseCreateDriver}
+              >
+                <ScheduleIcon name="close" />
+              </button>
+            </header>
 
-              {formError && <div className="form-error full-error" role="alert">{formError}</div>}
+            <div className={styles.plannerLayout}>
+              <aside className={styles.plannerSidebar} aria-label="Driver creation steps">
+                <p className={styles.sidebarCaption}>Driver setup</p>
+                <ol className={styles.stepNav}>
+                  {DRIVER_STEPS.map((item, index) => (
+                    <li key={item.label}>
+                      <button
+                        type="button"
+                        className={styles.stepNavButton}
+                        aria-current={driverStep === index ? "step" : undefined}
+                        disabled={isSaving || index > highestDriverStep}
+                        onClick={() => {
+                          setFormError("");
+                          setDriverStep(index);
+                        }}
+                      >
+                        <span
+                          className={styles.stepNumber}
+                          data-complete={index < driverStep && driverCanAdvance[index]}
+                        >
+                          {index < driverStep && driverCanAdvance[index]
+                            ? <ScheduleIcon name="check" size={16} />
+                            : index + 1}
+                        </span>
+                        <span>
+                          <strong>{item.label}</strong>
+                          <small>{item.hint}</small>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+                <div className={styles.sidebarNote}>
+                  <ScheduleIcon name="info" size={18} />
+                  <p>
+                    Create the driver profile first, upload both sides of the Driver licence,
+                    then review the information before saving the account.
+                  </p>
+                </div>
+              </aside>
 
-              <DriverFields form={form} setForm={setForm} includePassword />
+              <div className={styles.plannerScroll} key={driverStep}>
+                <div className={styles.stepContent}>
+                  <div className={styles.stepTitle}>
+                    <span className={styles.stepCounter}>
+                      Step {driverStep + 1} of {DRIVER_STEPS.length}
+                    </span>
+                    <h2 tabIndex={-1}>
+                      {[
+                        "Who is the collection driver?",
+                        "What are the driver's licence details?",
+                        "Does the driver account look correct?",
+                      ][driverStep]}
+                    </h2>
+                    <p>
+                      {[
+                        "Enter the driver's identity, contact information, assigned vehicle, and temporary sign in password.",
+                        "Enter the licence details and upload clear images of both the front and back sides.",
+                        "Review the driver information and licence uploads before creating the account.",
+                      ][driverStep]}
+                    </p>
+                  </div>
 
-              <LicensePicker
-                preview={licensePreview}
-                hasStoredImage={false}
-                onChange={selectLicenseImage}
-              />
+                  {formError ? (
+                    <div className={styles.errorNotice} role="alert">
+                      <ScheduleIcon name="info" size={18} />
+                      {formError}
+                    </div>
+                  ) : null}
 
-              <div className="modal-actions">
-                <button className="cancel-btn" onClick={() => { setShowModal(false); clearLicenseSelection(); }} disabled={isSaving}>
-                  Cancel
-                </button>
-                <button className="primary-action" onClick={createDriver} disabled={isSaving}>
-                  {isSaving ? "Saving driver…" : "Save Driver"}
-                </button>
+                  <fieldset className={styles.formFields} disabled={isSaving}>
+                    <legend className={styles.srOnly}>{DRIVER_STEPS[driverStep].label}</legend>
+
+                    {driverStep === 0 ? <>
+                      <div className={styles.twoFields}>
+                        <label className={styles.field}>
+                          <span>Full name</span>
+                          <input
+                            value={form.name}
+                            onChange={(event) => setForm({ ...form, name: event.target.value })}
+                            placeholder="Enter driver name"
+                            autoComplete="name"
+                          />
+                          <small>Use the driver's complete name.</small>
+                        </label>
+                        <label className={styles.field}>
+                          <span>Email address</span>
+                          <input
+                            type="email"
+                            value={form.email}
+                            onChange={(event) => setForm({ ...form, email: event.target.value })}
+                            placeholder="driver@example.com"
+                            autoComplete="email"
+                          />
+                          <small>This email will be used for driver sign in.</small>
+                        </label>
+                      </div>
+
+                      <div className={styles.twoFields}>
+                        <label className={styles.field}>
+                          <span>Contact number</span>
+                          <input
+                            type="tel"
+                            value={form.phone}
+                            onChange={(event) => setForm({ ...form, phone: event.target.value })}
+                            placeholder="09XXXXXXXXX"
+                            autoComplete="tel"
+                          />
+                          <small>Enter the driver's active mobile number.</small>
+                        </label>
+                        <label className={styles.field}>
+                          <span>Assigned vehicle</span>
+                          <input
+                            value={form.truck}
+                            onChange={(event) => setForm({ ...form, truck: event.target.value })}
+                            placeholder="Truck 01 / plate number"
+                          />
+                          <small>Enter the assigned truck name or plate number.</small>
+                        </label>
+                      </div>
+
+                      <label className={styles.field}>
+                        <span>Password</span>
+                        <div className="driver-password-field">
+                          <input
+                            type={showCreatePassword ? "text" : "password"}
+                            value={form.password}
+                            onChange={(event) => setForm({ ...form, password: event.target.value })}
+                            placeholder="At least 6 characters"
+                            autoComplete="new-password"
+                          />
+                          <button
+                            type="button"
+                            className="driver-password-toggle"
+                            onClick={() => setShowCreatePassword((visible) => !visible)}
+                            aria-label={showCreatePassword ? "Hide password" : "Show password"}
+                          >
+                            {showCreatePassword ? "Hide" : "Show"}
+                          </button>
+                        </div>
+                        <small>
+                          Verify the password before saving. It will be shown once after account creation.
+                        </small>
+                      </label>
+
+                      <div className={styles.neutralNotice}>
+                        <ScheduleIcon name="info" size={20} />
+                        <p>The driver can use this account to sign in to the Driver App after creation.</p>
+                      </div>
+                    </> : null}
+
+                    {driverStep === 1 ? <>
+                      <div className={styles.twoFields}>
+                        <label className={styles.field}>
+                          <span>Licence number</span>
+                          <input
+                            value={form.licenseNumber}
+                            onChange={(event) => setForm({ ...form, licenseNumber: event.target.value })}
+                            placeholder="Enter licence number"
+                          />
+                          <small>Enter the number exactly as shown on the licence.</small>
+                        </label>
+                        <label className={styles.field}>
+                          <span>Licence expiration date</span>
+                          <input
+                            type="date"
+                            value={form.licenseExpirationDate}
+                            onChange={(event) => setForm({ ...form, licenseExpirationDate: event.target.value })}
+                          />
+                          <small>The licence must still be valid.</small>
+                        </label>
+                      </div>
+
+                      <div className="driver-create-license-grid">
+                        <label className="driver-create-file-card" data-ready={Boolean(licensePreview)}>
+                          <div className="driver-create-license-preview">
+                            {licensePreview
+                              ? <img src={licensePreview} alt="Front of driver's licence" />
+                              : <ScheduleIcon name="users" size={34} />}
+                          </div>
+                          <div className="driver-create-file-copy">
+                            <strong>Front of licence</strong>
+                            <span>Upload the front side with the driver's photo and licence details visible.</span>
+                            <em>{licenseFile?.name || "Choose front image"}</em>
+                          </div>
+                          <input
+                            className="driver-create-file-input"
+                            type="file"
+                            accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+                            onChange={(event) => selectLicenseImage(event.target.files?.[0] || null)}
+                          />
+                        </label>
+
+                        <label className="driver-create-file-card" data-ready={Boolean(licenseBackPreview)}>
+                          <div className="driver-create-license-preview">
+                            {licenseBackPreview
+                              ? <img src={licenseBackPreview} alt="Back of driver's licence" />
+                              : <ScheduleIcon name="users" size={34} />}
+                          </div>
+                          <div className="driver-create-file-copy">
+                            <strong>Back of licence</strong>
+                            <span>Upload the complete back side of the same driver's licence.</span>
+                            <em>{licenseBackFile?.name || "Choose back image"}</em>
+                          </div>
+                          <input
+                            className="driver-create-file-input"
+                            type="file"
+                            accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+                            onChange={(event) => selectLicenseBackImage(event.target.files?.[0] || null)}
+                          />
+                        </label>
+                      </div>
+
+                      <div className={styles.helpNotice}>
+                        <ScheduleIcon name="info" size={20} />
+                        <div>
+                          <strong>Image requirements</strong>
+                          <p>JPG, JPEG, or PNG only. Maximum file size is 5 MB for each side.</p>
+                        </div>
+                      </div>
+                    </> : null}
+
+                    {driverStep === 2 ? <>
+                      <div className={styles.reviewTitle}>
+                        <ScheduleIcon name="users" size={25} />
+                        <div>
+                          <strong>{form.name.trim() || "Unnamed driver"}</strong>
+                          <span>Collection driver account</span>
+                        </div>
+                      </div>
+
+                      <section className={styles.reviewSection}>
+                        <div className={styles.reviewHeading}>
+                          <h3>Driver and account details</h3>
+                          <button type="button" className={styles.textButton} onClick={() => setDriverStep(0)}>
+                            Change
+                          </button>
+                        </div>
+                        <dl className={styles.facts}>
+                          <div><dt>Full name</dt><dd>{form.name.trim() || "Not provided"}</dd></div>
+                          <div><dt>Email</dt><dd>{normalizedCreateEmail || "Not provided"}</dd></div>
+                          <div><dt>Contact number</dt><dd>{form.phone.trim() || "Not provided"}</dd></div>
+                          <div><dt>Assigned vehicle</dt><dd>{form.truck.trim() || "Not provided"}</dd></div>
+                          <div><dt>Password</dt><dd>{"•".repeat(Math.max(6, form.password.length))}</dd></div>
+                        </dl>
+                      </section>
+
+                      <section className={styles.reviewSection}>
+                        <div className={styles.reviewHeading}>
+                          <h3>Driver licence</h3>
+                          <button type="button" className={styles.textButton} onClick={() => setDriverStep(1)}>
+                            Change
+                          </button>
+                        </div>
+                        <dl className={styles.facts}>
+                          <div><dt>Licence number</dt><dd>{form.licenseNumber.trim() || "Not provided"}</dd></div>
+                          <div><dt>Expiration date</dt><dd>{formatLicenceDate(form.licenseExpirationDate)}</dd></div>
+                          <div><dt>Front image</dt><dd>{licenseFile?.name || "Not uploaded"}</dd></div>
+                          <div><dt>Back image</dt><dd>{licenseBackFile?.name || "Not uploaded"}</dd></div>
+                        </dl>
+                        <div className="driver-review-license-grid">
+                          <div>{licensePreview ? <img src={licensePreview} alt="Front licence review" /> : null}<span>Front</span></div>
+                          <div>{licenseBackPreview ? <img src={licenseBackPreview} alt="Back licence review" /> : null}<span>Back</span></div>
+                        </div>
+                      </section>
+
+                      <div className={styles.neutralNotice}>
+                        <ScheduleIcon name="info" size={20} />
+                        <p>
+                          Confirming creates the Firebase Authentication account and stores the driver profile and both licence images.
+                        </p>
+                      </div>
+
+                      {!driverAllStepsValid ? (
+                        <div className={styles.errorNotice} role="alert">
+                          An earlier entry changed. Review the previous steps before saving.
+                        </div>
+                      ) : null}
+                    </> : null}
+                  </fieldset>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+
+            <footer className={styles.plannerFooter}>
+              <span className={styles.footerProgress}>
+                Step {driverStep + 1} of {DRIVER_STEPS.length} · {DRIVER_STEPS[driverStep].label}
+              </span>
+              <div className={styles.footerActions}>
+                <button
+                  type="button"
+                  className={styles.secondaryButton}
+                  disabled={isSaving}
+                  onClick={() => driverStep === 0
+                    ? requestCloseCreateDriver()
+                    : setDriverStep((current) => current - 1)}
+                >
+                  {driverStep > 0 ? <ScheduleIcon name="arrowLeft" size={17} /> : null}
+                  {driverStep === 0 ? "Cancel" : "Back"}
+                </button>
+
+                {driverStep < DRIVER_STEPS.length - 1 ? (
+                  <button
+                    type="button"
+                    className={styles.primaryButton}
+                    disabled={isSaving}
+                    onClick={nextDriverStep}
+                  >
+                    Continue
+                    <ScheduleIcon name="arrowRight" size={17} />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className={styles.primaryButton}
+                    disabled={isSaving || !driverAllStepsValid}
+                    onClick={createDriver}
+                  >
+                    {isSaving ? <span className={styles.spinner} aria-hidden="true" /> : <ScheduleIcon name="check" size={17} />}
+                    {isSaving ? "Saving driver…" : "Confirm & create"}
+                  </button>
+                )}
+              </div>
+            </footer>
+          </ScheduleDialog>
+        ) : null}
 
         {createdCredential && (
           <div
@@ -932,9 +1649,9 @@ export default function UsersPage() {
           </div>
         )}
 
-        {profileDriver && (
+        {profileDriver && typeof document !== "undefined" ? createPortal((
           <div
-            className="modal-backdrop"
+            className="modal-backdrop driver-profile-backdrop"
             role="presentation"
             onMouseDown={(event) => {
               if (event.target === event.currentTarget) {
@@ -1003,7 +1720,7 @@ export default function UsersPage() {
                   onClick={() => setProfileTab("licence")}
                 >
                   Driver&apos;s licence
-                  {profileLicenseUrl ? <span className="available-dot" aria-label="Image available" /> : null}
+                  {profileLicenseUrl || profileLicenseBackUrl ? <span className="available-dot" aria-label="Image available" /> : null}
                 </button>
               </div>
 
@@ -1222,35 +1939,69 @@ export default function UsersPage() {
                     </div>
                   </div>
 
-                  <div className="licence-view professional">
-                    {isLicenseLoading ? (
-                      <div className="licence-placeholder">
-                        <span className="mini-spinner" />
-                        <strong>Loading secure image</strong>
-                        <span>Please wait while MetroWaste retrieves the licence.</span>
+                  <div className="licence-sides-grid">
+                    <section className="licence-side-card" aria-label="Front of driver's licence">
+                      <div className="licence-side-title">
+                        <span>Front</span>
+                        <strong>Front of licence</strong>
                       </div>
-                    ) : profileLicenseUrl ? (
-                      <img
-                        src={profileLicenseUrl}
-                        alt={`${profileDriver.name || "Driver"} licence`}
-                      />
-                    ) : (
-                      <div className="licence-placeholder">
-                        <span className="document-icon" aria-hidden="true">▧</span>
-                        <strong>No licence image available</strong>
-                        <span>
-                          {profileError ||
-                            "Upload or replace the licence image from Update Profile."}
-                        </span>
-                      </div>
-                    )}
-                  </div>
 
-                  {profileError && profileLicenseUrl ? (
-                    <div className="profile-inline-error" role="alert">
-                      {profileError}
-                    </div>
-                  ) : null}
+                      <div className="licence-view professional">
+                        {isLicenseLoading ? (
+                          <div className="licence-placeholder">
+                            <span className="mini-spinner" />
+                            <strong>Loading front image</strong>
+                            <span>Please wait while MetroWaste retrieves the licence.</span>
+                          </div>
+                        ) : profileLicenseUrl ? (
+                          <img
+                            src={profileLicenseUrl}
+                            alt={`${profileDriver.name || "Driver"} licence front`}
+                          />
+                        ) : (
+                          <div className="licence-placeholder">
+                            <span className="document-icon" aria-hidden="true">▧</span>
+                            <strong>No front image available</strong>
+                            <span>
+                              {profileLicenseErrors.front ||
+                                "Upload the front licence image from Update Profile."}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </section>
+
+                    <section className="licence-side-card" aria-label="Back of driver's licence">
+                      <div className="licence-side-title">
+                        <span>Back</span>
+                        <strong>Back of licence</strong>
+                      </div>
+
+                      <div className="licence-view professional">
+                        {isLicenseLoading ? (
+                          <div className="licence-placeholder">
+                            <span className="mini-spinner" />
+                            <strong>Loading back image</strong>
+                            <span>Please wait while MetroWaste retrieves the licence.</span>
+                          </div>
+                        ) : profileLicenseBackUrl ? (
+                          <img
+                            src={profileLicenseBackUrl}
+                            alt={`${profileDriver.name || "Driver"} licence back`}
+                          />
+                        ) : (
+                          <div className="licence-placeholder">
+                            <span className="document-icon" aria-hidden="true">▧</span>
+                            <strong>No back image available</strong>
+                            <span>
+                              {profileLicenseErrors.back ||
+                                "Upload the back licence image from Update Profile."}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </section>
+                  </div>
 
                   <div className="licence-summary-grid">
                     <ProfileField label="Driver" value={profileDriver.name} />
@@ -1283,7 +2034,7 @@ export default function UsersPage() {
               </div>
             </section>
           </div>
-        )}
+        ), document.body) : null}
 
       </div>
 
@@ -1459,6 +2210,242 @@ export default function UsersPage() {
         .users-tabs button.active span {
           background: #bbf7d0;
           color: #065f46;
+        }
+
+        .barangay-folders {
+          background: #ffffff;
+          border: 1px solid #e5e7eb;
+          border-radius: 22px;
+          padding: 18px;
+          box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
+        }
+
+        .barangay-folders-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 14px;
+          margin-bottom: 14px;
+        }
+
+        .barangay-folders-header h3 {
+          margin: 0;
+          color: #0f172a;
+          font-size: 17px;
+        }
+
+        .barangay-folders-header p {
+          margin: 4px 0 0;
+          color: #64748b;
+          font-size: 13px;
+        }
+
+        .barangay-folder-total {
+          flex: 0 0 auto;
+          border-radius: 999px;
+          background: #ecfdf5;
+          color: #047857;
+          padding: 7px 10px;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .barangay-folder-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+          gap: 10px;
+        }
+
+        .barangay-folder {
+          min-width: 0;
+          border: 1px solid #e2e8f0;
+          border-radius: 16px;
+          background: #f8fafc;
+          padding: 13px 14px;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          text-align: left;
+          cursor: pointer;
+          transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+        }
+
+        .barangay-folder:hover {
+          border-color: #86efac;
+          background: #f0fdf4;
+        }
+
+        .barangay-folder.active {
+          border-color: #22c55e;
+          background: #ecfdf5;
+          box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.10);
+        }
+
+        .barangay-folder-icon {
+          position: relative;
+          width: 36px;
+          height: 28px;
+          flex: 0 0 36px;
+          border-radius: 6px;
+          background: #dbeafe;
+          border: 1px solid #bfdbfe;
+        }
+
+        .barangay-folder-icon::before {
+          content: "";
+          position: absolute;
+          left: 4px;
+          top: -6px;
+          width: 16px;
+          height: 8px;
+          border-radius: 5px 5px 0 0;
+          background: #bfdbfe;
+          border: 1px solid #93c5fd;
+          border-bottom: 0;
+        }
+
+        .barangay-folder.active .barangay-folder-icon {
+          background: #bbf7d0;
+          border-color: #86efac;
+        }
+
+        .barangay-folder.active .barangay-folder-icon::before {
+          background: #86efac;
+          border-color: #4ade80;
+        }
+
+        .barangay-folder-copy {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
+        }
+
+        .barangay-folder-copy strong {
+          overflow: hidden;
+          color: #0f172a;
+          font-size: 14px;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .barangay-folder-copy small {
+          color: #64748b;
+          font-size: 12px;
+        }
+
+        .purok-folder-section {
+          margin-top: 16px;
+          border-top: 1px solid #e5e7eb;
+          padding-top: 16px;
+        }
+
+        .purok-folder-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 14px;
+          margin-bottom: 12px;
+        }
+
+        .purok-eyebrow {
+          display: block;
+          margin-bottom: 3px;
+          color: #059669;
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: 0.08em;
+        }
+
+        .purok-folder-header h4 {
+          margin: 0;
+          color: #0f172a;
+          font-size: 15px;
+        }
+
+        .purok-folder-header p {
+          margin: 4px 0 0;
+          color: #64748b;
+          font-size: 12px;
+        }
+
+        .purok-total {
+          flex: 0 0 auto;
+          border-radius: 999px;
+          background: #f0fdf4;
+          color: #047857;
+          padding: 6px 9px;
+          font-size: 11px;
+          font-weight: 800;
+        }
+
+        .purok-folder-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+          gap: 9px;
+        }
+
+        .purok-folder {
+          min-width: 0;
+          border: 1px solid #e2e8f0;
+          border-radius: 14px;
+          background: #ffffff;
+          padding: 11px 12px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          text-align: left;
+          cursor: pointer;
+          transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+        }
+
+        .purok-folder:hover {
+          border-color: #86efac;
+          background: #f7fef9;
+        }
+
+        .purok-folder.active {
+          border-color: #22c55e;
+          background: #ecfdf5;
+          box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.08);
+        }
+
+        .purok-folder-number {
+          width: 34px;
+          height: 34px;
+          flex: 0 0 34px;
+          display: grid;
+          place-items: center;
+          border-radius: 10px;
+          background: #eff6ff;
+          color: #2563eb;
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .purok-folder.active .purok-folder-number {
+          background: #bbf7d0;
+          color: #047857;
+        }
+
+        .purok-folder-copy {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
+        }
+
+        .purok-folder-copy strong {
+          overflow: hidden;
+          color: #0f172a;
+          font-size: 13px;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .purok-folder-copy small {
+          color: #64748b;
+          font-size: 11px;
         }
 
         .users-table-card {
@@ -1717,7 +2704,7 @@ export default function UsersPage() {
           gap: 14px;
         }
 
-        label,
+        .modal-card label,
         .single-label {
           display: flex;
           flex-direction: column;
@@ -1727,8 +2714,8 @@ export default function UsersPage() {
           font-weight: 800;
         }
 
-        label input,
-        label select,
+        .modal-card label input,
+        .modal-card label select,
         .single-label input {
           height: 44px;
           border: 1px solid #e5e7eb;
@@ -1739,13 +2726,13 @@ export default function UsersPage() {
           background: #f8fafc;
         }
 
-        label select {
+        .modal-card label select {
           height: 44px;
           padding: 0 12px;
         }
 
-        label input:focus,
-        label select:focus,
+        .modal-card label input:focus,
+        .modal-card label select:focus,
         .single-label input:focus {
           border-color: #10b981;
           background: #ffffff;
@@ -2012,6 +2999,168 @@ export default function UsersPage() {
         }
 
         .file-button input { position: absolute; opacity: 0; pointer-events: none; }
+
+        .driver-password-field {
+          position: relative;
+          min-width: 0;
+        }
+
+        .driver-password-field > input {
+          padding-right: 74px !important;
+        }
+
+        .driver-password-toggle {
+          position: absolute;
+          right: 6px;
+          top: 50%;
+          transform: translateY(-50%);
+          min-height: 34px;
+          padding: 5px 10px;
+          border: 0;
+          border-radius: 6px;
+          background: #eef5f0;
+          color: #0b6a42;
+          font-size: 12px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+
+        .driver-create-license-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 16px;
+          min-width: 0;
+        }
+
+        .driver-create-file-card {
+          min-width: 0;
+          display: grid;
+          grid-template-columns: minmax(150px, 0.85fr) minmax(0, 1fr);
+          gap: 16px;
+          align-items: center;
+          padding: 16px;
+          border: 1px solid #dce5df;
+          border-radius: 10px;
+          background: #ffffff;
+          cursor: pointer;
+          transition: border-color .15s, background-color .15s, box-shadow .15s;
+        }
+
+        .driver-create-file-card:hover {
+          border-color: #9fbfaa;
+          background: #fcfefc;
+        }
+
+        .driver-create-file-card[data-ready="true"] {
+          border-color: #399768;
+          background: #f1faf5;
+          box-shadow: inset 0 0 0 1px #0b7a4b0b;
+        }
+
+        .driver-create-license-preview {
+          min-width: 0;
+          height: 145px;
+          display: grid;
+          place-items: center;
+          overflow: hidden;
+          border: 1px dashed #b9c9bf;
+          border-radius: 8px;
+          background: #f7f9f8;
+          color: #739080;
+        }
+
+        .driver-create-license-preview img {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          background: #fff;
+        }
+
+        .driver-create-file-copy {
+          min-width: 0;
+          display: grid;
+          gap: 7px;
+          align-content: center;
+        }
+
+        .driver-create-file-copy strong {
+          color: #29483a;
+          font-size: 14px;
+          font-weight: 600;
+        }
+
+        .driver-create-file-copy span {
+          color: #607068;
+          font-size: 12px;
+          line-height: 1.6;
+        }
+
+        .driver-create-file-copy em {
+          width: fit-content;
+          max-width: 100%;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          padding: 7px 10px;
+          border: 1px solid #cfe0d5;
+          border-radius: 7px;
+          background: #eef7f1;
+          color: #0b6a42;
+          font-size: 11px;
+          font-style: normal;
+          font-weight: 600;
+        }
+
+        .driver-create-file-input {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          overflow: hidden;
+          opacity: 0;
+          pointer-events: none;
+        }
+
+        .driver-review-license-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 14px;
+          margin-top: 18px;
+        }
+
+        .driver-review-license-grid > div {
+          min-width: 0;
+          display: grid;
+          gap: 7px;
+        }
+
+        .driver-review-license-grid img {
+          width: 100%;
+          height: 170px;
+          object-fit: contain;
+          border: 1px solid #dfe6e2;
+          border-radius: 9px;
+          background: #f7f9f8;
+        }
+
+        .driver-review-license-grid span {
+          color: #607068;
+          font-size: 11px;
+          font-weight: 600;
+          text-align: center;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
+        @media (max-width: 760px) {
+          .driver-create-license-grid,
+          .driver-review-license-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .driver-create-file-card {
+            grid-template-columns: 1fr;
+          }
+        }
 
         .profile-modal {
           width: min(1380px, calc(100vw - 24px));
@@ -2398,6 +3547,49 @@ export default function UsersPage() {
           color: #065f46;
           font-size: 13px;
           overflow-wrap: anywhere;
+        }
+
+        .licence-sides-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 16px;
+        }
+
+        .licence-side-card {
+          min-width: 0;
+          overflow: hidden;
+          border: 1px solid #dbe4df;
+          border-radius: 18px;
+          background: #ffffff;
+        }
+
+        .licence-side-title {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 12px 14px;
+          border-bottom: 1px solid #e5ece8;
+          background: #f8faf9;
+        }
+
+        .licence-side-title span {
+          color: #047857;
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: 0.07em;
+          text-transform: uppercase;
+        }
+
+        .licence-side-title strong {
+          color: #334155;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .licence-side-card .licence-view {
+          border: 0;
+          border-radius: 0;
         }
 
         .licence-view {
@@ -2871,6 +4063,22 @@ export default function UsersPage() {
             grid-template-columns: 1fr;
           }
 
+          .barangay-folders-header {
+            flex-direction: column;
+          }
+
+          .barangay-folder-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .purok-folder-header {
+            flex-direction: column;
+          }
+
+          .purok-folder-grid {
+            grid-template-columns: 1fr;
+          }
+
           .users-tabs {
             width: 100%;
             overflow-x: auto;
@@ -2891,7 +4099,8 @@ export default function UsersPage() {
           .license-picker,
           .profile-overview-layout,
           .profile-detail-grid,
-          .licence-summary-grid {
+          .licence-summary-grid,
+          .licence-sides-grid {
             grid-template-columns: 1fr;
           }
 
@@ -2997,6 +4206,114 @@ export default function UsersPage() {
           }
         }
 
+        /* DRIVER PROFILE LAYOUT STABILIZER
+           Keeps the profile independent from DashboardShell and prevents
+           global flex/grid rules from stretching the hero and tabs. */
+        .driver-profile-backdrop {
+          position: fixed !important;
+          inset: 0 !important;
+          z-index: 2147483000 !important;
+          display: block !important;
+          overflow: hidden !important;
+          padding: 0 !important;
+          background: rgba(15, 23, 42, 0.52) !important;
+          backdrop-filter: blur(6px);
+        }
+
+        .driver-profile-backdrop > .modal-card.profile-modal {
+          position: fixed !important;
+          inset: 8px !important;
+          display: block !important;
+          width: auto !important;
+          max-width: none !important;
+          height: auto !important;
+          min-height: 0 !important;
+          max-height: none !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          overflow-x: hidden !important;
+          overflow-y: auto !important;
+          border-radius: 20px !important;
+          background: #f8fafc !important;
+        }
+
+        .driver-profile-backdrop .profile-hero {
+          position: relative !important;
+          display: grid !important;
+          grid-template-columns: auto minmax(0, 1fr) auto !important;
+          align-items: center !important;
+          min-height: 0 !important;
+          height: auto !important;
+          padding: 20px 26px !important;
+          flex: none !important;
+        }
+
+        .driver-profile-backdrop .profile-tabs {
+          display: flex !important;
+          flex: none !important;
+          align-items: flex-end !important;
+          justify-content: flex-start !important;
+          gap: 6px !important;
+          width: 100% !important;
+          min-height: 56px !important;
+          height: auto !important;
+          padding: 12px 26px 0 !important;
+          overflow-x: auto !important;
+          overflow-y: hidden !important;
+          background: #ffffff !important;
+          border-bottom: 1px solid #edf2ef !important;
+        }
+
+        .driver-profile-backdrop .profile-tabs button {
+          display: inline-flex !important;
+          flex: 0 0 auto !important;
+          align-items: center !important;
+          align-self: auto !important;
+          justify-content: center !important;
+          width: auto !important;
+          min-width: 0 !important;
+          min-height: 44px !important;
+          height: 44px !important;
+          margin: 0 !important;
+          padding: 0 15px !important;
+        }
+
+        .driver-profile-backdrop .profile-overview-layout,
+        .driver-profile-backdrop .professional-driver-profile,
+        .driver-profile-backdrop .licence-section {
+          min-height: 0 !important;
+          height: auto !important;
+          flex: none !important;
+        }
+
+        .driver-profile-backdrop .profile-modal-actions {
+          min-height: 0 !important;
+          height: auto !important;
+          flex: none !important;
+        }
+
+        @media (max-width: 920px) {
+          .driver-profile-backdrop > .modal-card.profile-modal {
+            inset: 4px !important;
+            border-radius: 14px !important;
+          }
+
+          .driver-profile-backdrop .profile-hero {
+            grid-template-columns: auto minmax(0, 1fr) !important;
+            padding: 18px !important;
+          }
+
+          .driver-profile-backdrop .profile-tabs {
+            padding-inline: 16px !important;
+          }
+
+          .driver-profile-backdrop .profile-close {
+            position: absolute !important;
+            top: 14px !important;
+            right: 14px !important;
+          }
+        }
+
       `}</style>
     </DashboardShell>
   );
@@ -3010,7 +4327,7 @@ function DriverFields({
   form,
   setForm,
   includePassword = false,
-  passwordLabel = "Temporary Password",
+  passwordLabel = "Password",
 }: {
   form: DriverFormState;
   setForm: (value: DriverFormState) => void;
@@ -3185,10 +4502,15 @@ function ProfileField({ label, value }: { label: string; value?: string }) {
   return <div className="profile-field"><small>{label}</small><strong>{value || "Not provided"}</strong></div>;
 }
 
-function buildDriverFormData(form: DriverFormState, licenseFile: File | null) {
+function buildDriverFormData(
+  form: DriverFormState,
+  licenseFile: File | null,
+  licenseBackFile?: File | null,
+) {
   const body = new FormData();
   Object.entries(form).forEach(([key, value]) => body.set(key, value));
   if (licenseFile) body.set("licenseImage", licenseFile, licenseFile.name);
+  if (licenseBackFile) body.set("licenseImageBack", licenseBackFile, licenseBackFile.name);
   return body;
 }
 

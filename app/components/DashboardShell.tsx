@@ -42,6 +42,111 @@ function normalizeProfileImage(value?: string): string {
   return image;
 }
 
+
+type BrowserAudioWindow = Window &
+  typeof globalThis & {
+    webkitAudioContext?: typeof AudioContext;
+  };
+
+type AdminSoundTone = "notification" | "message" | "urgent";
+
+function createAdminAudioContext(): AudioContext | null {
+  if (typeof window === "undefined") return null;
+
+  const AudioContextClass =
+    window.AudioContext ||
+    (window as BrowserAudioWindow).webkitAudioContext;
+
+  if (!AudioContextClass) return null;
+
+  try {
+    return new AudioContextClass();
+  } catch {
+    return null;
+  }
+}
+
+function playAdminTone(
+  context: AudioContext,
+  tone: AdminSoundTone,
+) {
+  if (context.state !== "running") return;
+
+  const now = context.currentTime;
+  const master = context.createGain();
+
+  master.gain.setValueAtTime(0.0001, now);
+  master.gain.exponentialRampToValueAtTime(0.14, now + 0.015);
+  master.gain.exponentialRampToValueAtTime(0.0001, now + 0.52);
+  master.connect(context.destination);
+
+  const notes =
+    tone === "urgent"
+      ? [
+          { frequency: 740, start: 0, duration: 0.13 },
+          { frequency: 930, start: 0.17, duration: 0.13 },
+          { frequency: 1110, start: 0.34, duration: 0.14 },
+        ]
+      : tone === "message"
+        ? [
+            { frequency: 660, start: 0, duration: 0.13 },
+            { frequency: 880, start: 0.16, duration: 0.18 },
+          ]
+        : [
+            { frequency: 720, start: 0, duration: 0.12 },
+            { frequency: 960, start: 0.15, duration: 0.20 },
+          ];
+
+  notes.forEach(({ frequency, start, duration }) => {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(frequency, now + start);
+
+    gain.gain.setValueAtTime(0.0001, now + start);
+    gain.gain.exponentialRampToValueAtTime(
+      0.75,
+      now + start + 0.012,
+    );
+    gain.gain.exponentialRampToValueAtTime(
+      0.0001,
+      now + start + duration,
+    );
+
+    oscillator.connect(gain);
+    gain.connect(master);
+
+    oscillator.start(now + start);
+    oscillator.stop(now + start + duration + 0.02);
+  });
+}
+
+function isUrgentAdminNotification(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") return false;
+
+  const item = raw as Record<string, unknown>;
+  const text = [
+    item.type,
+    item.severity,
+    item.priority,
+    item.title,
+    item.message,
+    item.source,
+  ]
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+
+  return (
+    text.includes("urgent") ||
+    text.includes("critical") ||
+    text.includes("truck full") ||
+    text.includes("missed") ||
+    text.includes("emergency") ||
+    text.includes("alert")
+  );
+}
+
 type SidebarLink = {
   href: string;
   label: string;
@@ -133,6 +238,7 @@ const pageGuidance = [
   { path: "/service-areas", title: "Add service coverage", detail: "Select one or many official Barangays and Puroks. No map work is required here." },
   { path: "/routes", title: "Create the route assignment", detail: "Choose the Barangays and Puroks, then assign the driver and truck. Barangay pins are attached automatically." },
   { path: "/drivers", title: "Manage people and access", detail: "Create or review driver accounts here before using them in route assignments." },
+  { path: "/attendance", title: "Review driver attendance", detail: "Open each driver folder to verify Time In, Time Out, camera selfies, GPS evidence, and printable attendance records." },
   { path: "/schedules", title: "Set the collection date and time", detail: "Match every schedule to the correct service area so residents receive accurate reminders." },
   { path: "/waste-points", title: "Maintain official collection locations", detail: "Check the location name and map position carefully before publishing it to residents." },
   { path: "/content-management", title: "Publish resident information", detail: "Preview every announcement or education item before saving it for the mobile app." },
@@ -336,6 +442,12 @@ const IconMessages = () => (
 );
 
 
+const IconAttendance = () => (
+  <svg viewBox="0 0 24 24" className="admin-svg-icon">
+    <path d="M9 3h6l1.2 2H20a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h3.8L9 3Zm3 5a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 2a3 3 0 1 1 0 6 3 3 0 0 1 0-6Z" />
+  </svg>
+);
+
 const IconUsers = () => (
   <svg viewBox="0 0 24 24" className="admin-svg-icon">
     <path d="M9 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-3.3 0-6 1.7-6 3.8V20h12v-2.2C15 15.7 12.3 14 9 14Zm7.5-2a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm0 2c-.7 0-1.3.1-1.9.2 1.5.9 2.4 2.1 2.4 3.6V20h5v-2.2c0-2.1-2.5-3.8-5.5-3.8Z" />
@@ -392,6 +504,13 @@ const links: SidebarLink[] = [
     help: "Monitor active drivers and truck locations.",
     group: "DAILY OPERATIONS",
     icon: <IconMap />,
+  },
+  {
+    href: "/attendance",
+    label: "Driver Attendance",
+    help: "Verify Time In, Time Out, selfies, GPS evidence, and printable records.",
+    group: "DAILY OPERATIONS",
+    icon: <IconAttendance />,
   },
   {
     href: "/routes",
@@ -529,6 +648,66 @@ export function DashboardShell({
   const logoutCancelButtonRef = useRef<HTMLButtonElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
+  /*
+   * Admin Web notification sound is browser-only.
+   * It does not modify FCM, Resident Android, Driver Android, notification
+   * targeting, Firebase paths, or notification records.
+   */
+  const adminAudioContextRef = useRef<AudioContext | null>(null);
+  const adminAudioUnlockedRef = useRef(false);
+  const pendingAdminSoundRef = useRef<AdminSoundTone | null>(null);
+  const notificationBaselineRef = useRef<Set<string> | null>(null);
+  const lastDriverMessageUnreadRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    /*
+     * Modern browsers block audio until the user interacts with the page.
+     * Unlock the AudioContext on the first click/tap/key press. If a new
+     * notification arrived before that interaction, play one pending alert
+     * immediately after audio becomes available.
+     */
+    const unlockAdminAudio = () => {
+      let context = adminAudioContextRef.current;
+
+      if (!context) {
+        context = createAdminAudioContext();
+        adminAudioContextRef.current = context;
+      }
+
+      if (!context) return;
+
+      const finishUnlock = () => {
+        adminAudioUnlockedRef.current = context?.state === "running";
+
+        const pendingTone = pendingAdminSoundRef.current;
+        if (
+          adminAudioUnlockedRef.current &&
+          pendingTone &&
+          context
+        ) {
+          pendingAdminSoundRef.current = null;
+          playAdminTone(context, pendingTone);
+        }
+      };
+
+      if (context.state === "suspended") {
+        void context.resume().then(finishUnlock).catch(() => undefined);
+      } else {
+        finishUnlock();
+      }
+    };
+
+    window.addEventListener("pointerdown", unlockAdminAudio, {
+      passive: true,
+    });
+    window.addEventListener("keydown", unlockAdminAudio);
+
+    return () => {
+      window.removeEventListener("pointerdown", unlockAdminAudio);
+      window.removeEventListener("keydown", unlockAdminAudio);
+    };
+  }, []);
+
   useEffect(() => {
     const unsubscribe = subscribeOfflineState((state) => {
       setConnectionState(state);
@@ -553,13 +732,60 @@ export function DashboardShell({
 
   useEffect(() => {
     const unsub = onValue(ref(db, "notifications"), (snap) => {
-      const val = snap.val() || {};
-      setNotifCount(
-        Object.values(val).filter(
-          (item) => !item || typeof item !== "object" ||
-            (item as Record<string, unknown>).adminVisible !== false,
-        ).length,
+      const val =
+        snap.val() && typeof snap.val() === "object"
+          ? (snap.val() as Record<string, unknown>)
+          : {};
+
+      const visibleEntries = Object.entries(val).filter(
+        ([, item]) =>
+          !item ||
+          typeof item !== "object" ||
+          (item as Record<string, unknown>).adminVisible !== false,
       );
+
+      setNotifCount(visibleEntries.length);
+
+      const currentIds = new Set(visibleEntries.map(([id]) => id));
+      const previousIds = notificationBaselineRef.current;
+
+      /*
+       * First snapshot is only the baseline. This prevents dozens of historical
+       * notification sounds every time Admin opens/reloads the website.
+       */
+      if (previousIds === null) {
+        notificationBaselineRef.current = currentIds;
+        return;
+      }
+
+      const newEntries = visibleEntries.filter(
+        ([id]) => !previousIds.has(id),
+      );
+
+      notificationBaselineRef.current = currentIds;
+
+      if (newEntries.length === 0) return;
+
+      const tone: AdminSoundTone = newEntries.some(([, item]) =>
+        isUrgentAdminNotification(item),
+      )
+        ? "urgent"
+        : "notification";
+
+      const context = adminAudioContextRef.current;
+
+      if (
+        adminAudioUnlockedRef.current &&
+        context?.state === "running"
+      ) {
+        playAdminTone(context, tone);
+      } else {
+        /*
+         * Audio has not been unlocked by a browser interaction yet.
+         * Remember one alert and play it after the next click/tap/key press.
+         */
+        pendingAdminSoundRef.current = tone;
+      }
     });
 
     return () => unsub();
@@ -570,12 +796,41 @@ export function DashboardShell({
       const val = snap.val() || {};
       const unread = Object.values(val).reduce<number>((sum, raw) => {
         if (!raw || typeof raw !== "object") return sum;
+
         const count = Number(
           (raw as Record<string, unknown>).unreadForAdmin || 0,
         );
-        return sum + (Number.isFinite(count) && count > 0 ? count : 0);
+
+        return (
+          sum +
+          (Number.isFinite(count) && count > 0 ? count : 0)
+        );
       }, 0);
+
       setDriverMessageUnreadCount(unread);
+
+      const previousUnread = lastDriverMessageUnreadRef.current;
+
+      if (previousUnread === null) {
+        lastDriverMessageUnreadRef.current = unread;
+        return;
+      }
+
+      const hasNewMessage = unread > previousUnread;
+      lastDriverMessageUnreadRef.current = unread;
+
+      if (!hasNewMessage) return;
+
+      const context = adminAudioContextRef.current;
+
+      if (
+        adminAudioUnlockedRef.current &&
+        context?.state === "running"
+      ) {
+        playAdminTone(context, "message");
+      } else {
+        pendingAdminSoundRef.current = "message";
+      }
     });
 
     return () => unsub();

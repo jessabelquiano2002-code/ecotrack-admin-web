@@ -56,6 +56,23 @@ type CollectionReport = {
   durationSeconds?: number;
 };
 
+
+type RouteRecord = {
+  id: string;
+  routeName?: string;
+  barangay?: unknown;
+  barangays?: unknown;
+  puroks?: unknown;
+};
+
+type ScheduleRecord = {
+  id: string;
+  routeId?: string;
+  assignedRouteId?: string;
+  routeName?: string;
+  title?: string;
+};
+
 function str(value: unknown): string {
   if (typeof value === "string") return value.trim();
   if (typeof value === "number") return String(value);
@@ -131,6 +148,8 @@ function isFullTruck(report: CollectionReport): boolean {
 export default function DriverActivityRequestsPage() {
   const [requests, setRequests] = useState<ActivityRequest[]>([]);
   const [reports, setReports] = useState<CollectionReport[]>([]);
+  const [routes, setRoutes] = useState<Record<string, RouteRecord>>({});
+  const [schedules, setSchedules] = useState<Record<string, ScheduleRecord>>({});
   const [busyRequestId, setBusyRequestId] = useState("");
   const [filter, setFilter] = useState<"all" | "pending" | "sent">("pending");
   const [search, setSearch] = useState("");
@@ -157,6 +176,31 @@ export default function DriverActivityRequestsPage() {
         ...(raw as Record<string, unknown>),
       })) as CollectionReport[];
       setReports(list);
+    });
+    return () => unsubscribe();
+  }, []);
+
+
+  useEffect(() => {
+    const unsubscribe = onValue(ref(db, "routes"), (snapshot) => {
+      const value = (snapshot.val() || {}) as Record<string, Record<string, unknown>>;
+      const mapped: Record<string, RouteRecord> = {};
+      Object.entries(value).forEach(([id, raw]) => {
+        mapped[id] = { id, ...raw } as RouteRecord;
+      });
+      setRoutes(mapped);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onValue(ref(db, "schedules"), (snapshot) => {
+      const value = (snapshot.val() || {}) as Record<string, Record<string, unknown>>;
+      const mapped: Record<string, ScheduleRecord> = {};
+      Object.entries(value).forEach(([id, raw]) => {
+        mapped[id] = { id, ...raw } as ScheduleRecord;
+      });
+      setSchedules(mapped);
     });
     return () => unsubscribe();
   }, []);
@@ -188,6 +232,36 @@ export default function DriverActivityRequestsPage() {
         return timestamp >= from && timestamp <= to;
       })
       .sort((a, b) => collectionTimestamp(b) - collectionTimestamp(a));
+  }
+
+
+  function resolveActivityRoute(report: CollectionReport) {
+    const scheduleId = str(report.scheduleId);
+    const schedule = scheduleId ? schedules[scheduleId] : undefined;
+
+    const routeId =
+      str(report.routeId) ||
+      str(schedule?.routeId) ||
+      str(schedule?.assignedRouteId);
+
+    const route = routeId ? routes[routeId] : undefined;
+
+    // The route registry is authoritative. Collection-report names may be
+    // stale after an Admin edit, so resolve the saved routeId back to /routes.
+    const routeName =
+      str(route?.routeName) ||
+      str(report.routeName) ||
+      str(schedule?.routeName) ||
+      str(report.scheduleName) ||
+      str(schedule?.title) ||
+      "Collection route";
+
+    return {
+      routeId,
+      routeName,
+      routeBarangays: stringList(route?.barangays ?? route?.barangay),
+      routePuroks: stringList(route?.puroks),
+    };
   }
 
   async function sendActivityReport(request: ActivityRequest) {
@@ -230,6 +304,7 @@ export default function DriverActivityRequestsPage() {
         matched.map((item) => {
           const scheduleId = str(item.scheduleId);
           const sessionId = item.reportId;
+          const resolvedRoute = resolveActivityRoute(item);
 
           return [
             item.reportId,
@@ -237,13 +312,15 @@ export default function DriverActivityRequestsPage() {
               reportId: item.reportId,
               sessionId,
               scheduleId,
-              routeId: item.routeId || "",
+              routeId: resolvedRoute.routeId,
               mapSource: "realtime_database",
               mapPath:
                 scheduleId && sessionId
                   ? `gps_route_history/${scheduleId}/${sessionId}/points`
                   : "",
-              routeName: item.routeName || item.scheduleName || "Collection route",
+              routeName: resolvedRoute.routeName,
+              routeBarangays: resolvedRoute.routeBarangays,
+              routePuroks: resolvedRoute.routePuroks,
               scheduleName: item.scheduleName || "",
               barangay: item.barangay || "",
               assignedPuroks: stringList(item.assignedPuroks || item.puroks),
@@ -294,6 +371,12 @@ export default function DriverActivityRequestsPage() {
           completedCount,
           partialCount,
           fullTruckCount,
+          routeCount: new Set(
+            matched.map((item) => resolveActivityRoute(item).routeId || resolveActivityRoute(item).routeName),
+          ).size,
+          routeNames: Array.from(
+            new Set(matched.map((item) => resolveActivityRoute(item).routeName)),
+          ),
           mappedTripCount: matched.filter(
             (item) => Boolean(str(item.scheduleId) && item.reportId),
           ).length,
@@ -450,7 +533,11 @@ export default function DriverActivityRequestsPage() {
         <div className="request-grid">
           {visibleRequests.map((request) => {
             const status = normalizeStatus(request.status);
-            const matchedCount = matchingReports(request).length;
+            const matchedReports = matchingReports(request);
+            const matchedCount = matchedReports.length;
+            const routeNames = Array.from(
+              new Set(matchedReports.map((item) => resolveActivityRoute(item).routeName)),
+            );
             const isSent = status === "sent" || status === "delivered";
 
             return (
@@ -469,6 +556,9 @@ export default function DriverActivityRequestsPage() {
                   <span>
                     {formatDate(request.fromTimestamp)} - {formatDate(request.toTimestamp)}
                   </span>
+                  <span>
+                    Recorded route{routeNames.length === 1 ? "" : "s"}: {routeNames.length ? routeNames.join(" • ") : "No completed route found"}
+                  </span>
                 </div>
 
                 <div className="facts">
@@ -477,7 +567,7 @@ export default function DriverActivityRequestsPage() {
                   <div>
                     <span>GPS maps</span>
                     <strong>
-                      {matchingReports(request).filter((item) => Boolean(str(item.scheduleId) && item.reportId)).length}
+                      {matchedReports.filter((item) => Boolean(str(item.scheduleId) && item.reportId)).length}
                     </strong>
                   </div>
                   <div><span>Status</span><strong>{isSent ? `Sent ${formatDateTime(request.sentAt)}` : status}</strong></div>

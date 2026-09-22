@@ -120,6 +120,7 @@ type Schedule = {
   endTime?: string;
   purokTimes?: Record<string, string>;
   collectionTimesByPurok?: Record<string, string>;
+  collectionTimesByArea?: Record<string, string>;
   truckId?: string;
   assignedDriverId?: string;
   driverId?: string;
@@ -899,13 +900,24 @@ function savedWindow(schedule: Schedule): string {
 }
 
 function Coverage({ schedule }: { schedule: Schedule }) {
-  const groups = groupAreasByBarangay(getServiceAreas(schedule.areas));
+  const areas = getServiceAreas(schedule.areas);
+  const groups = groupAreasByBarangay(areas);
   if (groups.length > 0) {
     return <div className={styles.coverageList}>
-      {groups.map((group) => <div key={group.barangay} className={styles.coverageRow}>
-        <strong>{group.barangay}</strong>
-        <span>{group.puroks.length ? group.puroks.join(", ") : "Purok details not recorded"}</span>
-      </div>)}
+      {groups.map((group) => {
+        const groupAreas = areas.filter(
+          (area) => makeBarangayKey(area.barangay) === makeBarangayKey(group.barangay),
+        );
+        const detail = groupAreas.map((area) => {
+          const purok = normalizePurokLabel(area.purok) || "Purok not recorded";
+          const time = area.startTime ? formatTime(area.startTime) : "Time not set";
+          return `${purok} · ${time}`;
+        });
+        return <div key={group.barangay} className={styles.coverageRow}>
+          <strong>{group.barangay}</strong>
+          <span>{detail.length ? detail.join(" • ") : "Purok details not recorded"}</span>
+        </div>;
+      })}
     </div>;
   }
   // Do not infer every possible Barangay/Purok pair from legacy aggregate lists.
@@ -1011,6 +1023,8 @@ export default function SchedulesPage() {
   // Schedule-level coverage. These IDs are selected from the master Route,
   // but saving a schedule never mutates routes/{routeId}.
   const [selectedScheduleAreaIds, setSelectedScheduleAreaIds] = useState<string[]>([]);
+  // Expected arrival time is stored per exact Barangay/Purok area.
+  const [areaArrivalTimes, setAreaArrivalTimes] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
 
@@ -1208,6 +1222,23 @@ export default function SchedulesPage() {
     [selectedScheduleAreas],
   );
 
+  // Keep only times for currently selected areas. Route-level area times are used
+  // as defaults when they exist, while saved schedule times are restored on Edit.
+  useEffect(() => {
+    setAreaArrivalTimes((current) => {
+      const savedAreas = getServiceAreas(editingOriginalSchedule?.areas);
+      const savedById = new Map(
+        savedAreas.map((area) => [serviceAreaId(area), String(area.startTime || editingOriginalSchedule?.startTime || "")]),
+      );
+      const next: Record<string, string> = {};
+      for (const area of selectedScheduleAreas) {
+        const id = serviceAreaId(area);
+        next[id] = current[id] || savedById.get(id) || String(area.startTime || "");
+      }
+      return next;
+    });
+  }, [selectedScheduleAreas, editingOriginalSchedule]);
+
   // Default a newly selected Route to all of its Puroks. During Edit, keep
   // the schedule's saved Purok selection instead of expanding it back to the
   // entire master Route. If the admin chooses a different Route while editing,
@@ -1276,6 +1307,25 @@ export default function SchedulesPage() {
     form.startTime,
     form.endTime,
   );
+
+  const areaArrivalTimesComplete =
+    selectedScheduleAreas.length > 0 &&
+    selectedScheduleAreas.every((area) => Boolean(areaArrivalTimes[serviceAreaId(area)]));
+
+  const areaArrivalTimesInsideWindow =
+    selectedTimeWindowValid &&
+    selectedScheduleAreas.every((area) => {
+      const value = parseMinutes(areaArrivalTimes[serviceAreaId(area)]);
+      const start = parseMinutes(form.startTime);
+      const end = parseMinutes(form.endTime);
+      if (value === null || start === null || end === null) return false;
+      return start < end
+        ? value >= start && value <= end
+        : value >= start || value <= end;
+    });
+
+  const areaArrivalTimesValid =
+    areaArrivalTimesComplete && areaArrivalTimesInsideWindow;
 
   const availableDriversForNewSchedule = useMemo(() => {
     if (
@@ -1440,6 +1490,7 @@ export default function SchedulesPage() {
     setForm(EMPTY_CREATE_FORM);
     setSelectedDays([]);
     setSelectedScheduleAreaIds([]);
+    setAreaArrivalTimes({});
     setEditingScheduleId(null);
     setEditingOriginalSchedule(null);
     initialEditRouteIdRef.current = "";
@@ -1498,6 +1549,14 @@ export default function SchedulesPage() {
     });
     setSelectedDays(getScheduleDays(schedule));
     setSelectedScheduleAreaIds(savedAreas.map(serviceAreaId));
+    setAreaArrivalTimes(
+      Object.fromEntries(
+        savedAreas.map((area) => [
+          serviceAreaId(area),
+          String(area.startTime || schedule.startTime || ""),
+        ]),
+      ),
+    );
     setIsSaving(false);
     setShowCreate(true);
   };
@@ -1731,15 +1790,14 @@ export default function SchedulesPage() {
         ? `${areaBarangay}, ${purok}`
         : areaBarangay;
 
-      const timeText = endTime
-        ? `${formatTime(startTime)} – ${formatTime(endTime)}`
-        : formatTime(startTime);
+      const areaStartTime = String(area.startTime || startTime);
+      const arrivalText = formatTime(areaStartTime);
 
       const message =
         status === "created"
-          ? `Garbage collection for ${areaName} is scheduled every ${dayLabel}, ${timeText}.`
+          ? `Garbage collection for ${areaName} is scheduled every ${dayLabel}. Expected truck arrival: ${arrivalText}.`
           : status === "updated"
-            ? `Garbage collection for ${areaName} was updated to every ${dayLabel}, ${timeText}.`
+            ? `Garbage collection for ${areaName} was updated to every ${dayLabel}. Expected truck arrival: ${arrivalText}.`
             : `The garbage collection schedule for ${areaName} has been cancelled.`;
 
       const data = {
@@ -1761,7 +1819,7 @@ export default function SchedulesPage() {
         purokKeys: purokKey ? [purokKey] : [],
         scheduleDay: days[0] || "",
         scheduleDays: days,
-        startTime,
+        startTime: areaStartTime,
         endTime,
         scheduleType: "weekly",
         repeat: "weekly",
@@ -1806,15 +1864,14 @@ export default function SchedulesPage() {
             ? `${areaBarangay}, ${purok}`
             : areaBarangay;
 
-          const timeText = endTime
-            ? `${formatTime(startTime)} – ${formatTime(endTime)}`
-            : formatTime(startTime);
+          const areaStartTime = String(area.startTime || startTime);
+          const arrivalText = formatTime(areaStartTime);
 
           const message =
             status === "created"
-              ? `Garbage collection for ${areaName} is scheduled every ${dayLabel}, ${timeText}.`
+              ? `Garbage collection for ${areaName} is scheduled every ${dayLabel}. Expected truck arrival: ${arrivalText}.`
               : status === "updated"
-                ? `Garbage collection for ${areaName} was updated to every ${dayLabel}, ${timeText}.`
+                ? `Garbage collection for ${areaName} was updated to every ${dayLabel}. Expected truck arrival: ${arrivalText}.`
                 : `The garbage collection schedule for ${areaName} has been cancelled.`;
 
           const response = await fetch("/api/send-alert", {
@@ -1831,7 +1888,7 @@ export default function SchedulesPage() {
               barangay: areaBarangay,
               barangays: [areaBarangay],
               puroks: purok ? [purok] : [],
-              startTime,
+              startTime: areaStartTime,
               endTime,
               scheduleId,
               scheduleTitle: title,
@@ -1991,6 +2048,18 @@ export default function SchedulesPage() {
       );
     }
 
+    if (!areaArrivalTimesComplete) {
+      return alert(
+        "Set an expected truck arrival time for every selected Barangay and Purok.",
+      );
+    }
+
+    if (!areaArrivalTimesInsideWindow) {
+      return alert(
+        "Each Barangay/Purok arrival time must fall within the overall collection window.",
+      );
+    }
+
     const route = selectedRoute;
 
     if (!route || !isSelectableRoute(route)) {
@@ -2076,7 +2145,7 @@ export default function SchedulesPage() {
         purok: normalizePurokLabel(area.purok),
         purokKey: makePurokKey(area.purok),
         order: Number(area.order ?? index),
-        startTime: form.startTime,
+        startTime: areaArrivalTimes[serviceAreaId(area)],
       }));
 
       // Schedule coverage is authoritative for the Driver and Resident apps.
@@ -2093,12 +2162,18 @@ export default function SchedulesPage() {
           Number(b.match(/\d+/)?.[0] || 0),
       );
 
+      // Legacy Purok maps remain populated for older readers. The exact
+      // Barangay/Purok time is authoritative in areas[].startTime.
       const purokTimes = Object.fromEntries(
-        puroks.map((purok) => [purok, form.startTime]),
+        areas.map((area) => [normalizePurokLabel(area.purok), area.startTime]),
       );
 
       const collectionTimesByPurok = Object.fromEntries(
-        puroks.map((purok) => [makePurokKey(purok), form.startTime]),
+        areas.map((area) => [makePurokKey(area.purok), area.startTime]),
+      );
+
+      const collectionTimesByArea = Object.fromEntries(
+        areas.map((area) => [serviceAreaId(area), area.startTime]),
       );
 
       const truck =
@@ -2144,6 +2219,7 @@ export default function SchedulesPage() {
         purokKeys: puroks.map(makePurokKey),
         purokTimes,
         collectionTimesByPurok,
+        collectionTimesByArea,
 
         scheduleDay: selectedDays[0],
         scheduleDays: selectedDays,
@@ -2207,8 +2283,12 @@ export default function SchedulesPage() {
         );
         const oldDays = getScheduleDays(existingSchedule);
         const oldAreas = getServiceAreas(existingSchedule.areas);
-        const oldAreaKeys = oldAreas.map(serviceAreaId).sort();
-        const newAreaKeys = areas.map(serviceAreaId).sort();
+        const oldAreaKeys = oldAreas
+          .map((area) => `${serviceAreaId(area)}@${String(area.startTime || existingSchedule.startTime || "")}`)
+          .sort();
+        const newAreaKeys = areas
+          .map((area) => `${serviceAreaId(area)}@${String(area.startTime || "")}`)
+          .sort();
         const operationalDefinitionChanged =
           oldDriverId !== driver.id ||
           oldRouteId !== route.id ||
@@ -2679,7 +2759,7 @@ export default function SchedulesPage() {
     Boolean(selectedScheduleAreas.length > 0 && selectedBarangays.every(
       (barangay) => selectedScheduleAreas.some((area) => makeBarangayKey(area.barangay) === makeBarangayKey(barangay)),
     )),
-    selectedDays.length > 0 && selectedTimeWindowValid,
+    selectedDays.length > 0 && selectedTimeWindowValid && areaArrivalTimesValid,
     Boolean(form.assignedDriverId && availableDriversForNewSchedule.some((driver) => driver.id === form.assignedDriverId)),
     true,
   ];
@@ -2694,7 +2774,7 @@ export default function SchedulesPage() {
         "Choose at least one Barangay.",
         "Choose a verified route with coverage for all selected Barangays.",
         "Choose at least one Purok for every selected Barangay.",
-        "Choose the collection days and a valid start/end time.",
+        "Choose the collection days, a valid overall window, and an arrival time for every selected Purok.",
         "Choose a driver who passes the schedule checks.",
       ][step] || "Complete the required fields.");
       return;
@@ -2841,7 +2921,7 @@ export default function SchedulesPage() {
                   "Choose one or more Barangays. The next step shows routes that cover your full selection.",
                   "Choose a verified master route. Its saved Barangay and Purok coverage is loaded without changing it.",
                   "Choose the exact Puroks this schedule will serve. This affects only this schedule, not the master route.",
-                  "Select the recurring days and the expected collection window.",
+                  "Set the recurring days, the overall route window, and the expected truck arrival for every selected Barangay and Purok.",
                   "Choose the regular driver and confirm the collection vehicle.",
                   editingScheduleId
                     ? "Review the revised coverage, timetable, and assignment before updating the existing schedule."
@@ -2984,9 +3064,52 @@ export default function SchedulesPage() {
                   </button>)}</div>
                   <div className={selectedTimeWindowValid ? styles.helpNotice : styles.neutralNotice}>
                     <ScheduleIcon name="clock" size={20} /><div><strong>{timeWindowLabel(form.startTime, form.endTime)}</strong>
-                      <p>An earlier end time means the next day. Identical start and end times are not accepted.</p>
+                      <p>This is the overall route window used for driver availability and conflict checking.</p>
                     </div>
                   </div>
+
+                  <div className={styles.arrivalPlanner}>
+                    <div className={styles.arrivalPlannerIntro}>
+                      <div>
+                        <h3>Expected arrival by Barangay and Purok</h3>
+                        <p>Set the truck's expected arrival time for every selected service area. Residents will see the time assigned to their own Barangay and Purok.</p>
+                      </div>
+                      <span>{Object.values(areaArrivalTimes).filter(Boolean).length} of {selectedScheduleAreas.length} set</span>
+                    </div>
+                    {selectedCoverageGroups.map((group) => {
+                      const groupAreas = selectedScheduleAreas.filter(
+                        (area) => makeBarangayKey(area.barangay) === makeBarangayKey(group.barangay),
+                      );
+                      return <section className={styles.arrivalGroup} key={group.barangay}>
+                        <div className={styles.arrivalGroupHead}>
+                          <strong>{group.barangay}</strong>
+                          <small>{groupAreas.length} scheduled Purok{groupAreas.length === 1 ? "" : "s"}</small>
+                        </div>
+                        <div className={styles.arrivalRows}>
+                          {groupAreas.map((area) => {
+                            const id = serviceAreaId(area);
+                            const value = areaArrivalTimes[id] || "";
+                            return <label className={styles.arrivalRow} key={id}>
+                              <span><strong>{normalizePurokLabel(area.purok)}</strong><small>Expected truck arrival</small></span>
+                              <input
+                                type="time"
+                                value={value}
+                                aria-label={`${group.barangay} ${normalizePurokLabel(area.purok)} expected arrival`}
+                                onChange={(event) => {
+                                  const nextTime = event.target.value;
+                                  setAreaArrivalTimes((current) => ({ ...current, [id]: nextTime }));
+                                  setForm((current) => ({ ...current, assignedDriverId: "" }));
+                                }}
+                              />
+                            </label>;
+                          })}
+                        </div>
+                      </section>;
+                    })}
+                  </div>
+                  {!areaArrivalTimesComplete ? <div className={styles.neutralNotice}>
+                    <ScheduleIcon name="info" size={20} /><p>Every selected Barangay and Purok needs its own expected arrival time before you can continue.</p>
+                  </div> : !areaArrivalTimesInsideWindow ? <div className={styles.errorNotice} role="alert">All arrival times must fall within the overall collection window.</div> : <p className={styles.fieldHint}><ScheduleIcon name="check" size={16} />All selected service areas have an arrival time within the collection window.</p>}
                 </> : null}
 
                 {step === 4 ? <>
@@ -3027,7 +3150,7 @@ export default function SchedulesPage() {
                     <div><strong>{form.title.trim() || (selectedBarangays.length === 1 ? `${selectedBarangays[0]} Weekly Collection` : `${selectedBarangays.length}-Barangay Weekly Collection`)}</strong><span>Weekly recurring schedule</span></div>
                   </div>
                   <section className={styles.reviewSection}><div className={styles.reviewHeading}><h3>Schedule Purok coverage</h3><button type="button" className={styles.textButton} onClick={() => setStep(2)}>Change</button></div>
-                    <div className={styles.coverageList}>{selectedCoverageGroups.map((group) => <div key={group.barangay} className={styles.coverageRow}><strong>{group.barangay}</strong><span>{group.puroks.join(", ")}</span></div>)}</div>
+                    <div className={styles.coverageList}>{selectedCoverageGroups.map((group) => <div key={group.barangay} className={styles.coverageRow}><strong>{group.barangay}</strong><span>{selectedScheduleAreas.filter((area) => makeBarangayKey(area.barangay) === makeBarangayKey(group.barangay)).map((area) => `${normalizePurokLabel(area.purok)} · ${formatTime(areaArrivalTimes[serviceAreaId(area)])}`).join(" • ")}</span></div>)}</div>
                   </section>
                   <section className={styles.reviewSection}><div className={styles.reviewHeading}><h3>Timetable & assignment</h3><button type="button" className={styles.textButton} onClick={() => setStep(3)}>Change</button></div>
                     <dl className={styles.facts}>

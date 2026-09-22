@@ -188,6 +188,63 @@ function dateKey(value: number) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+function manilaDateKey(value: number = Date.now()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(value));
+
+  const part = (type: string) => parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function manilaWeekday(value: number = Date.now()) {
+  return new Intl.DateTimeFormat("en-PH", {
+    timeZone: "Asia/Manila",
+    weekday: "long",
+  }).format(new Date(value));
+}
+
+function effectiveDriverIdForDate(schedule: RawRecord, targetDateKey: string) {
+  const overrides = asRecords(schedule.driverOverrides);
+  const override = overrides[targetDateKey] || {};
+  const overrideStatus = String(override.status || "active").trim().toLowerCase();
+  const substituteDriverId = !["cancelled", "inactive", "removed"].includes(overrideStatus)
+    ? String(override.substituteDriverId || "").trim()
+    : "";
+
+  return substituteDriverId || String(
+    schedule.assignedDriverId
+    || schedule.driverId
+    || schedule.defaultDriverId
+    || "",
+  ).trim();
+}
+
+function scheduleRunsOnDate(schedule: RawRecord, value: number = Date.now()) {
+  const recurrence = schedule.recurrence && typeof schedule.recurrence === "object"
+    ? schedule.recurrence as RawRecord
+    : {};
+  const days = normalizeArray(
+    schedule.scheduleDays
+    || recurrence.daysOfWeek
+    || schedule.scheduleDay
+    || recurrence.dayOfWeek,
+  ).map((item) => item.trim().toLowerCase());
+
+  if (days.length === 0) return true;
+  return days.includes(manilaWeekday(value).toLowerCase());
+}
+
+function isTerminalRouteStatus(value: unknown) {
+  const status = statusValue(value);
+  return status === "Completed"
+    || status === "Partially Completed"
+    || status === "Missed Route";
+}
+
 function formatActivityDay(value: number) {
   if (!value) return "Undated activity";
   const date = new Date(value);
@@ -258,59 +315,211 @@ export function LiveRouteMonitor() {
   }, [sessions]);
 
   const assignments = useMemo<Assignment[]>(() => {
-    return Object.entries(schedules).flatMap<Assignment>(([scheduleId, schedule]) => {
-      const driverId = String(schedule.assignedDriverId || schedule.driverId || "");
-      if (!driverId) return [];
-      const driver = drivers[driverId] || {};
-      const routeId = String(schedule.routeId || schedule.assignedRouteId || driver.assignedRouteId || "");
-      const route = routes[routeId] || {};
-      const scheduleSessions = allSessions.filter((session) => session.scheduleId === scheduleId && String(session.data.driverId || driverId) === driverId);
-      const currentSession = scheduleSessions.find((item) => !["Completed", "Partially Completed", "Missed Route"].includes(statusValue(item.data.status))) || scheduleSessions[0];
-      const location = gpsPoint(locations[driverId]);
-      const sessionLocation = gpsPoint(currentSession?.data.lastLocation);
-      const latestLocation = location || sessionLocation;
-      const sessionStatus = currentSession ? statusValue(currentSession.data.status ?? currentSession.data.routeStatus) : "Not Started";
-      return [{
-        key: `${driverId}:${scheduleId}`,
-        driverId,
-        driverName: String(schedule.driverName || driver.name || "Unnamed Driver"),
-        truck: String(schedule.truckId || driver.truck || route.assignedVehicle || "No vehicle assigned"),
-        scheduleId,
-        scheduleName: String(schedule.title || schedule.scheduleName || "Collection schedule"),
-        routeId,
-        routeName: String(schedule.routeName || route.routeName || "No route assigned"),
-        puroks: normalizeArray(schedule.assignedPuroks || schedule.puroks || route.puroks).map((value) => value.toLowerCase().startsWith("purok") ? value : `Purok ${value}`),
-        barangay: String(schedule.barangay || normalizeArray(route.barangays)[0] || "No barangay"),
-        latestLocation,
-        lastUpdate: latestLocation?.timestamp || timestamp(currentSession?.data.lastUpdateTime),
-        status: sessionStatus,
-        progress: Math.max(0, Math.min(100, Number(currentSession?.data.progress ?? currentSession?.data.routeProgress ?? 0))),
-        sessionId: currentSession?.sessionId || "",
-        session: currentSession?.data ?? null,
-      }];
+    const todayKey = manilaDateKey();
+
+    const sessionDriverId = (session: { scheduleId: string; data: RawRecord }) => {
+      const explicitDriverId = String(session.data.driverId || "").trim();
+      if (explicitDriverId) return explicitDriverId;
+
+      const schedule = schedules[session.scheduleId] || {};
+      const sessionTime = timestamp(
+        session.data.startTime
+        ?? session.data.createdAt
+        ?? session.data.updatedAt,
+      );
+      return effectiveDriverIdForDate(
+        schedule,
+        manilaDateKey(sessionTime || Date.now()),
+      );
+    };
+
+    const scheduleEntries = Object.entries(schedules);
+    const driverIds = new Set<string>([
+      ...Object.keys(drivers),
+      ...Object.keys(locations),
+    ]);
+
+    scheduleEntries.forEach(([, schedule]) => {
+      const driverId = effectiveDriverIdForDate(schedule, todayKey);
+      if (driverId) driverIds.add(driverId);
     });
+
+    allSessions.forEach((session) => {
+      const driverId = sessionDriverId(session);
+      if (driverId) driverIds.add(driverId);
+    });
+
+    return Array.from(driverIds)
+      .map<Assignment>((driverId) => {
+        const driver = drivers[driverId] || {};
+        const driverSessions = allSessions.filter(
+          (session) => sessionDriverId(session) === driverId,
+        );
+
+        const activeSession = driverSessions.find(
+          (session) => !isTerminalRouteStatus(
+            session.data.status ?? session.data.routeStatus,
+          ),
+        );
+
+        const effectiveSchedules = scheduleEntries.filter(([, schedule]) =>
+          effectiveDriverIdForDate(schedule, todayKey) === driverId
+        );
+
+        const todaySchedule = effectiveSchedules.find(([, schedule]) =>
+          scheduleRunsOnDate(schedule)
+        );
+
+        const activeScheduleEntry = activeSession
+          ? scheduleEntries.find(([scheduleId]) => scheduleId === activeSession.scheduleId)
+          : undefined;
+
+        const preferredScheduleEntry = activeScheduleEntry
+          || todaySchedule
+          || effectiveSchedules[0];
+
+        const scheduleId = preferredScheduleEntry?.[0] || "";
+        const schedule = preferredScheduleEntry?.[1] || {};
+
+        const directRouteId = String(
+          activeSession?.data.routeId
+          || schedule.routeId
+          || schedule.assignedRouteId
+          || driver.assignedRouteId
+          || "",
+        ).trim();
+
+        const fallbackRouteEntry = directRouteId
+          ? undefined
+          : Object.entries(routes).find(([, route]) =>
+              String(route.assignedDriverId || route.driverId || "").trim() === driverId
+            );
+
+        const routeId = directRouteId || fallbackRouteEntry?.[0] || "";
+        const route = routes[routeId] || fallbackRouteEntry?.[1] || {};
+
+        const liveLocation = gpsPoint(locations[driverId]);
+        const sessionLocation = gpsPoint(activeSession?.data.lastLocation);
+        const latestLocation = liveLocation || sessionLocation;
+
+        const sessionStatus = activeSession
+          ? statusValue(activeSession.data.status ?? activeSession.data.routeStatus)
+          : "Not Started";
+
+        const schedulePuroks = normalizeArray(
+          schedule.assignedPuroks || schedule.puroks || route.puroks,
+        ).map((value) =>
+          value.toLowerCase().startsWith("purok") ? value : `Purok ${value}`
+        );
+
+        const scheduleBarangays = normalizeArray(schedule.barangays);
+        const routeBarangays = normalizeArray(route.barangays);
+
+        return {
+          key: `driver:${driverId}`,
+          driverId,
+          driverName: String(
+            schedule.driverName
+            || driver.name
+            || driver.fullName
+            || driver.displayName
+            || "Unnamed Driver",
+          ),
+          truck: String(
+            schedule.truckId
+            || driver.truck
+            || driver.vehicle
+            || route.assignedVehicle
+            || "No vehicle assigned",
+          ),
+          scheduleId,
+          scheduleName: scheduleId
+            ? String(schedule.title || schedule.scheduleName || "Collection schedule")
+            : "No active schedule",
+          routeId,
+          routeName: routeId
+            ? String(schedule.routeName || route.routeName || route.name || "Assigned route")
+            : "No route assigned",
+          puroks: schedulePuroks,
+          barangay: String(
+            schedule.barangay
+            || scheduleBarangays[0]
+            || route.barangay
+            || routeBarangays[0]
+            || "No barangay assigned",
+          ),
+          latestLocation,
+          lastUpdate: latestLocation?.timestamp
+            || timestamp(activeSession?.data.lastUpdateTime),
+          status: sessionStatus,
+          progress: Math.max(0, Math.min(100, Number(
+            activeSession?.data.progress
+            ?? activeSession?.data.routeProgress
+            ?? 0,
+          ))),
+          sessionId: activeSession?.sessionId || "",
+          session: activeSession?.data ?? null,
+        };
+      })
+      .sort((left, right) =>
+        left.driverName.localeCompare(right.driverName, "en", { sensitivity: "base" })
+      );
   }, [schedules, drivers, routes, locations, allSessions]);
 
   const purokOptions = useMemo(() => Array.from(new Set(assignments.flatMap((item) => item.puroks))).sort(), [assignments]);
   const filteredAssignments = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     return assignments.filter((item) => {
-      const itemSessions = allSessions.filter((session) => session.scheduleId === item.scheduleId && String(session.data.driverId || item.driverId) === item.driverId);
-      const matchesDate = !dateFilter || itemSessions.some((session) => dateKey(timestamp(session.data.startTime ?? session.data.createdAt)) === dateFilter);
+      const itemSessions = allSessions.filter((session) => {
+        const explicitDriverId = String(session.data.driverId || "").trim();
+        if (explicitDriverId) return explicitDriverId === item.driverId;
+        const sessionSchedule = schedules[session.scheduleId] || {};
+        const sessionTime = timestamp(
+          session.data.startTime ?? session.data.createdAt ?? session.data.updatedAt,
+        );
+        return effectiveDriverIdForDate(
+          sessionSchedule,
+          manilaDateKey(sessionTime || Date.now()),
+        ) === item.driverId;
+      });
+      const matchesDate = !dateFilter || itemSessions.some((session) =>
+        dateKey(timestamp(session.data.startTime ?? session.data.createdAt)) === dateFilter
+      );
       const matchesPurok = !purokFilter || item.puroks.includes(purokFilter);
       const matchesSchedule = !scheduleFilter || item.scheduleId === scheduleFilter;
       const matchesStatus = !statusFilter || item.status === statusFilter;
-      const matchesSearch = !keyword || [item.driverName, item.truck, item.scheduleName, item.routeName, item.barangay, ...item.puroks].join(" ").toLowerCase().includes(keyword);
+      const matchesSearch = !keyword || [
+        item.driverName,
+        item.truck,
+        item.scheduleName,
+        item.routeName,
+        item.barangay,
+        ...item.puroks,
+      ].join(" ").toLowerCase().includes(keyword);
       return matchesDate && matchesPurok && matchesSchedule && matchesStatus && matchesSearch;
     });
-  }, [assignments, allSessions, dateFilter, purokFilter, scheduleFilter, statusFilter, search]);
+  }, [assignments, allSessions, schedules, dateFilter, purokFilter, scheduleFilter, statusFilter, search]);
 
   useEffect(() => {
     if (!selectedKey || !assignments.some((item) => item.key === selectedKey)) setSelectedKey(filteredAssignments[0]?.key || assignments[0]?.key || "");
   }, [selectedKey, assignments, filteredAssignments]);
 
   const selected = assignments.find((item) => item.key === selectedKey) || filteredAssignments[0] || null;
-  const selectedSessions = useMemo(() => selected ? allSessions.filter((session) => session.scheduleId === selected.scheduleId && String(session.data.driverId || selected.driverId) === selected.driverId) : [], [selected, allSessions]);
+  const selectedSessions = useMemo(() => {
+    if (!selected) return [];
+    return allSessions.filter((session) => {
+      const explicitDriverId = String(session.data.driverId || "").trim();
+      if (explicitDriverId) return explicitDriverId === selected.driverId;
+      const schedule = schedules[session.scheduleId] || {};
+      const sessionTime = timestamp(
+        session.data.startTime ?? session.data.createdAt ?? session.data.updatedAt,
+      );
+      return effectiveDriverIdForDate(
+        schedule,
+        manilaDateKey(sessionTime || Date.now()),
+      ) === selected.driverId;
+    });
+  }, [selected, allSessions, schedules]);
 
   const driverActivities = useMemo<DriverActivity[]>(() => {
     if (!selected) return [];
@@ -320,12 +529,16 @@ export function LiveRouteMonitor() {
     return allSessions
       .flatMap<DriverActivity>((session) => {
         const schedule = schedules[session.scheduleId] || {};
-        const sessionDriverId = String(
-          session.data.driverId
-          || schedule.assignedDriverId
-          || schedule.driverId
-          || ""
+        const activityTimeForDriver = timestamp(
+          session.data.startTime
+          ?? session.data.createdAt
+          ?? session.data.updatedAt,
         );
+        const sessionDriverId = String(session.data.driverId || "").trim()
+          || effectiveDriverIdForDate(
+            schedule,
+            manilaDateKey(activityTimeForDriver || Date.now()),
+          );
 
         if (sessionDriverId !== selected.driverId) return [];
 
@@ -405,7 +618,7 @@ export function LiveRouteMonitor() {
 
   const openActivity = (activity: DriverActivity) => {
     const assignment = assignments.find(
-      (item) => item.driverId === activity.driverId && item.scheduleId === activity.scheduleId
+      (item) => item.driverId === activity.driverId
     );
 
     if (assignment) setSelectedKey(assignment.key);
@@ -447,27 +660,62 @@ export function LiveRouteMonitor() {
     if (!selected) { setSelectedSessionId(""); return; }
     const requested = new URLSearchParams(window.location.search).get("schedule");
     if (requested && requested !== selected.scheduleId) {
-      const requestedAssignment = assignments.find((item) => item.scheduleId === requested);
+      const requestedSchedule = schedules[requested] || {};
+      const requestedDriverId = effectiveDriverIdForDate(
+        requestedSchedule,
+        manilaDateKey(),
+      );
+      const requestedAssignment = assignments.find((item) =>
+        item.driverId === requestedDriverId || item.scheduleId === requested
+      );
       if (requestedAssignment) { setSelectedKey(requestedAssignment.key); return; }
     }
     if (!selectedSessionId || !selectedSessions.some((session) => session.sessionId === selectedSessionId)) setSelectedSessionId(selected.sessionId || selectedSessions[0]?.sessionId || "");
-  }, [selected, selectedSessionId, selectedSessions, assignments]);
+  }, [selected, selectedSessionId, selectedSessions, assignments, schedules]);
 
   const selectedSession = selectedSessions.find((item) => item.sessionId === selectedSessionId) || selectedSessions[0] || null;
-  const selectedRoute = selected ? routes[selected.routeId] || {} : {};
+  const selectedContextScheduleId = selectedSession?.scheduleId || selected?.scheduleId || "";
+  const selectedContextSchedule = schedules[selectedContextScheduleId] || {};
+  const selectedContextRouteId = String(
+    selectedSession?.data.routeId
+    || selectedContextSchedule.routeId
+    || selectedContextSchedule.assignedRouteId
+    || selected?.routeId
+    || "",
+  ).trim();
+  const selectedRoute = selectedContextRouteId ? routes[selectedContextRouteId] || {} : {};
+  const selectedContextRouteName = String(
+    selectedContextSchedule.routeName
+    || selectedRoute.routeName
+    || selectedRoute.name
+    || selected?.routeName
+    || "No route assigned",
+  );
+  const selectedContextScheduleName = selectedContextScheduleId
+    ? String(selectedContextSchedule.title || selectedContextSchedule.scheduleName || selected?.scheduleName || "Collection schedule")
+    : selected?.scheduleName || "No active schedule";
+  const selectedContextPuroks = normalizeArray(
+    selectedContextSchedule.assignedPuroks
+    || selectedContextSchedule.puroks
+    || selectedRoute.puroks
+    || selected?.puroks,
+  ).map((value) => value.toLowerCase().startsWith("purok") ? value : `Purok ${value}`);
+
   const routeCoordinates = useMemo(() => {
     const sessionNavigation = normalizeCoordinates({ coordinates: selectedSession?.data.navigationCoordinates });
     if (sessionNavigation.length >= 2) return sessionNavigation;
     if (selected) {
       const driverNavigation = asRecords(navigation[selected.driverId]);
-      const scheduleNavigation = asRecords(driverNavigation[selected.scheduleId]);
+      const scheduleNavigation = asRecords(driverNavigation[selectedContextScheduleId]);
       const cachedNavigation = normalizeCoordinates({ coordinates: scheduleNavigation.coordinates });
       if (cachedNavigation.length >= 2) return cachedNavigation;
     }
     return normalizeCoordinates(selectedRoute);
-  }, [selectedRoute, selectedSession, selected, navigation]);
+  }, [selectedRoute, selectedSession, selected, navigation, selectedContextScheduleId]);
   const routeCheckpoints = useMemo(() => normalizeCheckpoints(selectedRoute.checkpoints), [selectedRoute]);
-  const fullActualPoints = useMemo(() => selected && selectedSession ? historyPoints(history, selected.scheduleId, selectedSession.sessionId) : [], [history, selected, selectedSession]);
+  const fullActualPoints = useMemo(() => selectedSession
+    ? historyPoints(history, selectedSession.scheduleId, selectedSession.sessionId)
+    : [], [history, selectedSession]);
 
   useEffect(() => { setReplayIndex(Math.max(0, fullActualPoints.length - 1)); setReplaying(false); }, [selectedKey, selectedSessionId, fullActualPoints.length]);
   useEffect(() => {
@@ -486,22 +734,22 @@ export function LiveRouteMonitor() {
   const progress = Math.max(0, Math.min(100, Number(sessionData.progress ?? sessionData.routeProgress ?? selected?.progress ?? 0)));
   const visitedPuroks = normalizeArray(sessionData.visitedPuroks);
   const stats = useMemo(() => ({
-    assigned: assignments.length,
+    drivers: assignments.length,
+    scheduled: assignments.filter((item) => Boolean(item.scheduleId)).length,
     active: assignments.filter((item) => ["Ongoing", "On Route", "Deviated from Route"].includes(item.status)).length,
-    deviated: assignments.filter((item) => item.status === "Deviated from Route").length,
     completed: assignments.filter((item) => item.status === "Completed").length,
   }), [assignments]);
 
   return (
     <section className="live-route-monitor" aria-label="Live driver route monitoring">
-      <div className="monitor-heading"><div><span>LIVE GPS VERIFICATION</span><h2>Route verification workspace</h2><p>See the truck live, compare the planned road with the real GPS trail, then open driver history or replay any stored trip.</p></div><div className="monitor-sync"><i /><strong>Realtime</strong><small>{assignments.length} assigned driver{assignments.length === 1 ? "" : "s"}</small></div></div>
+      <div className="monitor-heading"><div><span>LIVE GPS VERIFICATION</span><h2>Route verification workspace</h2><p>All registered drivers appear here. Drivers without a current schedule remain visible, while live GPS and temporary substitute assignments are linked automatically by Firebase UID.</p></div><div className="monitor-sync"><i /><strong>Realtime</strong><small>{assignments.length} driver profile{assignments.length === 1 ? "" : "s"}</small></div></div>
       {dataError && <div className="monitor-error" role="alert">{dataError}</div>}
-      <div className="monitor-metrics"><Metric label="Assigned" value={stats.assigned} /><Metric label="Active now" value={stats.active} tone="green" /><Metric label="Deviated" value={stats.deviated} tone="red" /><Metric label="Completed" value={stats.completed} tone="blue" /></div>
+      <div className="monitor-metrics"><Metric label="Drivers" value={stats.drivers} /><Metric label="Scheduled" value={stats.scheduled} tone="blue" /><Metric label="Active now" value={stats.active} tone="green" /><Metric label="Completed" value={stats.completed} tone="blue" /></div>
 
       <div className="monitor-filters">
         <label>Date<input type="date" value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} /></label>
         <label>Purok<select value={purokFilter} onChange={(event) => setPurokFilter(event.target.value)}><option value="">All puroks</option>{purokOptions.map((purok) => <option key={purok}>{purok}</option>)}</select></label>
-        <label>Schedule<select value={scheduleFilter} onChange={(event) => setScheduleFilter(event.target.value)}><option value="">All schedules</option>{assignments.map((item) => <option key={item.key} value={item.scheduleId}>{item.scheduleName}</option>)}</select></label>
+        <label>Schedule<select value={scheduleFilter} onChange={(event) => setScheduleFilter(event.target.value)}><option value="">All schedules</option>{Array.from(new Map(assignments.filter((item) => item.scheduleId).map((item) => [item.scheduleId, item.scheduleName])).entries()).map(([scheduleId, scheduleName]) => <option key={scheduleId} value={scheduleId}>{scheduleName}</option>)}</select></label>
         <label>Route status<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">All statuses</option>{ROUTE_STATUSES.map((status) => <option key={status}>{status}</option>)}</select></label>
         <label className="monitor-search">Driver search<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Name, vehicle, route…" /></label>
         <button type="button" onClick={() => { setDateFilter(""); setPurokFilter(""); setScheduleFilter(""); setStatusFilter(""); setSearch(""); }}>Reset</button>
@@ -514,14 +762,14 @@ export function LiveRouteMonitor() {
             <label>
               <span>Driver</span>
               <select value={selected?.key || ""} onChange={(event) => setSelectedKey(event.target.value)}>
-                {filteredAssignments.map((item) => <option key={item.key} value={item.key}>{item.driverName} · {item.truck}</option>)}
+                {filteredAssignments.map((item) => <option key={item.key} value={item.key}>{item.driverName} · {item.truck}{item.scheduleId ? "" : " · No schedule"}</option>)}
               </select>
             </label>
             <button type="button" onClick={() => setMapFocusTick((value) => value + 1)}>Follow truck</button>
           </div>
           <div className="map-legend"><span><i className="assigned" />Assigned route</span><span><i className="travelled" />Actual GPS route</span><span><i style={{ width: 9, height: 9, borderRadius: "50%", background: "#16a34a" }} />Start</span><span><i style={{ width: 9, height: 9, borderRadius: "50%", background: "#dc2626" }} />Stop / latest</span><span><i className="passed" />Passed section</span><span><i className="remaining" />Unreached / missed</span></div>
           {loading && <div className="map-loading"><i />Loading live GPS data…</div>}
-          {!loading && !selected && <div className="map-empty"><strong>No assigned drivers match the filters</strong><span>Change a filter or assign a driver and GPS route to a schedule.</span></div>}
+          {!loading && !selected && <div className="map-empty"><strong>No drivers match the filters</strong><span>Change a filter. Newly created driver profiles appear here automatically, even before a schedule is assigned.</span></div>}
         </div>
 
         <aside className="driver-panel approved-operation-panel">
@@ -530,7 +778,7 @@ export function LiveRouteMonitor() {
             <div className="approved-driver-card">
               <div className="approved-driver-head">
                 <span className="approved-avatar">{selected.driverName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span>
-                <div><strong>{selected.truck || "Assigned truck"}</strong><small>{selected.driverName} · {selected.barangay || selected.scheduleName}</small></div>
+                <div><strong>{selected.truck || "Assigned truck"}</strong><small>{selected.driverName} · {selected.scheduleId ? (selected.barangay || selectedContextScheduleName) : "No active schedule"}</small></div>
                 <Status status={selectedStatus} />
               </div>
               <div className="approved-progress"><i style={{ width: `${progress}%` }} /></div>
@@ -552,8 +800,8 @@ export function LiveRouteMonitor() {
       </div>
 
       {selected && <div className="route-detail-grid" id="selected-operation">
-        <div className="route-summary-card"><div className="route-title"><div><small>Selected operation</small><h3>{selected.routeName}</h3><p>{selected.driverName} • {selected.truck} • {selected.scheduleName}</p></div><Status status={selectedStatus} /></div><div className="route-progress"><div><strong>{progress}%</strong><span>route verification progress</span></div><div className="progress-track"><i style={{ width: `${progress}%` }} /></div></div><div className="route-facts"><Fact label="Started" value={formatDateTime(timestamp(sessionData.startTime))} /><Fact label="Completed" value={formatDateTime(timestamp(sessionData.completionTime ?? sessionData.completedAt))} /><Fact label="Distance travelled" value={formatDistance(Number(sessionData.distanceTravelledMeters || 0))} /><Fact label="Duration" value={formatDuration(Number(sessionData.durationSeconds || 0))} /><Fact label="Last location" value={selected.latestLocation ? `${selected.latestLocation.lat.toFixed(5)}, ${selected.latestLocation.lng.toFixed(5)}` : "No GPS"} /><Fact label="Last update" value={formatDateTime(selected.lastUpdate)} /></div></div>
-        <div className="purok-visit-card"><div><small>Assigned Puroks</small><h3>Visit verification</h3></div><div className="visit-list">{selected.puroks.length === 0 ? <p>No puroks assigned.</p> : selected.puroks.map((purok) => { const visited = visitedPuroks.some((value) => value.toLowerCase() === purok.toLowerCase()); return <div key={purok} className={visited ? "visited" : "pending"}><i>{visited ? "✓" : "–"}</i><span>{purok}</span><strong>{visited ? "Visited" : selectedStatus === "Completed" || selectedStatus === "Partially Completed" || selectedStatus === "Missed Route" ? "Missed" : "Pending"}</strong></div>; })}</div></div>
+        <div className="route-summary-card"><div className="route-title"><div><small>Selected operation</small><h3>{selectedContextRouteName}</h3><p>{selected.driverName} • {selected.truck} • {selectedContextScheduleName}</p></div><Status status={selectedStatus} /></div><div className="route-progress"><div><strong>{progress}%</strong><span>route verification progress</span></div><div className="progress-track"><i style={{ width: `${progress}%` }} /></div></div><div className="route-facts"><Fact label="Started" value={formatDateTime(timestamp(sessionData.startTime))} /><Fact label="Completed" value={formatDateTime(timestamp(sessionData.completionTime ?? sessionData.completedAt))} /><Fact label="Distance travelled" value={formatDistance(Number(sessionData.distanceTravelledMeters || 0))} /><Fact label="Duration" value={formatDuration(Number(sessionData.durationSeconds || 0))} /><Fact label="Last location" value={selected.latestLocation ? `${selected.latestLocation.lat.toFixed(5)}, ${selected.latestLocation.lng.toFixed(5)}` : "No GPS"} /><Fact label="Last update" value={formatDateTime(selected.lastUpdate)} /></div></div>
+        <div className="purok-visit-card"><div><small>Assigned Puroks</small><h3>Visit verification</h3></div><div className="visit-list">{selectedContextPuroks.length === 0 ? <p>No puroks assigned.</p> : selectedContextPuroks.map((purok) => { const visited = visitedPuroks.some((value) => value.toLowerCase() === purok.toLowerCase()); return <div key={purok} className={visited ? "visited" : "pending"}><i>{visited ? "✓" : "–"}</i><span>{purok}</span><strong>{visited ? "Visited" : selectedStatus === "Completed" || selectedStatus === "Partially Completed" || selectedStatus === "Missed Route" ? "Missed" : "Pending"}</strong></div>; })}</div></div>
       </div>}
 
 

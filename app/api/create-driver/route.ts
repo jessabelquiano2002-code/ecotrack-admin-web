@@ -74,8 +74,11 @@ function validateFields(
   return null;
 }
 
-function getLicenseFile(formData: FormData): File | null {
-  const value = formData.get("licenseImage");
+function getLicenseFile(
+  formData: FormData,
+  fieldName = "licenseImage",
+): File | null {
+  const value = formData.get(fieldName);
 
   return value instanceof File && value.size > 0 ? value : null;
 }
@@ -83,17 +86,18 @@ function getLicenseFile(formData: FormData): File | null {
 function validateLicenseFile(
   file: File | null,
   required: boolean,
+  label = "Licence image",
 ): string | null {
   if (!file) {
-    return required ? "A driver licence image is required." : null;
+    return required ? `${label} is required.` : null;
   }
 
   if (!ALLOWED_LICENSE_TYPES.has(file.type)) {
-    return "Licence image must be JPG, JPEG, or PNG.";
+    return `${label} must be JPG, JPEG, or PNG.`;
   }
 
   if (file.size > MAX_LICENSE_BYTES) {
-    return "Licence image must not exceed 5 MB.";
+    return `${label} must not exceed 5 MB.`;
   }
 
   return null;
@@ -240,11 +244,13 @@ export async function POST(request: NextRequest) {
 
     const formData = await request.formData();
     const fields = readFields(formData);
-    const licenseFile = getLicenseFile(formData);
+    const licenseFile = getLicenseFile(formData, "licenseImage");
+    const licenseBackFile = getLicenseFile(formData, "licenseImageBack");
 
     const validationError =
       validateFields(fields, true) ||
-      validateLicenseFile(licenseFile, true);
+      validateLicenseFile(licenseFile, true, "Front licence image") ||
+      validateLicenseFile(licenseBackFile, true, "Back licence image");
 
     if (validationError) {
       return NextResponse.json(
@@ -254,6 +260,7 @@ export async function POST(request: NextRequest) {
     }
 
     const licence = await prepareLicence(licenseFile!);
+    const backLicence = await prepareLicence(licenseBackFile!);
 
     const createdUser = await adminAuth.createUser({
       email: fields.email,
@@ -268,6 +275,8 @@ export async function POST(request: NextRequest) {
     const timestamp = Date.now();
     const licenseImageRef =
       `driver_license_images/${createdUid}`;
+    const licenseImageBackRef =
+      `driver_license_images_back/${createdUid}`;
 
     const driverRecord = {
       name: fields.name,
@@ -278,6 +287,7 @@ export async function POST(request: NextRequest) {
       licenseNumber: fields.licenseNumber,
       licenseExpirationDate: fields.licenseExpirationDate,
       licenseImageRef,
+      licenseImageBackRef,
       licenseImageContentType: licence.contentType,
       licenseImageSize: licence.size,
       licenseImageUpdatedAt: timestamp,
@@ -299,6 +309,16 @@ export async function POST(request: NextRequest) {
         size: licence.size,
         updatedAt: timestamp,
         updatedBy: administrator.uid,
+        side: "front",
+      },
+      [licenseImageBackRef]: {
+        data: backLicence.base64,
+        encoding: "base64",
+        contentType: backLicence.contentType,
+        size: backLicence.size,
+        updatedAt: timestamp,
+        updatedBy: administrator.uid,
+        side: "back",
       },
     });
 
@@ -320,6 +340,7 @@ export async function POST(request: NextRequest) {
           adminDb.ref().update({
             [`drivers/${createdUid}`]: null,
             [`driver_license_images/${createdUid}`]: null,
+            [`driver_license_images_back/${createdUid}`]: null,
             [`driver_locations/${createdUid}`]: null,
           }),
         ]);
@@ -355,11 +376,13 @@ export async function PATCH(request: NextRequest) {
     }
 
     const fields = readFields(formData);
-    const licenseFile = getLicenseFile(formData);
+    const licenseFile = getLicenseFile(formData, "licenseImage");
+    const licenseBackFile = getLicenseFile(formData, "licenseImageBack");
 
     const validationError =
       validateFields(fields, false) ||
-      validateLicenseFile(licenseFile, false);
+      validateLicenseFile(licenseFile, false, "Front licence image") ||
+      validateLicenseFile(licenseBackFile, false, "Back licence image");
 
     if (validationError) {
       return NextResponse.json(
@@ -369,9 +392,14 @@ export async function PATCH(request: NextRequest) {
     }
 
     let licence: PreparedLicence | null = null;
+    let backLicence: PreparedLicence | null = null;
 
     if (licenseFile) {
       licence = await prepareLicence(licenseFile);
+    }
+
+    if (licenseBackFile) {
+      backLicence = await prepareLicence(licenseBackFile);
     }
 
     const driverSnapshot = await adminDb
@@ -438,6 +466,25 @@ export async function PATCH(request: NextRequest) {
       };
     }
 
+    if (backLicence) {
+      const licenseImageBackRef =
+        `driver_license_images_back/${driverId}`;
+
+      rootUpdate[
+        `drivers/${driverId}/licenseImageBackRef`
+      ] = licenseImageBackRef;
+
+      rootUpdate[licenseImageBackRef] = {
+        data: backLicence.base64,
+        encoding: "base64",
+        contentType: backLicence.contentType,
+        size: backLicence.size,
+        updatedAt: timestamp,
+        updatedBy: administrator.uid,
+        side: "back",
+      };
+    }
+
     await adminDb.ref().update(rootUpdate);
 
     return NextResponse.json({ success: true });
@@ -483,6 +530,7 @@ export async function DELETE(request: NextRequest) {
     await adminDb.ref().update({
       [`drivers/${uid}`]: null,
       [`driver_license_images/${uid}`]: null,
+      [`driver_license_images_back/${uid}`]: null,
       [`driver_locations/${uid}`]: null,
     });
 

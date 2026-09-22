@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import "./globals.css";
 import "./admin-elder-friendly.css";
 import "maplibre-gl/dist/maplibre-gl.css";
+import "./admin-shell-office.css";
 import { OfflineRuntime } from "./components/OfflineRuntime";
 
 export const metadata: Metadata = {

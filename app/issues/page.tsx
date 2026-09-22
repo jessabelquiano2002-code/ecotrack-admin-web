@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import { onValue, push, ref, remove, set, update } from "@/lib/offlineFirebaseDatabase";
 import { auth, db } from "../../lib/firebase";
 import { DashboardShell } from "../components/DashboardShell";
-import { SectionCard } from "../components/SectionCard";
 import { findOfficialBarangay } from "../service-areas/catalog";
+import styles from "./issues.module.css";
 
 type TabType = "all" | "driver" | "resident";
 type StatusFilter = "all" | "Open" | "In Progress" | "Resolved";
@@ -92,11 +92,23 @@ function readNumber(value: unknown): number | undefined {
 }
 
 function cleanText(value?: string): string {
-  return (value || "")
+  const cleaned = (value || "")
     .replace(/^\s*\[/, "")
     .replace(/\]\s*$/, "")
     .replace(/^"+|"+$/g, "")
     .trim();
+
+  const normalized = cleaned.toLowerCase();
+  if (normalized === "undefined" || normalized === "null" || normalized === "nan") {
+    return "";
+  }
+
+  return cleaned;
+}
+
+function displayText(value?: string, fallback = "Not provided"): string {
+  const cleaned = cleanText(value);
+  return cleaned || fallback;
 }
 
 function normalize(value?: string): string {
@@ -286,6 +298,7 @@ export default function IssuesPage() {
 
   const [selected, setSelected] = useState<IssueRow | null>(null);
   const [showFullImage, setShowFullImage] = useState(false);
+  const [showAdvisory, setShowAdvisory] = useState(false);
   const [tab, setTab] = useState<TabType>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
@@ -1016,1682 +1029,628 @@ export default function IssuesPage() {
   };
 
 
-  if (selected) {
-    const selectedReporter = getReporterName(selected);
-    const selectedStatus = selected.status || "Open";
-    const selectedTargetCount = getTargetResidents(
-      modalNotice.barangay,
-      modalNotice.purok,
-      selected
-    ).length;
-
-    return (
-      <>
-        <div className="complaintOnlyPage">
-          <div className="complaintTopBar">
-            <button className="backButton" onClick={() => setSelected(null)}>
-              ← Back to reports
-            </button>
-
-            <div className="complaintTopActions">
-              <button onClick={() => changeStatus(selected, "Open")}>Open</button>
-              <button onClick={() => changeStatus(selected, "In Progress")}>
-                In Progress
-              </button>
-              <button onClick={() => changeStatus(selected, "Resolved")}>
-                Resolve
-              </button>
-              <button className="deleteTopButton" onClick={() => deleteIssue(selected)}>
-                Delete
-              </button>
-              <button className="roundCloseButton" onClick={() => setSelected(null)}>
-                ×
-              </button>
-            </div>
-          </div>
-
-          <section className="complaintHeaderCard">
-            <div>
-              <p className="complaintKicker">
-                {selected.source === "driver" ? "Driver Report" : "Resident Complaint"}
-              </p>
-              <h1>{selected.issueType || "Issue Details"}</h1>
-              <p className="complaintMeta">
-                From: <strong>{selectedReporter}</strong>
-                <span>·</span>
-                {formatDate(selected.timestamp)}
-                <span>·</span>
-                {getLocationText(selected)}
-              </p>
-            </div>
-
-            <span
-              className={`openedStatusBadge ${normalize(selectedStatus).replace(
-                /\s+/g,
-                "-"
-              )}`}
-            >
-              {selectedStatus}
-            </span>
-          </section>
-
-          <main className="openedIssueGrid">
-            <section className="conversationPanel">
-              <div className="messageRow reporterRow">
-                <div className="avatarCircle">
-                  {selectedReporter.charAt(0).toUpperCase() || "R"}
-                </div>
-
-                <div className="messageContent">
-                  <div className="messageHeaderLine">
-                    <div>
-                      <strong>{selectedReporter}</strong>
-                      <span>
-                        {selected.source === "driver"
-                          ? "Driver report sent to admin"
-                          : "Resident complaint sent to admin"}
-                      </span>
-                    </div>
-                    <time>{formatDate(selected.timestamp)}</time>
-                  </div>
-
-                  <h2>Original complaint</h2>
-                  <p className="originalText">{selected.details || "No details"}</p>
-
-                  <div className="compactDetailGrid">
-                    <div>
-                      <span>Reporter</span>
-                      <strong>{selectedReporter}</strong>
-                    </div>
-                    <div>
-                      <span>Source</span>
-                      <strong>
-                        {selected.source === "driver" ? "Driver" : "Resident"}
-                      </strong>
-                    </div>
-                    <div>
-                      <span>Barangay / Purok</span>
-                      <strong>{getLocationText(selected)}</strong>
-                    </div>
-                    <div>
-                      <span>Route</span>
-                      <strong>{selected.routeName || "No route saved"}</strong>
-                    </div>
-                    <div>
-                      <span>Last Updated</span>
-                      <strong>{formatDate(selected.updatedAt)}</strong>
-                    </div>
-                    <div>
-                      <span>Resolved Date</span>
-                      <strong>{formatDate(selected.resolvedAt)}</strong>
-                    </div>
-                  </div>
-
-                  {selected.photoBase64 && (
-                    <div className="openedPhotoBox">
-                      <img
-                        src={getPhotoSrc(selected.photoBase64)}
-                        alt="Complaint attachment"
-                      />
-
-                      <button
-                        className="viewFullImageButton"
-                        onClick={() => setShowFullImage(true)}
-                      >
-                        🔍 View Full Image
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="messageRow adminReplyRow">
-                <div className="avatarCircle adminAvatar">A</div>
-
-                <div className="adminReplyBubble">
-                  <div className="messageHeaderLine">
-                    <div>
-                      <strong>Admin reply</strong>
-                      <span>{modalNotice.title || "Report Status Update"}</span>
-                    </div>
-                    <time>{formatDate(selected.lastNotifiedAt || Date.now())}</time>
-                  </div>
-
-                  <p>{modalNotice.message}</p>
-                </div>
-              </div>
-            </section>
-
-            <aside className="replyPanelOnly">
-              <div className="replyHeader">
-                <div>
-                  <p>Reply / Notice</p>
-                  <h2>Notify affected residents</h2>
-                </div>
-                <span>{selectedTargetCount} target</span>
-              </div>
-
-              <p className="replyDescription">
-                This panel works like an email reply. Review the complaint on the left,
-                then send a clear update to the correct resident or barangay.
-              </p>
-
-              <div className="targetLocationBox">
-                <div className="targetLocationHeader">
-                  <div>
-                    <span>Automatic Target</span>
-                    <strong>
-                      {selected.source === "resident"
-                        ? "Complainant Location"
-                        : "Affected Residents Location"}
-                    </strong>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="smallEditButton"
-                    onClick={() => setManualLocationEdit((current) => !current)}
-                  >
-                    {manualLocationEdit ? "Lock" : "Edit"}
-                  </button>
-                </div>
-
-                {!manualLocationEdit ? (
-                  <div className="readonlyLocationGrid">
-                    <div>
-                      <span>Barangay</span>
-                      <strong>{modalNotice.barangay || "No barangay saved"}</strong>
-                    </div>
-                    <div>
-                      <span>Purok</span>
-                      <strong>{modalNotice.purok || "No purok saved"}</strong>
-                    </div>
-                    <div className="fullLocation">
-                      <span>Send To</span>
-                      <strong>
-                        {selected.source === "resident"
-                          ? selectedReporter
-                          : `Residents in ${
-                              [modalNotice.barangay, modalNotice.purok]
-                                .filter(Boolean)
-                                .join(" / ") || "selected location"
-                            }`}
-                      </strong>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="manualLocationGrid">
-                    <div className="formGroup">
-                      <label>Barangay</label>
-                      <input
-                        list="barangayOptions"
-                        value={modalNotice.barangay}
-                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                          setModalNotice((current) => ({
-                            ...current,
-                            barangay: event.target.value,
-                          }))
-                        }
-                        placeholder="Barangay"
-                      />
-                    </div>
-
-                    <div className="formGroup">
-                      <label>Purok</label>
-                      <input
-                        list="purokOptions"
-                        value={modalNotice.purok}
-                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                          setModalNotice((current) => ({
-                            ...current,
-                            purok: event.target.value,
-                          }))
-                        }
-                        placeholder="Optional"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {!modalNotice.barangay && (
-                  <p className="locationWarning">
-                    Barangay is missing. Edit the target location before sending.
-                  </p>
-                )}
-              </div>
-
-              <div className="formGroup">
-                <label>Notification Title</label>
-                <input
-                  value={modalNotice.title}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                    setModalNotice((current) => ({
-                      ...current,
-                      title: event.target.value,
-                    }))
-                  }
-                  placeholder="Notification title"
-                />
-              </div>
-
-              <div className="formGroup">
-                <label>Message</label>
-                <textarea
-                  value={modalNotice.message}
-                  onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
-                    setModalNotice((current) => ({
-                      ...current,
-                      message: event.target.value,
-                    }))
-                  }
-                  rows={7}
-                  placeholder="Write message to residents..."
-                />
-              </div>
-
-              <button
-                className="primaryButton fullButton"
-                onClick={handleModalSend}
-                disabled={sendingModal}
-              >
-                {sendingModal ? "Sending..." : "Send Notice"}
-              </button>
-
-              {modalResult && <div className="modalResult">{modalResult}</div>}
-            </aside>
-          </main>
-        </div>
-
-        {showFullImage && selected.photoBase64 && (
-          <div className="imageViewerOverlay">
-            <button
-              className="imageCloseButton"
-              onClick={() => setShowFullImage(false)}
-            >
-              ×
-            </button>
-
-            <img
-              src={getPhotoSrc(selected.photoBase64)}
-              alt="Full complaint evidence"
-              className="fullComplaintImage"
-            />
-          </div>
-        )}
-
-        <datalist id="barangayOptions">
-          {locationOptions.barangays.map((barangay) => (
-            <option key={barangay} value={barangay} />
-          ))}
-        </datalist>
-
-        <datalist id="purokOptions">
-          {locationOptions.puroks.map((purok) => (
-            <option key={purok} value={purok} />
-          ))}
-        </datalist>
-
-        <style jsx>{`
-          .complaintOnlyPage {
-            min-height: 100vh;
-            padding: 10px;
-            background: #f5f7fb;
-            color: #0f172a;
-            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-              "Segoe UI", sans-serif;
-          }
-
-          .complaintTopBar {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 10px;
-          }
-
-          .backButton,
-          .complaintTopActions button,
-          .smallEditButton {
-            border: 1px solid #d8e1ee;
-            background: #ffffff;
-            color: #0f172a;
-            border-radius: 999px;
-            padding: 8px 13px;
-            font-size: 12px;
-            font-weight: 900;
-            cursor: pointer;
-            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
-          }
-
-          .complaintTopActions {
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            gap: 8px;
-            flex-wrap: wrap;
-          }
-
-          .complaintTopActions button:hover,
-          .backButton:hover,
-          .smallEditButton:hover {
-            border-color: #16a34a;
-            color: #15803d;
-          }
-
-          .deleteTopButton {
-            border-color: #fecaca !important;
-            color: #dc2626 !important;
-          }
-
-          .roundCloseButton {
-            width: 34px;
-            height: 34px;
-            padding: 0 !important;
-            font-size: 17px !important;
-            line-height: 1;
-          }
-
-          .complaintHeaderCard,
-          .conversationPanel,
-          .replyPanelOnly {
-            border: 1px solid #dbe4f0;
-            background: #ffffff;
-            border-radius: 18px;
-            box-shadow: 0 14px 38px rgba(15, 23, 42, 0.06);
-          }
-
-          .complaintHeaderCard {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 17px 18px;
-            margin-bottom: 12px;
-          }
-
-          .complaintKicker {
-            margin: 0 0 6px;
-            color: #059669;
-            font-size: 11px;
-            font-weight: 1000;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-          }
-
-          .complaintHeaderCard h1 {
-            margin: 0;
-            font-size: 25px;
-            line-height: 1.15;
-            color: #020617;
-            letter-spacing: -0.03em;
-          }
-
-          .complaintMeta {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-            margin: 8px 0 0;
-            color: #64748b;
-            font-size: 13px;
-          }
-
-          .openedStatusBadge {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 999px;
-            padding: 7px 12px;
-            font-size: 12px;
-            font-weight: 1000;
-            white-space: nowrap;
-          }
-
-          .openedStatusBadge.open {
-            background: #fff7ed;
-            color: #c2410c;
-          }
-
-          .openedStatusBadge.in-progress {
-            background: #eff6ff;
-            color: #1d4ed8;
-          }
-
-          .openedStatusBadge.resolved {
-            background: #f0fdf4;
-            color: #15803d;
-          }
-
-          .openedIssueGrid {
-            display: grid;
-            grid-template-columns: minmax(0, 1.38fr) minmax(340px, 0.72fr);
-            gap: 14px;
-            align-items: start;
-          }
-
-          .conversationPanel {
-            padding: 16px;
-          }
-
-          .messageRow {
-            display: grid;
-            grid-template-columns: 44px minmax(0, 1fr);
-            gap: 12px;
-          }
-
-          .reporterRow {
-            padding-bottom: 14px;
-            border-bottom: 1px solid #e8edf5;
-          }
-
-          .adminReplyRow {
-            padding-top: 14px;
-          }
-
-          .avatarCircle {
-            width: 38px;
-            height: 38px;
-            border-radius: 999px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            background: #dcfce7;
-            color: #047857;
-            font-size: 14px;
-            font-weight: 1000;
-          }
-
-          .adminAvatar {
-            background: #dbeafe;
-            color: #1d4ed8;
-          }
-
-          .messageHeaderLine {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 12px;
-            margin-bottom: 14px;
-          }
-
-          .messageHeaderLine strong {
-            display: block;
-            color: #0f172a;
-            font-size: 13px;
-          }
-
-          .messageHeaderLine span {
-            display: block;
-            margin-top: 2px;
-            color: #64748b;
-            font-size: 11px;
-            font-weight: 700;
-          }
-
-          .messageHeaderLine time {
-            color: #94a3b8;
-            font-size: 11px;
-            font-weight: 800;
-            white-space: nowrap;
-          }
-
-          .messageContent h2 {
-            margin: 0 0 9px;
-            font-size: 17px;
-            color: #020617;
-          }
-
-          .originalText {
-            margin: 0 0 13px;
-            color: #334155;
-            font-size: 14px;
-            line-height: 1.55;
-          }
-
-          .compactDetailGrid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
-          }
-
-          .compactDetailGrid div,
-          .readonlyLocationGrid div {
-            border: 1px solid #dbe4f0;
-            background: #f8fafc;
-            border-radius: 12px;
-            padding: 10px 11px;
-            min-width: 0;
-          }
-
-          .compactDetailGrid span,
-          .readonlyLocationGrid span,
-          .targetLocationHeader span {
-            display: block;
-            margin-bottom: 5px;
-            color: #64748b;
-            font-size: 10px;
-            font-weight: 1000;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-          }
-
-          .compactDetailGrid strong,
-          .readonlyLocationGrid strong,
-          .targetLocationHeader strong {
-            display: block;
-            color: #0f172a;
-            font-size: 12px;
-            line-height: 1.35;
-            word-break: break-word;
-          }
-
-          .viewFullImageButton {
-            width: 100%;
-            margin-top: 10px;
-            padding: 12px;
-            border: none;
-            border-radius: 12px;
-            background: #16a34a;
-            color: white;
-            font-weight: 900;
-            cursor: pointer;
-          }
-
-          .viewFullImageButton:hover {
-            background: #15803d;
-          }
-
-          .imageViewerOverlay {
-            position: fixed;
-            inset: 0;
-            z-index: 9999;
-            background: rgba(0,0,0,.85);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 30px;
-          }
-
-          .fullComplaintImage {
-            max-width: 95%;
-            max-height: 90vh;
-            object-fit: contain;
-            border-radius: 18px;
-            box-shadow: 0 20px 80px rgba(0,0,0,.5);
-          }
-
-          .imageCloseButton {
-            position: absolute;
-            top: 25px;
-            right: 35px;
-            width: 45px;
-            height: 45px;
-            border-radius: 50%;
-            border: none;
-            background: white;
-            color: #111827;
-            font-size: 30px;
-            font-weight: bold;
-            cursor: pointer;
-          }
-
-          .openedPhotoBox {
-            margin-top: 12px;
-            overflow: hidden;
-            border: 1px solid #dbe4f0;
-            border-radius: 14px;
-            background: #ffffff;
-          }
-
-          .openedPhotoBox img {
-            display: block;
-            width: 100%;
-            max-height: 320px;
-            object-fit: contain;
-          }
-
-          .adminReplyBubble {
-            border: 1px solid #bbf7d0;
-            background: #ecfdf5;
-            border-radius: 16px;
-            padding: 13px;
-          }
-
-          .adminReplyBubble p {
-            margin: 0;
-            color: #166534;
-            font-size: 13px;
-            line-height: 1.55;
-          }
-
-          .replyPanelOnly {
-            padding: 16px;
-            background: #ffffff;
-          }
-
-          .replyHeader {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: 12px;
-            margin-bottom: 8px;
-          }
-
-          .replyHeader p {
-            margin: 0 0 5px;
-            color: #1d4ed8;
-            font-size: 10px;
-            font-weight: 1000;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-          }
-
-          .replyHeader h2 {
-            margin: 0;
-            color: #020617;
-            font-size: 18px;
-            line-height: 1.2;
-          }
-
-          .replyHeader span {
-            border: 1px solid #86efac;
-            background: #dcfce7;
-            color: #047857;
-            border-radius: 999px;
-            padding: 6px 10px;
-            font-size: 11px;
-            font-weight: 1000;
-            white-space: nowrap;
-          }
-
-          .replyDescription {
-            margin: 0 0 12px;
-            color: #64748b;
-            font-size: 12px;
-            line-height: 1.45;
-          }
-
-          .targetLocationBox {
-            border: 1px solid #dbeafe;
-            background: #f8fafc;
-            border-radius: 15px;
-            padding: 12px;
-            margin-bottom: 12px;
-          }
-
-          .targetLocationHeader {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 10px;
-          }
-
-          .readonlyLocationGrid,
-          .manualLocationGrid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 9px;
-          }
-
-          .fullLocation {
-            grid-column: 1 / -1;
-          }
-
-          .formGroup {
-            display: grid;
-            gap: 6px;
-            margin-bottom: 10px;
-          }
-
-          .formGroup label {
-            color: #334155;
-            font-size: 12px;
-            font-weight: 900;
-          }
-
-          .formGroup input,
-          .formGroup textarea {
-            width: 100%;
-            border: 1px solid #cbd5e1;
-            border-radius: 11px;
-            padding: 10px 11px;
-            color: #0f172a;
-            background: #ffffff;
-            outline: none;
-            font-size: 13px;
-            resize: vertical;
-          }
-
-          .formGroup input:focus,
-          .formGroup textarea:focus {
-            border-color: #22c55e;
-            box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.14);
-          }
-
-          .locationWarning {
-            margin: 10px 0 0;
-            padding: 9px 10px;
-            border-radius: 11px;
-            background: #fff7ed;
-            color: #c2410c;
-            font-size: 12px;
-            font-weight: 800;
-          }
-
-          .primaryButton {
-            border: none;
-            border-radius: 12px;
-            padding: 11px 15px;
-            background: #16a34a;
-            color: #ffffff;
-            cursor: pointer;
-            font-weight: 900;
-            box-shadow: 0 10px 20px rgba(22, 163, 74, 0.18);
-          }
-
-          .primaryButton:disabled {
-            opacity: 0.65;
-            cursor: not-allowed;
-          }
-
-          .fullButton {
-            width: 100%;
-            margin-top: 2px;
-          }
-
-          .modalResult {
-            margin-top: 10px;
-            padding: 10px 11px;
-            border-radius: 11px;
-            background: #f0fdf4;
-            color: #166534;
-            font-weight: 900;
-            font-size: 12px;
-          }
-
-          @media (max-width: 980px) {
-            .complaintOnlyPage {
-              padding: 8px;
-            }
-
-            .complaintTopBar,
-            .complaintHeaderCard {
-              align-items: stretch;
-              flex-direction: column;
-            }
-
-            .complaintTopActions {
-              justify-content: flex-start;
-            }
-
-            .openedIssueGrid {
-              grid-template-columns: 1fr;
-            }
-          }
-
-          @media (max-width: 640px) {
-            .messageRow {
-              grid-template-columns: 1fr;
-            }
-
-            .compactDetailGrid,
-            .readonlyLocationGrid,
-            .manualLocationGrid {
-              grid-template-columns: 1fr;
-            }
-
-            .messageHeaderLine {
-              flex-direction: column;
-              gap: 5px;
-            }
-          }
-        `}</style>
-      </>
-    );
-  }
+  const sourceLabel = (issue: IssueRow) =>
+    issue.source === "driver" ? "Driver report" : "Resident complaint";
+
+  const statusClass = (status?: string) => {
+    const value = normalize(status || "Open").replace(/\s+/g, "-");
+    if (value === "resolved") return styles.statusResolved;
+    if (value === "in-progress") return styles.statusProgress;
+    return styles.statusOpen;
+  };
+
+  const closeSelectedIssue = () => {
+    setSelected(null);
+    setShowFullImage(false);
+    setManualLocationEdit(false);
+    setModalResult("");
+  };
 
   return (
     <DashboardShell
       title="Complaints & Reports"
-      description="Review concerns, update their status, record the action taken, and notify affected residents."
+      description="Review resident concerns and driver field reports, record action taken, and keep affected residents informed."
     >
-      <div className="adminIssuesPage">
-        {errorMessage && <div className="errorBox">{errorMessage}</div>}
-
-        <div className="statsGrid">
-          <div className="statCard">
-            <span>Total Reports</span>
-            <strong>{counts.total}</strong>
+      <div className={styles.page}>
+        {errorMessage && (
+          <div className={styles.errorBanner} role="alert">
+            <strong>Reports could not be refreshed.</strong>
+            <span>{errorMessage}</span>
           </div>
+        )}
 
-          <div className="statCard">
-            <span>Open</span>
-            <strong>{counts.open}</strong>
-          </div>
+        {!selected ? (
+          <>
+            <section className={styles.summaryStrip} aria-label="Report summary">
+              <div className={styles.summaryPrimary}>
+                <span className={styles.summaryLabel}>Open reports</span>
+                <strong>{counts.open}</strong>
+                <small>Require review or action</small>
+              </div>
+              <div className={styles.summaryItem}>
+                <span>In progress</span>
+                <strong>{counts.inProgress}</strong>
+              </div>
+              <div className={styles.summaryItem}>
+                <span>Resolved</span>
+                <strong>{counts.resolved}</strong>
+              </div>
+              <div className={styles.summaryItem}>
+                <span>Total records</span>
+                <strong>{counts.total}</strong>
+              </div>
+              <div className={styles.summarySources}>
+                <span>{counts.resident} resident</span>
+                <span>{counts.driver} driver</span>
+              </div>
+            </section>
 
-          <div className="statCard">
-            <span>In Progress</span>
-            <strong>{counts.inProgress}</strong>
-          </div>
+            <section className={styles.registryCard}>
+              <div className={styles.registryHeader}>
+                <div>
+                  <p className={styles.eyebrow}>REPORT REGISTRY</p>
+                  <h2>Issues requiring administrative review</h2>
+                  <p>
+                    Open a report to review evidence, update its status, and send the correct resident notice.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className={styles.primaryButton}
+                  onClick={() => {
+                    setQuickResult("");
+                    setShowAdvisory(true);
+                  }}
+                >
+                  + New resident advisory
+                </button>
+              </div>
 
-          <div className="statCard">
-            <span>Resolved</span>
-            <strong>{counts.resolved}</strong>
-          </div>
+              <div className={styles.toolbar}>
+                <div className={styles.segmentedControl} aria-label="Report source">
+                  {[
+                    { label: `All ${counts.total}`, value: "all" },
+                    { label: `Residents ${counts.resident}`, value: "resident" },
+                    { label: `Drivers ${counts.driver}`, value: "driver" },
+                  ].map((item) => (
+                    <button
+                      type="button"
+                      key={item.value}
+                      className={tab === item.value ? styles.segmentActive : styles.segment}
+                      onClick={() => setTab(item.value as TabType)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
 
-          <div className="statCard">
-            <span>Driver Reports</span>
-            <strong>{counts.driver}</strong>
-          </div>
+                <div className={styles.filterGroup}>
+                  <label className={styles.searchBox}>
+                    <span>Search</span>
+                    <input
+                      value={search}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) => setSearch(event.target.value)}
+                      placeholder="Reporter, issue, location, route..."
+                    />
+                  </label>
 
-          <div className="statCard">
-            <span>Resident Reports</span>
-            <strong>{counts.resident}</strong>
+                  <label className={styles.selectBox}>
+                    <span>Status</span>
+                    <select
+                      value={statusFilter}
+                      onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+                        setStatusFilter(event.target.value as StatusFilter)
+                      }
+                    >
+                      <option value="all">All statuses</option>
+                      <option value="Open">Open</option>
+                      <option value="In Progress">In progress</option>
+                      <option value="Resolved">Resolved</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              {loading ? (
+                <div className={styles.emptyState}>
+                  <div className={styles.spinner} />
+                  <strong>Loading reports</strong>
+                  <span>Retrieving the latest complaint and driver-report records.</span>
+                </div>
+              ) : filtered.length === 0 ? (
+                <div className={styles.emptyState}>
+                  <div className={styles.emptyIcon}>✓</div>
+                  <strong>No matching reports</strong>
+                  <span>Try another source, status, or search term.</span>
+                </div>
+              ) : (
+                <div className={styles.tableWrap}>
+                  <table className={styles.issueTable}>
+                    <thead>
+                      <tr>
+                        <th>Report</th>
+                        <th>Reporter</th>
+                        <th>Location</th>
+                        <th>Status</th>
+                        <th>Received</th>
+                        <th aria-label="Actions" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.map((issue) => {
+                        const reporter = getReporterName(issue);
+                        const details = displayText(issue.details, "No description supplied");
+                        const location = getLocationText(issue);
+                        const route = cleanText(issue.routeName);
+                        const status = displayText(issue.status, "Open");
+
+                        return (
+                          <tr key={issue.id} onDoubleClick={() => openIssue(issue)}>
+                            <td>
+                              <div className={styles.reportCell}>
+                                <div
+                                  className={`${styles.sourceIcon} ${
+                                    issue.source === "driver" ? styles.driverIcon : styles.residentIcon
+                                  }`}
+                                  aria-hidden="true"
+                                >
+                                  {issue.source === "driver" ? "D" : "R"}
+                                </div>
+                                <div>
+                                  <div className={styles.reportTitleRow}>
+                                    <strong>{displayText(issue.issueType, "General issue")}</strong>
+                                    <span>{sourceLabel(issue)}</span>
+                                  </div>
+                                  <p>{details}</p>
+                                  {route && <small>Route: {route}</small>}
+                                </div>
+                              </div>
+                            </td>
+                            <td>
+                              <div className={styles.reporterCell}>
+                                <strong>{displayText(reporter, "Unknown reporter")}</strong>
+                                <span>{issue.source === "driver" ? "Driver" : "Resident"}</span>
+                              </div>
+                            </td>
+                            <td>
+                              <span className={styles.locationText}>{displayText(location, "No location saved")}</span>
+                            </td>
+                            <td>
+                              <span className={`${styles.statusBadge} ${statusClass(status)}`}>
+                                {status}
+                              </span>
+                            </td>
+                            <td>
+                              <span className={styles.dateText}>{formatDate(issue.timestamp)}</span>
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className={styles.reviewButton}
+                                onClick={() => openIssue(issue)}
+                              >
+                                Review
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {!loading && filtered.length > 0 && (
+                <div className={styles.tableFooter}>
+                  Showing <strong>{filtered.length}</strong> of <strong>{counts.total}</strong> report records
+                </div>
+              )}
+            </section>
+          </>
+        ) : (
+          <section className={styles.detailWorkspace}>
+            <div className={styles.detailTopbar}>
+              <button type="button" className={styles.backButton} onClick={closeSelectedIssue}>
+                ← Reports
+              </button>
+              <div className={styles.detailTopbarText}>
+                <span>{sourceLabel(selected)}</span>
+                <strong>Report #{selected.id.slice(-8).toUpperCase()}</strong>
+              </div>
+              <span className={`${styles.statusBadge} ${statusClass(selected.status)}`}>
+                {displayText(selected.status, "Open")}
+              </span>
+            </div>
+
+            <div className={styles.detailHeading}>
+              <div>
+                <p className={styles.eyebrow}>REPORT REVIEW</p>
+                <h2>{displayText(selected.issueType, "General issue")}</h2>
+                <p>
+                  Submitted by <strong>{displayText(getReporterName(selected), "Unknown reporter")}</strong>
+                  <span className={styles.dot}>•</span>
+                  {formatDate(selected.timestamp)}
+                  <span className={styles.dot}>•</span>
+                  {displayText(getLocationText(selected), "No location saved")}
+                </p>
+              </div>
+            </div>
+
+            <div className={styles.detailGrid}>
+              <div className={styles.detailMain}>
+                <article className={styles.officeCard}>
+                  <div className={styles.cardHeader}>
+                    <div>
+                      <span className={styles.cardKicker}>ORIGINAL REPORT</span>
+                      <h3>Concern submitted to MetroWaste</h3>
+                    </div>
+                    <span className={styles.sourcePill}>{sourceLabel(selected)}</span>
+                  </div>
+
+                  <p className={styles.reportNarrative}>
+                    {displayText(selected.details, "The reporter did not provide additional details.")}
+                  </p>
+
+                  <dl className={styles.factGrid}>
+                    <div>
+                      <dt>Reporter</dt>
+                      <dd>{displayText(getReporterName(selected), "Unknown reporter")}</dd>
+                    </div>
+                    <div>
+                      <dt>Source</dt>
+                      <dd>{selected.source === "driver" ? "Driver application" : "Resident application"}</dd>
+                    </div>
+                    <div>
+                      <dt>Barangay</dt>
+                      <dd>{displayText(getIssueBarangay(selected))}</dd>
+                    </div>
+                    <div>
+                      <dt>Purok</dt>
+                      <dd>{displayText(getIssuePurok(selected))}</dd>
+                    </div>
+                    <div>
+                      <dt>Route</dt>
+                      <dd>{displayText(selected.routeName, "Not assigned")}</dd>
+                    </div>
+                    <div>
+                      <dt>Last updated</dt>
+                      <dd>{formatDate(selected.updatedAt || selected.timestamp)}</dd>
+                    </div>
+                  </dl>
+
+                  {selected.photoBase64 && (
+                    <div className={styles.evidenceBlock}>
+                      <div className={styles.evidenceHeader}>
+                        <div>
+                          <span>PHOTO EVIDENCE</span>
+                          <strong>Attachment submitted with this report</strong>
+                        </div>
+                        <button type="button" onClick={() => setShowFullImage(true)}>
+                          View full image
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        className={styles.evidencePreview}
+                        onClick={() => setShowFullImage(true)}
+                        aria-label="Open full complaint image"
+                      >
+                        <img src={getPhotoSrc(selected.photoBase64)} alt="Issue evidence" />
+                      </button>
+                    </div>
+                  )}
+                </article>
+
+                <article className={styles.officeCard}>
+                  <div className={styles.cardHeader}>
+                    <div>
+                      <span className={styles.cardKicker}>CASE ACTIVITY</span>
+                      <h3>Administrative record</h3>
+                    </div>
+                  </div>
+
+                  <div className={styles.timeline}>
+                    <div className={styles.timelineItem}>
+                      <span className={styles.timelineDot} />
+                      <div>
+                        <strong>Report received</strong>
+                        <p>{formatDate(selected.timestamp)}</p>
+                      </div>
+                    </div>
+                    {selected.updatedAt && selected.updatedAt !== selected.timestamp && (
+                      <div className={styles.timelineItem}>
+                        <span className={styles.timelineDot} />
+                        <div>
+                          <strong>Case updated</strong>
+                          <p>{formatDate(selected.updatedAt)}</p>
+                        </div>
+                      </div>
+                    )}
+                    {selected.lastNotifiedAt && (
+                      <div className={styles.timelineItem}>
+                        <span className={styles.timelineDot} />
+                        <div>
+                          <strong>Resident notification sent</strong>
+                          <p>{formatDate(selected.lastNotifiedAt)}</p>
+                        </div>
+                      </div>
+                    )}
+                    {selected.resolvedAt && (
+                      <div className={styles.timelineItem}>
+                        <span className={`${styles.timelineDot} ${styles.timelineDone}`} />
+                        <div>
+                          <strong>Report resolved</strong>
+                          <p>{formatDate(selected.resolvedAt)}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </article>
+              </div>
+
+              <aside className={styles.detailSidebar}>
+                <section className={styles.officeCard}>
+                  <div className={styles.cardHeader}>
+                    <div>
+                      <span className={styles.cardKicker}>CASE STATUS</span>
+                      <h3>Administrative action</h3>
+                    </div>
+                  </div>
+
+                  <div className={styles.statusActions}>
+                    <button
+                      type="button"
+                      className={displayText(selected.status, "Open") === "Open" ? styles.statusActionActive : styles.statusAction}
+                      onClick={() => changeStatus(selected, "Open")}
+                    >
+                      Open
+                    </button>
+                    <button
+                      type="button"
+                      className={displayText(selected.status, "Open") === "In Progress" ? styles.statusActionActive : styles.statusAction}
+                      onClick={() => changeStatus(selected, "In Progress")}
+                    >
+                      In progress
+                    </button>
+                    <button
+                      type="button"
+                      className={displayText(selected.status, "Open") === "Resolved" ? styles.statusActionActive : styles.statusAction}
+                      onClick={() => changeStatus(selected, "Resolved")}
+                    >
+                      Resolved
+                    </button>
+                  </div>
+
+                  <div className={styles.caseMeta}>
+                    <div>
+                      <span>Current status</span>
+                      <strong>{displayText(selected.status, "Open")}</strong>
+                    </div>
+                    <div>
+                      <span>Report ID</span>
+                      <strong>{selected.id.slice(-12)}</strong>
+                    </div>
+                  </div>
+                </section>
+
+                <section className={styles.officeCard}>
+                  <div className={styles.cardHeader}>
+                    <div>
+                      <span className={styles.cardKicker}>RESIDENT UPDATE</span>
+                      <h3>
+                        {selected.source === "resident" ? "Reply to complainant" : "Notify affected residents"}
+                      </h3>
+                    </div>
+                    <span className={styles.targetCount}>
+                      {getTargetResidents(modalNotice.barangay, modalNotice.purok, selected).length} target
+                    </span>
+                  </div>
+
+                  <div className={styles.targetBox}>
+                    <div className={styles.targetBoxHeader}>
+                      <div>
+                        <span>Target location</span>
+                        <strong>
+                          {[modalNotice.barangay, modalNotice.purok].filter(Boolean).join(" / ") || "Not configured"}
+                        </strong>
+                      </div>
+                      <button
+                        type="button"
+                        className={styles.textButton}
+                        onClick={() => setManualLocationEdit((value) => !value)}
+                      >
+                        {manualLocationEdit ? "Use saved location" : "Edit"}
+                      </button>
+                    </div>
+
+                    {manualLocationEdit && (
+                      <div className={styles.twoColumnFields}>
+                        <label className={styles.field}>
+                          <span>Barangay</span>
+                          <input
+                            list="barangayOptions"
+                            value={modalNotice.barangay}
+                            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                              setModalNotice((current) => ({ ...current, barangay: event.target.value }))
+                            }
+                            placeholder="Barangay"
+                          />
+                        </label>
+                        <label className={styles.field}>
+                          <span>Purok</span>
+                          <input
+                            list="purokOptions"
+                            value={modalNotice.purok}
+                            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                              setModalNotice((current) => ({ ...current, purok: event.target.value }))
+                            }
+                            placeholder="Optional"
+                          />
+                        </label>
+                      </div>
+                    )}
+                  </div>
+
+                  <label className={styles.field}>
+                    <span>Notification title</span>
+                    <input
+                      value={modalNotice.title}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        setModalNotice((current) => ({ ...current, title: event.target.value }))
+                      }
+                      placeholder="Report status update"
+                    />
+                  </label>
+
+                  <label className={styles.field}>
+                    <span>Message</span>
+                    <textarea
+                      value={modalNotice.message}
+                      onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
+                        setModalNotice((current) => ({ ...current, message: event.target.value }))
+                      }
+                      rows={7}
+                      placeholder="Write a clear update for the resident..."
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    className={styles.primaryButtonWide}
+                    onClick={handleModalSend}
+                    disabled={sendingModal}
+                  >
+                    {sendingModal ? "Sending notification..." : "Send resident update"}
+                  </button>
+
+                  {modalResult && <div className={styles.resultBox}>{modalResult}</div>}
+                </section>
+
+                <section className={`${styles.officeCard} ${styles.dangerCard}`}>
+                  <div>
+                    <span className={styles.cardKicker}>RECORD CONTROL</span>
+                    <h3>Delete report</h3>
+                    <p>Delete only duplicate or invalid records. This action cannot be undone.</p>
+                  </div>
+                  <button type="button" className={styles.deleteButton} onClick={() => deleteIssue(selected)}>
+                    Delete report
+                  </button>
+                </section>
+              </aside>
+            </div>
+          </section>
+        )}
+      </div>
+
+      {showAdvisory && (
+        <div className={styles.modalBackdrop} role="presentation" onMouseDown={() => setShowAdvisory(false)}>
+          <section
+            className={styles.advisoryModal}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="advisory-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className={styles.modalHeader}>
+              <div>
+                <p className={styles.eyebrow}>RESIDENT COMMUNICATION</p>
+                <h2 id="advisory-title">New resident advisory</h2>
+                <p>Send an operational notice to residents in one active service area.</p>
+              </div>
+              <button type="button" className={styles.closeButton} onClick={() => setShowAdvisory(false)} aria-label="Close">
+                ×
+              </button>
+            </div>
+
+            <div className={styles.modalBody}>
+              <div className={styles.twoColumnFields}>
+                <label className={styles.field}>
+                  <span>Barangay</span>
+                  <input
+                    list="barangayOptions"
+                    value={quickNotice.barangay}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                      setQuickNotice((current) => ({ ...current, barangay: event.target.value }))
+                    }
+                    placeholder="Select barangay"
+                  />
+                </label>
+                <label className={styles.field}>
+                  <span>Purok <em>optional</em></span>
+                  <input
+                    list="purokOptions"
+                    value={quickNotice.purok}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                      setQuickNotice((current) => ({ ...current, purok: event.target.value }))
+                    }
+                    placeholder="All puroks"
+                  />
+                </label>
+              </div>
+
+              <label className={styles.field}>
+                <span>Notification title</span>
+                <input
+                  value={quickNotice.title}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                    setQuickNotice((current) => ({ ...current, title: event.target.value }))
+                  }
+                  placeholder="Example: Collection advisory"
+                />
+              </label>
+
+              <label className={styles.field}>
+                <span>Message</span>
+                <textarea
+                  value={quickNotice.message}
+                  onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
+                    setQuickNotice((current) => ({ ...current, message: event.target.value }))
+                  }
+                  rows={6}
+                  placeholder="Write the notice residents will receive..."
+                />
+              </label>
+
+              {quickResult && <div className={styles.resultBox}>{quickResult}</div>}
+            </div>
+
+            <div className={styles.modalFooter}>
+              <button type="button" className={styles.secondaryButton} onClick={() => setShowAdvisory(false)}>
+                Cancel
+              </button>
+              <button type="button" className={styles.primaryButton} onClick={handleQuickSend} disabled={sendingQuick}>
+                {sendingQuick ? "Sending..." : "Send advisory"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {showFullImage && selected?.photoBase64 && (
+        <div className={styles.imageBackdrop} role="presentation" onClick={() => setShowFullImage(false)}>
+          <div className={styles.imageModal} onClick={(event) => event.stopPropagation()}>
+            <div className={styles.imageModalHeader}>
+              <div>
+                <strong>Photo evidence</strong>
+                <span>{displayText(selected.issueType, "Issue report")}</span>
+              </div>
+              <button type="button" onClick={() => setShowFullImage(false)} aria-label="Close image">×</button>
+            </div>
+            <img src={getPhotoSrc(selected.photoBase64)} alt="Issue evidence full size" />
           </div>
         </div>
-
-        <SectionCard title="Send Advisory / Notice to Residents">
-          <div className="noticeGrid">
-            <div className="formGroup">
-              <label>Barangay</label>
-              <input
-                list="barangayOptions"
-                value={quickNotice.barangay}
-                onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                  setQuickNotice((current) => ({
-                    ...current,
-                    barangay: event.target.value,
-                  }))
-                }
-                placeholder="Select barangay"
-              />
-            </div>
-
-            <div className="formGroup">
-              <label>Purok</label>
-              <input
-                list="purokOptions"
-                value={quickNotice.purok}
-                onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                  setQuickNotice((current) => ({
-                    ...current,
-                    purok: event.target.value,
-                  }))
-                }
-                placeholder="Optional"
-              />
-            </div>
-
-            <div className="formGroup noticeTitle">
-              <label>Title</label>
-              <input
-                value={quickNotice.title}
-                onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                  setQuickNotice((current) => ({
-                    ...current,
-                    title: event.target.value,
-                  }))
-                }
-                placeholder="Example: Collection Advisory"
-              />
-            </div>
-
-            <div className="formGroup noticeMessage">
-              <label>Message</label>
-              <textarea
-                value={quickNotice.message}
-                onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
-                  setQuickNotice((current) => ({
-                    ...current,
-                    message: event.target.value,
-                  }))
-                }
-                placeholder="Write the complaint/notice that residents will receive..."
-                rows={4}
-              />
-            </div>
-          </div>
-
-          <div className="noticeFooter">
-            <button
-              className="primaryButton"
-              onClick={handleQuickSend}
-              disabled={sendingQuick}
-            >
-              {sendingQuick ? "Sending..." : "Send Notice to Residents"}
-            </button>
-
-            {quickResult && <span className="resultText">{quickResult}</span>}
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Issue Table">
-          <div className="toolbar">
-            <div className="tabs">
-              {[
-                { label: "All", value: "all" },
-                { label: "Driver", value: "driver" },
-                { label: "Resident", value: "resident" },
-              ].map((item) => (
-                <button
-                  key={item.value}
-                  className={tab === item.value ? "tab active" : "tab"}
-                  onClick={() => setTab(item.value as TabType)}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="filters">
-              <input
-                value={search}
-                onChange={(event: ChangeEvent<HTMLInputElement>) => setSearch(event.target.value)}
-                placeholder="Search report, barangay, purok, route..."
-              />
-
-              <select
-                value={statusFilter}
-                onChange={(event: ChangeEvent<HTMLSelectElement>) =>
-                  setStatusFilter(event.target.value as StatusFilter)
-                }
-              >
-                <option value="all">All Status</option>
-                <option value="Open">Open</option>
-                <option value="In Progress">In Progress</option>
-                <option value="Resolved">Resolved</option>
-              </select>
-            </div>
-          </div>
-
-          {loading && <div className="emptyState">Loading reports...</div>}
-
-          {!loading && filtered.length === 0 && (
-            <div className="emptyState">No reports found.</div>
-          )}
-
-          {!loading && filtered.length > 0 && (
-            <div className="tableWrap">
-              <table className="issueTable">
-                <thead>
-                  <tr>
-                    <th>Source</th>
-                    <th>Reporter</th>
-                    <th>Issue</th>
-                    <th>Location</th>
-                    <th>Route</th>
-                    <th>Status</th>
-                    <th>Date</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {filtered.map((issue) => (
-                    <tr key={issue.id}>
-                      <td>
-                        <span
-                          className={
-                            issue.source === "driver"
-                              ? "sourceBadge driver"
-                              : "sourceBadge resident"
-                          }
-                        >
-                          {issue.source === "driver" ? "Driver" : "Resident"}
-                        </span>
-                      </td>
-
-                      <td>
-                        <strong>{getReporterName(issue)}</strong>
-                      </td>
-
-                      <td>
-                        <div className="issueTitle">
-                          {issue.issueType || "Issue Report"}
-                        </div>
-                        <div className="issueDetails">{issue.details}</div>
-                      </td>
-
-                      <td>{getLocationText(issue)}</td>
-
-                      <td>{issue.routeName || "-"}</td>
-
-                      <td>
-                        <span
-                          className={`statusBadge ${normalize(
-                            issue.status || "Open"
-                          ).replace(/\s+/g, "-")}`}
-                        >
-                          {issue.status || "Open"}
-                        </span>
-                      </td>
-
-                      <td>{formatDate(issue.timestamp)}</td>
-
-                      <td>
-                        <div className="rowActions">
-                          <button onClick={() => openIssue(issue)}>View</button>
-
-                          <button
-                            onClick={() => changeStatus(issue, "Resolved")}
-                          >
-                            Resolve
-                          </button>
-
-                          <button
-                            className="dangerButton"
-                            onClick={() => deleteIssue(issue)}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </SectionCard>
-      </div>
+      )}
 
       <datalist id="barangayOptions">
         {locationOptions.barangays.map((barangay) => (
           <option key={barangay} value={barangay} />
         ))}
       </datalist>
-
       <datalist id="purokOptions">
         {locationOptions.puroks.map((purok) => (
           <option key={purok} value={purok} />
         ))}
       </datalist>
-
-      <style jsx>{`
-        .adminIssuesPage {
-          display: grid;
-          gap: 18px;
-        }
-
-        .errorBox {
-          padding: 14px 16px;
-          border-radius: 14px;
-          background: #fef2f2;
-          color: #991b1b;
-          border: 1px solid #fecaca;
-          font-size: 14px;
-        }
-
-        .statsGrid {
-          display: grid;
-          grid-template-columns: repeat(6, minmax(120px, 1fr));
-          gap: 14px;
-        }
-
-        .statCard {
-          background: #ffffff;
-          border: 1px solid #e2e8f0;
-          border-radius: 18px;
-          padding: 18px;
-          box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
-        }
-
-        .statCard span {
-          display: block;
-          color: #64748b;
-          font-size: 13px;
-          margin-bottom: 8px;
-        }
-
-        .statCard strong {
-          color: #0f172a;
-          font-size: 28px;
-          line-height: 1;
-        }
-
-        .noticeGrid {
-          display: grid;
-          grid-template-columns: 1fr 1fr 2fr;
-          gap: 14px;
-        }
-
-        .formGroup {
-          display: grid;
-          gap: 7px;
-        }
-
-        .formGroup label {
-          color: #334155;
-          font-size: 13px;
-          font-weight: 700;
-        }
-
-        .formGroup input,
-        .formGroup select,
-        .formGroup textarea,
-        .filters input,
-        .filters select {
-          width: 100%;
-          border: 1px solid #cbd5e1;
-          border-radius: 12px;
-          padding: 11px 12px;
-          color: #0f172a;
-          background: #ffffff;
-          outline: none;
-          font-size: 14px;
-        }
-
-        .formGroup input:focus,
-        .formGroup textarea:focus,
-        .filters input:focus,
-        .filters select:focus {
-          border-color: #22c55e;
-          box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
-        }
-
-        .noticeMessage {
-          grid-column: 1 / -1;
-        }
-
-        .noticeFooter {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          margin-top: 14px;
-          flex-wrap: wrap;
-        }
-
-        .primaryButton {
-          border: none;
-          border-radius: 12px;
-          padding: 11px 16px;
-          background: #16a34a;
-          color: #ffffff;
-          cursor: pointer;
-          font-weight: 800;
-          box-shadow: 0 10px 20px rgba(22, 163, 74, 0.18);
-        }
-
-        .primaryButton:disabled {
-          opacity: 0.65;
-          cursor: not-allowed;
-        }
-
-        .resultText {
-          font-size: 14px;
-          color: #166534;
-          font-weight: 700;
-        }
-
-        .toolbar {
-          display: flex;
-          justify-content: space-between;
-          gap: 14px;
-          align-items: center;
-          margin-bottom: 16px;
-          flex-wrap: wrap;
-        }
-
-        .tabs {
-          display: flex;
-          gap: 8px;
-          background: #f1f5f9;
-          padding: 6px;
-          border-radius: 14px;
-        }
-
-        .tab {
-          border: none;
-          border-radius: 10px;
-          padding: 9px 14px;
-          background: transparent;
-          color: #475569;
-          cursor: pointer;
-          font-weight: 800;
-        }
-
-        .tab.active {
-          background: #16a34a;
-          color: #ffffff;
-        }
-
-        .filters {
-          display: flex;
-          gap: 10px;
-          min-width: 420px;
-        }
-
-        .filters input {
-          min-width: 280px;
-        }
-
-        .emptyState {
-          text-align: center;
-          padding: 34px;
-          color: #64748b;
-          background: #f8fafc;
-          border-radius: 16px;
-          border: 1px dashed #cbd5e1;
-        }
-
-        .tableWrap {
-          overflow-x: auto;
-          border: 1px solid #e2e8f0;
-          border-radius: 16px;
-        }
-
-        .issueTable {
-          width: 100%;
-          border-collapse: collapse;
-          background: #ffffff;
-        }
-
-        .issueTable th {
-          background: #f8fafc;
-          color: #475569;
-          font-size: 12px;
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-          text-align: left;
-          padding: 14px;
-          border-bottom: 1px solid #e2e8f0;
-          white-space: nowrap;
-        }
-
-        .issueTable td {
-          padding: 14px;
-          border-bottom: 1px solid #f1f5f9;
-          color: #0f172a;
-          vertical-align: top;
-          font-size: 14px;
-        }
-
-        .issueTable tr:hover td {
-          background: #f8fafc;
-        }
-
-        .sourceBadge,
-        .statusBadge {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          border-radius: 999px;
-          padding: 6px 10px;
-          font-size: 12px;
-          font-weight: 900;
-          white-space: nowrap;
-        }
-
-        .sourceBadge.driver {
-          background: #eff6ff;
-          color: #1d4ed8;
-        }
-
-        .sourceBadge.resident {
-          background: #ecfdf5;
-          color: #047857;
-        }
-
-        .statusBadge.open {
-          background: #fff7ed;
-          color: #c2410c;
-        }
-
-        .statusBadge.in-progress {
-          background: #eff6ff;
-          color: #1d4ed8;
-        }
-
-        .statusBadge.resolved {
-          background: #f0fdf4;
-          color: #15803d;
-        }
-
-        .issueTitle {
-          font-weight: 900;
-          margin-bottom: 4px;
-        }
-
-        .issueDetails {
-          color: #64748b;
-          max-width: 360px;
-          overflow: hidden;
-          display: -webkit-box;
-          -webkit-line-clamp: 2;
-          -webkit-box-orient: vertical;
-        }
-
-        .rowActions {
-          display: flex;
-          gap: 8px;
-          flex-wrap: wrap;
-        }
-
-        .rowActions button,
-        .modalActions button,
-        .closeButton {
-          border: 1px solid #cbd5e1;
-          background: #ffffff;
-          color: #0f172a;
-          border-radius: 10px;
-          padding: 8px 10px;
-          cursor: pointer;
-          font-weight: 800;
-        }
-
-        .dangerButton {
-          border-color: #fecaca !important;
-          background: #fff1f2 !important;
-          color: #be123c !important;
-        }
-
-        .modalBackdrop {
-          position: fixed;
-          inset: 0;
-          z-index: 1000;
-          background: rgba(15, 23, 42, 0.62);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 24px;
-        }
-
-        .modalCard {
-          width: min(1120px, 100%);
-          max-height: 92vh;
-          overflow: auto;
-          background: #ffffff;
-          border-radius: 24px;
-          padding: 22px;
-          box-shadow: 0 24px 80px rgba(15, 23, 42, 0.25);
-        }
-
-        .modalHeader {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          gap: 16px;
-          border-bottom: 1px solid #e2e8f0;
-          padding-bottom: 16px;
-          margin-bottom: 18px;
-        }
-
-        .modalKicker {
-          margin: 0 0 4px;
-          color: #16a34a;
-          font-size: 13px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }
-
-        .modalHeader h2 {
-          margin: 0;
-          color: #0f172a;
-          font-size: 24px;
-        }
-
-        .closeButton {
-          width: 38px;
-          height: 38px;
-          font-size: 24px;
-          line-height: 1;
-        }
-
-        .modalGrid {
-          display: grid;
-          grid-template-columns: 1.1fr 0.9fr;
-          gap: 18px;
-        }
-
-        .detailPanel,
-        .noticePanel {
-          border: 1px solid #e2e8f0;
-          border-radius: 18px;
-          padding: 16px;
-          background: #f8fafc;
-        }
-
-        .noticePanel {
-          background: #ffffff;
-        }
-
-        .noticePanel h3 {
-          margin: 0 0 6px;
-          color: #0f172a;
-          font-size: 20px;
-        }
-
-        .noticePanel p {
-          margin: 0 0 14px;
-          color: #64748b;
-          font-size: 14px;
-        }
-
-        .targetLocationBox {
-          border: 1px solid #dbeafe;
-          background: #f8fafc;
-          border-radius: 16px;
-          padding: 14px;
-          margin-bottom: 14px;
-        }
-
-        .targetLocationHeader {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 12px;
-          margin-bottom: 12px;
-        }
-
-        .targetLocationHeader span {
-          display: block;
-          color: #64748b;
-          font-size: 12px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-        }
-
-        .targetLocationHeader strong {
-          color: #0f172a;
-          font-size: 15px;
-        }
-
-        .smallEditButton {
-          border: 1px solid #cbd5e1;
-          background: #ffffff;
-          color: #0f172a;
-          border-radius: 10px;
-          padding: 8px 10px;
-          cursor: pointer;
-          font-size: 12px;
-          font-weight: 800;
-          white-space: nowrap;
-        }
-
-        .readonlyLocationGrid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 10px;
-        }
-
-        .readonlyLocationGrid div {
-          background: #ffffff;
-          border: 1px solid #e2e8f0;
-          border-radius: 12px;
-          padding: 11px 12px;
-        }
-
-        .readonlyLocationGrid span {
-          display: block;
-          color: #64748b;
-          font-size: 11px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-          margin-bottom: 4px;
-        }
-
-        .readonlyLocationGrid strong {
-          color: #0f172a;
-          font-size: 14px;
-        }
-
-        .fullLocation {
-          grid-column: 1 / -1;
-        }
-
-        .manualLocationGrid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 10px;
-        }
-
-        .locationWarning {
-          margin: 10px 0 0 !important;
-          padding: 10px 12px;
-          border-radius: 12px;
-          background: #fff7ed;
-          color: #c2410c !important;
-          font-size: 13px !important;
-          font-weight: 700;
-        }
-
-        .detailItem {
-          display: grid;
-          gap: 4px;
-          margin-bottom: 12px;
-        }
-
-        .detailItem span {
-          color: #64748b;
-          font-size: 12px;
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-          font-weight: 900;
-        }
-
-        .detailItem strong {
-          color: #0f172a;
-        }
-
-        .detailItem p {
-          margin: 0;
-          color: #334155;
-          line-height: 1.55;
-        }
-
-        .adminMessageBox {
-          background: #ecfdf5;
-          border: 1px solid #bbf7d0;
-          padding: 12px;
-          border-radius: 14px;
-        }
-
-        .adminMessageBox small {
-          color: #166534;
-          font-weight: 700;
-        }
-
-        .photoBox {
-          margin-top: 12px;
-          border-radius: 16px;
-          overflow: hidden;
-          border: 1px solid #e2e8f0;
-          background: #ffffff;
-        }
-
-        .photoBox img {
-          width: 100%;
-          display: block;
-          object-fit: cover;
-        }
-
-        .modalActions {
-          display: flex;
-          gap: 10px;
-          flex-wrap: wrap;
-          margin-top: 14px;
-        }
-
-        .fullButton {
-          width: 100%;
-          margin-top: 10px;
-        }
-
-        .modalResult {
-          margin-top: 12px;
-          padding: 11px 12px;
-          border-radius: 12px;
-          background: #f0fdf4;
-          color: #166534;
-          font-weight: 800;
-          font-size: 14px;
-        }
-
-        @media (max-width: 1100px) {
-          .statsGrid {
-            grid-template-columns: repeat(3, 1fr);
-          }
-
-          .noticeGrid {
-            grid-template-columns: 1fr 1fr;
-          }
-
-          .noticeTitle,
-          .noticeMessage {
-            grid-column: 1 / -1;
-          }
-
-          .modalGrid {
-            grid-template-columns: 1fr;
-          }
-        }
-
-        @media (max-width: 760px) {
-          .statsGrid {
-            grid-template-columns: repeat(2, 1fr);
-          }
-
-          .noticeGrid {
-            grid-template-columns: 1fr;
-          }
-
-          .toolbar {
-            align-items: stretch;
-          }
-
-          .tabs,
-          .filters {
-            width: 100%;
-          }
-
-          .filters {
-            min-width: 0;
-            flex-direction: column;
-          }
-
-          .filters input {
-            min-width: 0;
-          }
-
-          .modalBackdrop {
-            padding: 10px;
-          }
-
-          .modalCard {
-            border-radius: 18px;
-            padding: 16px;
-          }
-
-          .readonlyLocationGrid,
-          .manualLocationGrid {
-            grid-template-columns: 1fr;
-          }
-        }
-      `}</style>
     </DashboardShell>
   );
 }

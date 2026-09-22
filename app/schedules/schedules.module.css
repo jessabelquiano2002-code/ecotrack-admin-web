@@ -357,3 +357,30 @@
   .coverageEditorHead { align-items: flex-start; }
   .purokChoices { grid-template-columns: 1fr; padding: 12px; }
 }
+
+
+/* Per-area arrival timetable. The overall route window remains separate for
+   driver conflict checks, while each Barangay/Purok receives its own ETA. */
+.arrivalPlanner { display: grid; gap: 14px; padding-top: 4px; }
+.arrivalPlannerIntro { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.arrivalPlannerIntro > div { min-width: 0; }
+.arrivalPlannerIntro h3 { margin: 0 0 5px; color: #29483a; font-size: 14px; font-weight: 650; }
+.arrivalPlannerIntro p { margin: 0; max-width: 720px; color: #6f8175; font-size: 12px; line-height: 1.6; }
+.arrivalPlannerIntro > span { flex-shrink: 0; border: 1px solid #d8e6dd; border-radius: 999px; background: #f6faf7; color: #557061; padding: 5px 9px; font-size: 11px; font-weight: 600; }
+.arrivalGroup { overflow: hidden; border: 1px solid #dce5df; border-radius: 10px; background: #fff; }
+.arrivalGroupHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 15px; border-bottom: 1px solid #e7ede9; background: #f8fbf9; }
+.arrivalGroupHead strong { color: #29483a; font-size: 14px; font-weight: 650; }
+.arrivalGroupHead small { color: #74857b; font-size: 11px; }
+.arrivalRows { display: grid; }
+.arrivalRow { display: grid; grid-template-columns: minmax(0,1fr) minmax(150px,190px); align-items: center; gap: 18px; padding: 12px 15px; border-bottom: 1px solid #edf1ee; }
+.arrivalRow:last-child { border-bottom: 0; }
+.arrivalRow > span { min-width: 0; display: grid; gap: 3px; }
+.arrivalRow strong { color: #29483a; font-size: 13px; font-weight: 600; }
+.arrivalRow small { color: #7d8d83; font-size: 10px; }
+.arrivalRow input { width: 100%; min-width: 0; min-height: 42px; border: 1px solid #cedbd2; border-radius: 7px; background: #fff; color: #233c2d; padding: 8px 10px; font-size: 14px; }
+.arrivalRow input:focus { border-color: #399468; }
+@media (max-width: 620px) {
+  .arrivalPlannerIntro { display: grid; }
+  .arrivalPlannerIntro > span { justify-self: start; }
+  .arrivalRow { grid-template-columns: 1fr; gap: 8px; }
+}
