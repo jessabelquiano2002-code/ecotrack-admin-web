@@ -238,7 +238,6 @@ const pageGuidance = [
   { path: "/service-areas", title: "Add service coverage", detail: "Select one or many official Barangays and Puroks. No map work is required here." },
   { path: "/routes", title: "Create the route assignment", detail: "Choose the Barangays and Puroks, then assign the driver and truck. Barangay pins are attached automatically." },
   { path: "/drivers", title: "Manage people and access", detail: "Create or review driver accounts here before using them in route assignments." },
-  { path: "/attendance", title: "Review driver attendance", detail: "Open each driver folder to verify Time In, Time Out, camera selfies, GPS evidence, and printable attendance records." },
   { path: "/schedules", title: "Set the collection date and time", detail: "Match every schedule to the correct service area so residents receive accurate reminders." },
   { path: "/waste-points", title: "Maintain official collection locations", detail: "Check the location name and map position carefully before publishing it to residents." },
   { path: "/content-management", title: "Publish resident information", detail: "Preview every announcement or education item before saving it for the mobile app." },
@@ -442,11 +441,6 @@ const IconMessages = () => (
 );
 
 
-const IconAttendance = () => (
-  <svg viewBox="0 0 24 24" className="admin-svg-icon">
-    <path d="M9 3h6l1.2 2H20a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h3.8L9 3Zm3 5a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 2a3 3 0 1 1 0 6 3 3 0 0 1 0-6Z" />
-  </svg>
-);
 
 const IconUsers = () => (
   <svg viewBox="0 0 24 24" className="admin-svg-icon">
@@ -504,13 +498,6 @@ const links: SidebarLink[] = [
     help: "Monitor active drivers and truck locations.",
     group: "DAILY OPERATIONS",
     icon: <IconMap />,
-  },
-  {
-    href: "/attendance",
-    label: "Driver Attendance",
-    help: "Verify Time In, Time Out, selfies, GPS evidence, and printable records.",
-    group: "DAILY OPERATIONS",
-    icon: <IconAttendance />,
   },
   {
     href: "/routes",

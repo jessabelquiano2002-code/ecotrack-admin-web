@@ -45,6 +45,7 @@ type CollectionRecord = {
   driverName: string;
   truckId: string;
   barangay: string;
+  barangays: string[];
   assignedPuroks: string[];
   claimedPuroks: string[];
   unclaimedPuroks: string[];
@@ -68,6 +69,7 @@ type IssueRecord = {
   driverId: string;
   driverName: string;
   barangay: string;
+  barangays: string[];
   puroks: string[];
   type: string;
   severity: string;
@@ -218,6 +220,7 @@ type ScheduleRecord = {
   id: string;
   title: string;
   barangay: string;
+  barangays: string[];
   puroks: string[];
   driverId: string;
   driverName: string;
@@ -615,16 +618,34 @@ function purokList(item: AnyItem): string[] {
   return single && single !== "All Puroks" ? [single] : [];
 }
 
+function barangaysList(item: AnyItem): string[] {
+  const direct = [
+    ...normalizeTextArray(item.barangay),
+    ...normalizeTextArray(item.barangays),
+    ...normalizeTextArray(item.location?.barangay),
+    ...normalizeTextArray(item.location?.barangays),
+    ...normalizeTextArray(item.assignedBarangay),
+    ...normalizeTextArray(item.assignedBarangays),
+    ...normalizeTextArray(item.addressBarangay),
+    ...normalizeTextArray(item.targetBarangay),
+    ...normalizeTextArray(item.targetBarangays),
+    ...normalizeTextArray(item.area),
+  ];
+
+  const coverage = item.coverageByBarangay;
+  const fromCoverage =
+    coverage && typeof coverage === "object"
+      ? Object.entries(coverage as Record<string, any>).map(([storedKey, value]) =>
+          cleanText((value && typeof value === "object" ? value.barangay : undefined) ?? storedKey),
+        )
+      : [];
+
+  return unique([...direct, ...fromCoverage].filter(Boolean));
+}
+
 function barangayText(item: AnyItem): string {
-  return cleanText(
-    item.barangay ??
-      item.location?.barangay ??
-      item.assignedBarangay ??
-      item.addressBarangay ??
-      item.targetBarangay ??
-      item.area,
-    "Unspecified Barangay",
-  );
+  const [first] = barangaysList(item);
+  return first || "Unspecified Barangay";
 }
 
 function unique(values: string[]): string[] {
@@ -1497,6 +1518,7 @@ export function MetroWastePlanningReport() {
           "Unassigned",
         ),
         barangay: barangayText({ ...summaryItem, ...routeSession, ...item }),
+        barangays: barangaysList({ ...summaryItem, ...routeSession, ...item }),
         assignedPuroks: unique(assignedPuroks),
         claimedPuroks: unique(claimedPuroks),
         unclaimedPuroks: unique(unclaimedPuroks),
@@ -1547,6 +1569,7 @@ export function MetroWastePlanningReport() {
         driverId: cleanText(item.driverId ?? item.uid),
         driverName: cleanText(item.driverName, ""),
         barangay: barangayText(item),
+        barangays: barangaysList(item),
         puroks: purokList(item),
         type: cleanText(item.issueType ?? item.type ?? item.category, "General operational issue"),
         severity: cleanText(item.severity ?? item.priority, "Normal"),
@@ -1571,6 +1594,7 @@ export function MetroWastePlanningReport() {
       id: cleanText(item.id),
       title: cleanText(item.title ?? item.name ?? item.scheduleName, "Collection schedule"),
       barangay: barangayText(item),
+      barangays: barangaysList(item),
       puroks: purokList(item),
       driverId: cleanText(item.driverId ?? item.assignedDriverId),
       driverName: cleanText(item.driverName ?? item.assignedDriverName, "Unassigned"),
@@ -1584,9 +1608,9 @@ export function MetroWastePlanningReport() {
   const bounds = useMemo(() => reportBounds(range, customFrom, customTo), [range, customFrom, customTo]);
 
   const barangayOptions = useMemo(() => unique([
-    ...normalizedCollections.map((item) => item.barangay),
-    ...normalizedIssues.map((item) => item.barangay),
-    ...normalizedSchedules.map((item) => item.barangay),
+    ...normalizedCollections.flatMap((item) => item.barangays),
+    ...normalizedIssues.flatMap((item) => item.barangays),
+    ...normalizedSchedules.flatMap((item) => item.barangays),
   ].filter((item) => item && item !== "Unspecified Barangay")).sort(), [normalizedCollections, normalizedIssues, normalizedSchedules]);
 
   const driverOptions = useMemo(() => {
@@ -1606,7 +1630,7 @@ export function MetroWastePlanningReport() {
 
   const filteredCollections = useMemo(() => normalizedCollections.filter((item) => {
     if (!timestampInBounds(item.timestamp, bounds)) return false;
-    if (barangayFilter !== "all" && item.barangay !== barangayFilter) return false;
+    if (barangayFilter !== "all" && !item.barangays.includes(barangayFilter)) return false;
     if (driverFilter !== "all" && item.driverId !== driverFilter) return false;
     if (truckFilter !== "all" && item.truckId !== truckFilter) return false;
     return true;
@@ -1615,14 +1639,14 @@ export function MetroWastePlanningReport() {
   const filteredIssues = useMemo(() => normalizedIssues.filter((item) => {
     const dateMatch = item.timestamp ? timestampInBounds(item.timestamp, bounds) : item.isOpen;
     if (!dateMatch) return false;
-    if (barangayFilter !== "all" && item.barangay !== barangayFilter) return false;
+    if (barangayFilter !== "all" && !item.barangays.includes(barangayFilter)) return false;
     if (driverFilter !== "all" && item.driverId && item.driverId !== driverFilter) return false;
     return true;
   }), [normalizedIssues, bounds, barangayFilter, driverFilter]);
 
   const filteredSchedules = useMemo(() => normalizedSchedules.filter((item) => {
     if (["cancelled", "inactive", "deleted"].includes(item.status)) return false;
-    if (barangayFilter !== "all" && item.barangay !== barangayFilter) return false;
+    if (barangayFilter !== "all" && !item.barangays.includes(barangayFilter)) return false;
     if (driverFilter !== "all" && item.driverId !== driverFilter) return false;
     if (truckFilter !== "all" && item.truckId !== truckFilter) return false;
     return true;
@@ -1843,20 +1867,20 @@ export function MetroWastePlanningReport() {
       servicePurokCounts.set(barangay, puroks);
     });
 
-    filteredCollections.forEach((item) => keys.add(item.barangay));
-    filteredComplaints.forEach((item) => keys.add(item.barangay));
-    filteredIssues.forEach((item) => keys.add(item.barangay));
-    filteredSchedules.forEach((item) => keys.add(item.barangay));
+    filteredCollections.forEach((item) => item.barangays.forEach((barangay) => keys.add(barangay)));
+    filteredComplaints.forEach((item) => item.barangays.forEach((barangay) => keys.add(barangay)));
+    filteredIssues.forEach((item) => item.barangays.forEach((barangay) => keys.add(barangay)));
+    filteredSchedules.forEach((item) => item.barangays.forEach((barangay) => keys.add(barangay)));
     filteredWastePoints.forEach((item) => keys.add(barangayText(item)));
 
     return Array.from(keys)
       .filter((barangay) => barangay && barangay !== "Unspecified Barangay")
       .map((barangay) => {
-        const collections = filteredCollections.filter((item) => item.barangay === barangay);
+        const collections = filteredCollections.filter((item) => item.barangays.includes(barangay));
         const completed = collections.filter((item) => item.status === "completed" && item.unclaimedPuroks.length === 0).length;
-        const complaints = filteredComplaints.filter((item) => item.barangay === barangay).length;
-        const openIssues = filteredIssues.filter((item) => item.barangay === barangay && item.isOpen).length;
-        const activeSchedules = filteredSchedules.filter((item) => item.barangay === barangay).length;
+        const complaints = filteredComplaints.filter((item) => item.barangays.includes(barangay)).length;
+        const openIssues = filteredIssues.filter((item) => item.barangays.includes(barangay) && item.isOpen).length;
+        const activeSchedules = filteredSchedules.filter((item) => item.barangays.includes(barangay)).length;
         const activeWastePoints = filteredWastePoints.filter((item) => barangayText(item) === barangay && item.active !== false && String(item.active).toLowerCase() !== "false").length;
         const completionRate = collections.length ? (completed / collections.length) * 100 : 0;
         let assessment = "Stable";
@@ -1999,36 +2023,38 @@ export function MetroWastePlanningReport() {
       if (!keys.has(key)) keys.set(key, { barangay: safeBarangay, purok: safePurok });
     };
 
+    const barangaysOf = (item: { barangays: string[] }) => (item.barangays.length > 0 ? item.barangays : ["Unspecified Barangay"]);
+
     filteredCollections.forEach((item) => {
-      if (scope === "barangay") register(item.barangay);
+      if (scope === "barangay") barangaysOf(item).forEach((barangay) => register(barangay));
       else {
         const targets = item.assignedPuroks.length > 0 ? item.assignedPuroks : item.claimedPuroks.length > 0 ? item.claimedPuroks : ["Unspecified Purok"];
-        targets.forEach((purok) => register(item.barangay, purok));
+        barangaysOf(item).forEach((barangay) => targets.forEach((purok) => register(barangay, purok)));
       }
     });
     filteredIssues.forEach((item) => {
-      if (scope === "barangay") register(item.barangay);
-      else (item.puroks.length > 0 ? item.puroks : ["Unspecified Purok"]).forEach((purok) => register(item.barangay, purok));
+      if (scope === "barangay") barangaysOf(item).forEach((barangay) => register(barangay));
+      else barangaysOf(item).forEach((barangay) => (item.puroks.length > 0 ? item.puroks : ["Unspecified Purok"]).forEach((purok) => register(barangay, purok)));
     });
     filteredSchedules.forEach((item) => {
-      if (scope === "barangay") register(item.barangay);
-      else (item.puroks.length > 0 ? item.puroks : ["Unspecified Purok"]).forEach((purok) => register(item.barangay, purok));
+      if (scope === "barangay") barangaysOf(item).forEach((barangay) => register(barangay));
+      else barangaysOf(item).forEach((barangay) => (item.puroks.length > 0 ? item.puroks : ["Unspecified Purok"]).forEach((purok) => register(barangay, purok)));
     });
 
     return Array.from(keys.entries()).map(([key, area]) => {
       const collectionMatches = filteredCollections.filter((item) => {
-        if (item.barangay !== area.barangay) return false;
+        if (!barangaysOf(item).includes(area.barangay)) return false;
         if (!area.purok) return true;
         const allPuroks = unique([...item.assignedPuroks, ...item.claimedPuroks, ...item.unclaimedPuroks]);
         return allPuroks.length === 0 || allPuroks.includes(area.purok);
       });
       const issueMatches = filteredIssues.filter((item) => {
-        if (item.barangay !== area.barangay) return false;
+        if (!barangaysOf(item).includes(area.barangay)) return false;
         if (!area.purok) return true;
         return item.puroks.length === 0 || item.puroks.includes(area.purok);
       });
       const scheduleMatches = filteredSchedules.filter((item) => {
-        if (item.barangay !== area.barangay) return false;
+        if (!barangaysOf(item).includes(area.barangay)) return false;
         if (!area.purok) return true;
         return item.puroks.length === 0 || item.puroks.includes(area.purok);
       });
@@ -2094,7 +2120,9 @@ export function MetroWastePlanningReport() {
 
     filteredIssues.forEach((item) => {
       if (!item.isOpen || complaintSources.has(item.source)) return;
-      operationalIssueByBarangay.set(item.barangay, (operationalIssueByBarangay.get(item.barangay) || 0) + 1);
+      item.barangays.forEach((barangay) => {
+        operationalIssueByBarangay.set(barangay, (operationalIssueByBarangay.get(barangay) || 0) + 1);
+      });
     });
 
     return barangayRows
