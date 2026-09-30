@@ -6,6 +6,17 @@ export const dynamic = "force-dynamic";
 const MAX_LICENSE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_LICENSE_TYPES = new Set(["image/jpeg", "image/png"]);
 
+/**
+ * Sequential driver numbers (DRV-0001, DRV-0002, ...).
+ *
+ * - `counters/driverNumber` holds the last number that was handed out.
+ * - Each driver stores its number once, at creation, in `drivers/{uid}/driverNumber`.
+ * - Editing a driver (PATCH) never writes this field, so a number is permanent.
+ * - Numbers are never reused: deleting a driver leaves a gap on purpose, so an
+ *   old ID can never point at a different person.
+ */
+const DRIVER_COUNTER_PATH = "counters/driverNumber";
+
 type DriverFields = {
   name: string;
   email: string;
@@ -154,6 +165,135 @@ async function loadAdminServices() {
   };
 }
 
+type AdminDb = Awaited<ReturnType<typeof loadAdminServices>>["adminDb"];
+
+function isValidDriverNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+/**
+ * Atomically reserves `count` consecutive numbers and returns the first one.
+ * `floor` guards against a missing or stale counter: the reserved block always
+ * starts above the highest number already stored on a driver.
+ */
+async function reserveDriverNumbers(
+  adminDb: AdminDb,
+  count: number,
+  floor = 0,
+): Promise<number> {
+  const result = await adminDb
+    .ref(DRIVER_COUNTER_PATH)
+    .transaction((current: unknown) => {
+      const base = Math.max(Number(current) || 0, floor);
+      return base + count;
+    });
+
+  if (!result.committed) {
+    throw new ApiError(
+      500,
+      "Unable to reserve a driver number. Please try again.",
+    );
+  }
+
+  return Number(result.snapshot.val()) - count + 1;
+}
+
+/**
+ * Gives the counter back after a failed create, but only if nobody else has
+ * reserved a number in the meantime. This keeps numbering free of gaps when a
+ * create fails halfway.
+ */
+async function releaseDriverNumber(
+  adminDb: AdminDb,
+  driverNumber: number,
+): Promise<void> {
+  await adminDb
+    .ref(DRIVER_COUNTER_PATH)
+    .transaction((current: unknown) =>
+      Number(current) === driverNumber ? driverNumber - 1 : current,
+    );
+}
+
+/**
+ * Numbers every driver that does not have one yet (accounts created before this
+ * feature existed), oldest first, so the sequence follows creation order.
+ * Safe to call repeatedly; drivers that already have a number are never touched.
+ */
+async function assignMissingDriverNumbers(
+  adminDb: AdminDb,
+): Promise<{ assigned: number; highest: number }> {
+  const snapshot = await adminDb.ref("drivers").get();
+
+  if (!snapshot.exists()) {
+    return { assigned: 0, highest: 0 };
+  }
+
+  const missing: { id: string; createdAt: number }[] = [];
+  let highest = 0;
+
+  snapshot.forEach((child) => {
+    const value = (child.val() ?? {}) as {
+      driverNumber?: unknown;
+      createdAt?: unknown;
+    };
+
+    if (isValidDriverNumber(value.driverNumber)) {
+      highest = Math.max(highest, value.driverNumber);
+    } else if (child.key) {
+      missing.push({
+        id: child.key,
+        createdAt: Number(value.createdAt) || 0,
+      });
+    }
+  });
+
+  if (missing.length === 0) {
+    return { assigned: 0, highest };
+  }
+
+  missing.sort(
+    (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id),
+  );
+
+  const firstNumber = await reserveDriverNumbers(
+    adminDb,
+    missing.length,
+    highest,
+  );
+
+  let assigned = 0;
+
+  for (const [index, driver] of missing.entries()) {
+    const driverNumber = firstNumber + index;
+
+    // Transaction on the whole driver node: it never recreates a driver that was
+    // deleted meanwhile, and never overwrites a number another request just set.
+    const result = await adminDb
+      .ref(`drivers/${driver.id}`)
+      .transaction((current: unknown) => {
+        if (!current || typeof current !== "object") return current;
+
+        const record = current as { driverNumber?: unknown };
+        if (isValidDriverNumber(record.driverNumber)) return current;
+
+        return { ...record, driverNumber };
+      });
+
+    if (result.committed && result.snapshot.val()?.driverNumber === driverNumber) {
+      assigned += 1;
+    }
+  }
+
+  return { assigned, highest: firstNumber + missing.length - 1 };
+}
+
+/** Number the driver gets in this request, after any legacy drivers are numbered. */
+async function allocateDriverNumber(adminDb: AdminDb): Promise<number> {
+  const { highest } = await assignMissingDriverNumbers(adminDb);
+
+  return reserveDriverNumbers(adminDb, 1, highest);
+}
+
 function firebaseAdminError(error: unknown): ApiError {
   const code = String(
     (error as { code?: unknown })?.code || "",
@@ -235,6 +375,7 @@ function jsonError(error: unknown, fallback: string): NextResponse {
 
 export async function POST(request: NextRequest) {
   let createdUid = "";
+  let reservedDriverNumber = 0;
 
   try {
     const { adminAuth, adminDb, requireAdmin } =
@@ -272,6 +413,10 @@ export async function POST(request: NextRequest) {
 
     createdUid = createdUser.uid;
 
+    // Reserved only after every validation and the Auth account succeeded, so a
+    // rejected request never consumes a number.
+    reservedDriverNumber = await allocateDriverNumber(adminDb);
+
     const timestamp = Date.now();
     const licenseImageRef =
       `driver_license_images/${createdUid}`;
@@ -279,6 +424,7 @@ export async function POST(request: NextRequest) {
       `driver_license_images_back/${createdUid}`;
 
     const driverRecord = {
+      driverNumber: reservedDriverNumber,
       name: fields.name,
       email: fields.email,
       phone: fields.phone,
@@ -326,6 +472,7 @@ export async function POST(request: NextRequest) {
       {
         success: true,
         uid: createdUid,
+        driverNumber: reservedDriverNumber,
       },
       { status: 201 },
     );
@@ -343,6 +490,9 @@ export async function POST(request: NextRequest) {
             [`driver_license_images_back/${createdUid}`]: null,
             [`driver_locations/${createdUid}`]: null,
           }),
+          reservedDriverNumber
+            ? releaseDriverNumber(adminDb, reservedDriverNumber)
+            : Promise.resolve(),
         ]);
       } catch {
         // Ignore rollback errors so the original error is returned.
@@ -421,6 +571,8 @@ export async function PATCH(request: NextRequest) {
 
     const timestamp = Date.now();
 
+    // Only the fields below are written. `driverNumber` and `createdAt` are
+    // deliberately absent, so editing a driver can never change its ID.
     const rootUpdate: Record<string, unknown> = {
       [`drivers/${driverId}/name`]: fields.name,
       [`drivers/${driverId}/email`]: fields.email,
@@ -492,6 +644,27 @@ export async function PATCH(request: NextRequest) {
     return jsonError(
       error,
       "Unable to update driver. Check the Firebase Admin server configuration.",
+    );
+  }
+}
+
+/**
+ * Numbers drivers created before sequential IDs existed. The drivers page calls
+ * this once when it sees a driver without a number; it is idempotent.
+ */
+export async function PUT(request: NextRequest) {
+  try {
+    const { adminDb, requireAdmin } = await loadAdminServices();
+
+    await requireAdmin(request);
+
+    const { assigned } = await assignMissingDriverNumbers(adminDb);
+
+    return NextResponse.json({ success: true, assigned });
+  } catch (error: unknown) {
+    return jsonError(
+      error,
+      "Unable to assign driver numbers. Check the Firebase Admin server configuration.",
     );
   }
 }

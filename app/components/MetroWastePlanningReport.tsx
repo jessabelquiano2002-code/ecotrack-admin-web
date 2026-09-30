@@ -3,25 +3,52 @@
 import { onValue, ref } from "@/lib/offlineFirebaseDatabase";
 import { useEffect, useMemo, useState } from "react";
 import { db } from "../../lib/firebase";
+import {
+  buildCollectionRecords,
+  buildIssueRecords,
+  buildScheduleRecords,
+  scopeCollections,
+  scopeIssues,
+  scopeSchedules,
+  isCleanCompletion,
+  bestTimestamp,
+  barangayText,
+  barangaysList,
+  cleanText,
+  finiteNumber,
+  flattenPendingSummaries,
+  flattenRouteSessions,
+  formatDate,
+  isFullTruck,
+  localDayEnd,
+  localDayStart,
+  nonNegativeNumber,
+  normalizeTimestamp,
+  normalizedStatus,
+  normalizePurok,
+  normalizeTextArray,
+  objectValue,
+  parseGpsHistory,
+  purokList,
+  reportBounds,
+  timestampInBounds,
+  toArray,
+  truckLoadPercent,
+  unique,
+  COMPLAINT_SOURCES,
+  type AnyItem,
+  type CollectionRecord,
+  type GpsPoint,
+  type GpsTrace,
+  type IssueRecord,
+  type RangeFilter,
+  type ScheduleRecord,
+} from "./operationsData";
 
-type AnyItem = Record<string, any>;
-type RangeFilter = "today" | "7d" | "30d" | "90d" | "custom" | "all";
-type ReportType = "complete" | "collection" | "drivers" | "capacity" | "issues" | "complaints" | "schedules" | "gps";
+type ReportType = "complete" | "collection" | "drivers" | "capacity" | "issues" | "complaints" | "response" | "schedules" | "gps";
 type Priority = "Critical" | "High" | "Monitor" | "Stable";
 
-type GpsPoint = {
-  latitude: number;
-  longitude: number;
-  timestamp: number;
-};
 
-type GpsTrace = {
-  scheduleId: string;
-  sessionId: string;
-  points: GpsPoint[];
-  startTimestamp: number;
-  endTimestamp: number;
-};
 
 type DriverProfile = {
   id: string;
@@ -35,50 +62,39 @@ type DriverProfile = {
   lastGpsAt: number;
 };
 
-type CollectionRecord = {
-  id: string;
-  sessionId: string;
-  scheduleId: string;
-  routeId: string;
-  routeName: string;
-  driverId: string;
-  driverName: string;
-  truckId: string;
+
+
+type ComplaintResponseRow = {
   barangay: string;
-  barangays: string[];
-  assignedPuroks: string[];
-  claimedPuroks: string[];
-  unclaimedPuroks: string[];
-  status: "completed" | "partial" | "missed" | "pending";
-  timestamp: number;
-  startTime: number;
-  completedAt: number;
-  truckLoadPercent: number | null;
-  truckLoadLabel: string;
-  completionReason: string;
-  collectionCondition: string;
-  distanceMeters: number;
-  durationSeconds: number;
-  hasGps: boolean;
-  gpsPointCount: number;
+  total: number;
+  resolved: number;
+  open: number;
+  overdueOpen: number;
+  withTimes: number;
+  avgHours: number | null;
+  medianHours: number | null;
+  within48Rate: number | null;
+  oldestOpenHours: number;
 };
 
-type IssueRecord = {
+type OverdueComplaintRow = {
   id: string;
-  source: string;
-  driverId: string;
-  driverName: string;
   barangay: string;
-  barangays: string[];
-  puroks: string[];
+  puroks: string;
   type: string;
   severity: string;
-  status: string;
-  details: string;
   timestamp: number;
-  isOpen: boolean;
-  isHighImpact: boolean;
+  ageHours: number;
 };
+
+const COMPLAINT_TARGET_HOURS = 48;
+
+function formatHours(hours: number | null): string {
+  if (hours === null || !Number.isFinite(hours)) return "—";
+  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))} min`;
+  if (hours < 48) return `${hours.toFixed(1)} hrs`;
+  return `${(hours / 24).toFixed(1)} days`;
+}
 
 type ComplaintHotspotRow = {
   barangay: string;
@@ -216,20 +232,6 @@ type ResidentCoverageRow = {
   assessment: string;
 };
 
-type ScheduleRecord = {
-  id: string;
-  title: string;
-  barangay: string;
-  barangays: string[];
-  puroks: string[];
-  driverId: string;
-  driverName: string;
-  truckId: string;
-  routeId: string;
-  status: string;
-  lastRunStatus: string;
-  lastCompletedAt: number;
-};
 
 type AreaRow = {
   key: string;
@@ -336,30 +338,12 @@ const REPORT_TYPES: Array<{ value: ReportType; label: string; description: strin
   { value: "capacity", label: "Truck Capacity", description: "Operational truck-load pressure using 1/4, 1/2, 3/4, and Full estimates." },
   { value: "issues", label: "Issues & Complaints", description: "Open and resolved operational issues reported by residents and drivers." },
   { value: "complaints", label: "Complaint Hotspots", description: "Identify which Barangays record the most complaints, open cases, and recurring complaint categories." },
+  { value: "response", label: "Complaint Response Time", description: "How fast complaints are resolved per Barangay, which cases are overdue, and the oldest unresolved complaints." },
   { value: "schedules", label: "Schedule Performance", description: "Current service coverage compared with actual collection execution." },
   { value: "gps", label: "GPS Activity", description: "Recorded collection-session route traces and field activity evidence." },
 ];
 
-function objectValue(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
 
-function toArray(data: unknown): AnyItem[] {
-  if (!data) return [];
-  if (Array.isArray(data)) {
-    return data.filter(Boolean).map((item, index) => ({
-      id: String((item as AnyItem)?.id || index),
-      ...(typeof item === "object" && item !== null ? item : { value: item }),
-    }));
-  }
-  if (typeof data === "object") {
-    return Object.entries(data as Record<string, unknown>).map(([id, value]) => ({
-      id,
-      ...(typeof value === "object" && value !== null ? value : { value }),
-    }));
-  }
-  return [];
-}
 
 function countServiceAreaCatalog(data: unknown): { barangays: number; puroks: number } {
   const root = objectValue(data);
@@ -444,247 +428,23 @@ function routeStatusTimestamp(item: AnyItem): number {
   return normalizeTimestamp(item.createdAt ?? item.updatedAt ?? item.timestamp);
 }
 
-function flattenPendingSummaries(data: unknown): AnyItem[] {
-  const result: AnyItem[] = [];
-  const root = objectValue(data);
-  Object.entries(root).forEach(([driverKey, schedulesRaw]) => {
-    const schedules = objectValue(schedulesRaw);
-    Object.entries(schedules).forEach(([scheduleKey, summaryRaw]) => {
-      const summary = objectValue(summaryRaw);
-      result.push({
-        id: `${driverKey}:${scheduleKey}`,
-        _driverKey: driverKey,
-        _scheduleKey: scheduleKey,
-        ...summary,
-      });
-    });
-  });
-  return result;
-}
 
-function flattenRouteSessions(data: unknown): AnyItem[] {
-  const result: AnyItem[] = [];
-  const schedules = objectValue(data);
 
-  Object.entries(schedules).forEach(([scheduleId, sessionsRaw]) => {
-    const sessions = objectValue(sessionsRaw);
 
-    Object.entries(sessions).forEach(([sessionId, sessionRaw]) => {
-      const session = objectValue(sessionRaw);
-      result.push({
-        id: sessionId,
-        sessionId,
-        scheduleId,
-        ...session,
-      });
-    });
-  });
 
-  return result;
-}
 
-function isTerminalRouteSession(item: AnyItem): boolean {
-  const status = normalizedStatus(item.routeStatus ?? item.status ?? item.collectionStatus);
-  return status === "completed" || status === "partial" || status === "missed";
-}
 
-function parseGpsHistory(data: unknown): GpsTrace[] {
-  const traces: GpsTrace[] = [];
-  const schedules = objectValue(data);
 
-  Object.entries(schedules).forEach(([scheduleId, sessionsRaw]) => {
-    const sessions = objectValue(sessionsRaw);
-    Object.entries(sessions).forEach(([sessionId, sessionRaw]) => {
-      const session = objectValue(sessionRaw);
-      const pointsRaw = objectValue(session.points);
-      const points: GpsPoint[] = [];
 
-      Object.values(pointsRaw).forEach((pointRaw) => {
-        const point = objectValue(pointRaw);
-        const latitude = finiteNumber(point.latitude ?? point.lat);
-        const longitude = finiteNumber(point.longitude ?? point.lng);
-        const timestamp = normalizeTimestamp(point.timestamp ?? point.recordedAt ?? point.lastUpdated);
-        if (latitude === null || longitude === null) return;
-        if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return;
-        points.push({ latitude, longitude, timestamp });
-      });
 
-      points.sort((a, b) => a.timestamp - b.timestamp);
-      if (points.length === 0) return;
 
-      traces.push({
-        scheduleId,
-        sessionId,
-        points,
-        startTimestamp: points[0]?.timestamp || 0,
-        endTimestamp: points.at(-1)?.timestamp || 0,
-      });
-    });
-  });
 
-  return traces;
-}
 
-function finiteNumber(value: unknown): number | null {
-  const numeric = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
-}
 
-function nonNegativeNumber(value: unknown): number {
-  const numeric = finiteNumber(value);
-  return numeric !== null && numeric >= 0 ? numeric : 0;
-}
 
-function normalizeTimestamp(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value < 10_000_000_000 ? value * 1000 : value;
-  }
-  if (typeof value === "string") {
-    const numeric = Number(value);
-    if (Number.isFinite(numeric)) return numeric < 10_000_000_000 ? numeric * 1000 : numeric;
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
-}
 
-function bestTimestamp(item: AnyItem): number {
-  return normalizeTimestamp(
-    item.completedAt ??
-      item.timestamp ??
-      item.updatedAt ??
-      item.createdAt ??
-      item.reportedAt ??
-      item.submittedAt ??
-      item.capturedAt ??
-      item.startTime ??
-      item.date,
-  );
-}
 
-function cleanText(value: unknown, fallback = ""): string {
-  const text = String(value ?? "").trim();
-  if (!text || text.toLowerCase() === "null" || text.toLowerCase() === "undefined") return fallback;
-  return text;
-}
 
-function normalizeTextArray(value: unknown): string[] {
-  if (Array.isArray(value)) return unique(value.map(String).map((item) => item.trim()).filter(Boolean));
-
-  if (value && typeof value === "object") {
-    const values = Object.entries(value as Record<string, unknown>)
-      .map(([key, item]) => {
-        if (item === true || item === "true" || item === 1 || item === "1") return key;
-        if (typeof item === "string" || typeof item === "number") return String(item);
-        return "";
-      })
-      .map((item) => item.trim())
-      .filter(Boolean);
-    return unique(values);
-  }
-
-  if (typeof value === "string") {
-    return unique(
-      value
-        .split(/[,;|]/g)
-        .map((item) => item.trim())
-        .filter(Boolean),
-    );
-  }
-
-  return [];
-}
-
-function normalizePurok(value: unknown): string {
-  const raw = cleanText(value);
-  if (!raw) return "";
-  if (/all\s*purok/i.test(raw)) return "All Puroks";
-  const match = raw.match(/purok\s*(\d+)/i) || raw.match(/^\s*(\d+)\s*$/);
-  return match ? `Purok ${Number(match[1])}` : raw;
-}
-
-function purokList(item: AnyItem): string[] {
-  const direct =
-    item.assignedPuroks ??
-    item.claimedPuroks ??
-    item.visitedPuroks ??
-    item.puroks ??
-    item.location?.puroks;
-
-  const values = normalizeTextArray(direct).map(normalizePurok).filter(Boolean);
-  if (values.length > 0) return unique(values);
-
-  const single = normalizePurok(item.purok ?? item.purokLabel ?? item.purokName ?? item.zone);
-  return single && single !== "All Puroks" ? [single] : [];
-}
-
-function barangaysList(item: AnyItem): string[] {
-  const direct = [
-    ...normalizeTextArray(item.barangay),
-    ...normalizeTextArray(item.barangays),
-    ...normalizeTextArray(item.location?.barangay),
-    ...normalizeTextArray(item.location?.barangays),
-    ...normalizeTextArray(item.assignedBarangay),
-    ...normalizeTextArray(item.assignedBarangays),
-    ...normalizeTextArray(item.addressBarangay),
-    ...normalizeTextArray(item.targetBarangay),
-    ...normalizeTextArray(item.targetBarangays),
-    ...normalizeTextArray(item.area),
-  ];
-
-  const coverage = item.coverageByBarangay;
-  const fromCoverage =
-    coverage && typeof coverage === "object"
-      ? Object.entries(coverage as Record<string, any>).map(([storedKey, value]) =>
-          cleanText((value && typeof value === "object" ? value.barangay : undefined) ?? storedKey),
-        )
-      : [];
-
-  return unique([...direct, ...fromCoverage].filter(Boolean));
-}
-
-function barangayText(item: AnyItem): string {
-  const [first] = barangaysList(item);
-  return first || "Unspecified Barangay";
-}
-
-function unique(values: string[]): string[] {
-  return Array.from(new Set(values.map((item) => item.trim()).filter(Boolean)));
-}
-
-function normalizedStatus(value: unknown): string {
-  const status = cleanText(value).toLowerCase();
-  if (!status) return "pending";
-  if (status.includes("partial")) return "partial";
-  if (status.includes("complete") || status === "done" || status === "finished" || status === "collected") return "completed";
-  if (status.includes("miss") || status.includes("failed") || status.includes("not collected")) return "missed";
-  if (status.includes("resolve") || status.includes("closed") || status.includes("fixed")) return "resolved";
-  if (status.includes("cancel") || status.includes("inactive") || status.includes("deleted")) return "cancelled";
-  if (status.includes("progress") || status.includes("ongoing") || status.includes("active") || status.includes("assigned")) return "active";
-  if (status.includes("open") || status.includes("new")) return "open";
-  return status;
-}
-
-function truckLoadPercent(item: AnyItem): number | null {
-  const candidates = [item.truckLoadPercent, item.loadPercent, item.vehicleLoadPercent];
-  for (const value of candidates) {
-    const numeric = finiteNumber(value);
-    if (numeric !== null && numeric >= 0 && numeric <= 100) return numeric;
-  }
-
-  const label = cleanText(item.truckLoadLabel ?? item.truckLoadFraction ?? item.loadFraction).toLowerCase();
-  if (!label) return null;
-  if (label.includes("full") || label === "1" || label === "1/1") return 100;
-  if (label.includes("3/4") || label.includes("75")) return 75;
-  if (label.includes("1/2") || label.includes("50")) return 50;
-  if (label.includes("1/4") || label.includes("25")) return 25;
-  return null;
-}
-
-function isFullTruck(item: { truckLoadPercent: number | null; truckLoadLabel: string; completionReason: string; collectionCondition: string }): boolean {
-  const text = `${item.truckLoadLabel} ${item.completionReason} ${item.collectionCondition}`.toLowerCase();
-  return (item.truckLoadPercent ?? 0) >= 100 || text.includes("truck_full") || text.includes("full truck") || text.includes("full capacity");
-}
 
 function formatDateTime(value: number): string {
   if (!value) return "—";
@@ -697,14 +457,6 @@ function formatDateTime(value: number): string {
   }).format(new Date(value));
 }
 
-function formatDate(value: number): string {
-  if (!value) return "—";
-  return new Intl.DateTimeFormat("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  }).format(new Date(value));
-}
 
 function formatDistance(meters: number): string {
   if (!meters) return "0 km";
@@ -739,45 +491,8 @@ function inputDateValue(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function localDayStart(value: string): number {
-  if (!value) return 0;
-  const [year, month, day] = value.split("-").map(Number);
-  if (!year || !month || !day) return 0;
-  return new Date(year, month - 1, day, 0, 0, 0, 0).getTime();
-}
 
-function localDayEnd(value: string): number {
-  if (!value) return 0;
-  const [year, month, day] = value.split("-").map(Number);
-  if (!year || !month || !day) return 0;
-  return new Date(year, month - 1, day, 23, 59, 59, 999).getTime();
-}
 
-function reportBounds(range: RangeFilter, customFrom: string, customTo: string): { from: number; to: number; label: string } {
-  const now = new Date();
-  const end = Date.now();
-
-  if (range === "all") return { from: 0, to: end, label: "All available operational records" };
-
-  if (range === "custom") {
-    const from = localDayStart(customFrom);
-    const to = localDayEnd(customTo || customFrom);
-    if (from > 0 && to >= from) {
-      return { from, to, label: `${formatDate(from)} – ${formatDate(to)}` };
-    }
-    return { from: 0, to: end, label: "Custom range not selected" };
-  }
-
-  if (range === "today") {
-    const fromDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    return { from: fromDate.getTime(), to: end, label: `Today • ${formatDate(fromDate.getTime())}` };
-  }
-
-  const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  start.setDate(start.getDate() - (days - 1));
-  return { from: start.getTime(), to: end, label: `Last ${days} days` };
-}
 
 function manilaMonthBounds(monthOffset = 0): { from: number; to: number; label: string } {
   const formatter = new Intl.DateTimeFormat("en-US", {
@@ -860,46 +575,8 @@ function barChartSvgHtml(
   return `<article class="print-chart-card"><div class="print-chart-title"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(subtitle)}</span></div><svg class="print-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(title)}">${rowsHtml}</svg></article>`;
 }
 
-function timestampInBounds(timestamp: number, bounds: { from: number; to: number }): boolean {
-  if (!timestamp) return bounds.from === 0;
-  return timestamp >= bounds.from && timestamp <= bounds.to;
-}
 
-function nearestRecord(records: AnyItem[], driverId: string, scheduleId: string, timestamp: number): AnyItem | null {
-  const candidates = records.filter((item) => {
-    const candidateDriver = cleanText(item.driverId ?? item._driverKey);
-    const candidateSchedule = cleanText(item.scheduleId ?? item._scheduleKey);
-    return candidateDriver === driverId && candidateSchedule === scheduleId;
-  });
 
-  let best: AnyItem | null = null;
-  let bestGap = Number.POSITIVE_INFINITY;
-  candidates.forEach((item) => {
-    const itemTime = bestTimestamp(item);
-    const gap = timestamp && itemTime ? Math.abs(timestamp - itemTime) : 0;
-    if (gap <= 12 * 60 * 60 * 1000 && gap < bestGap) {
-      best = item;
-      bestGap = gap;
-    }
-  });
-  return best;
-}
-
-function issueImpact(item: AnyItem): boolean {
-  const severity = cleanText(item.severity ?? item.priority).toLowerCase();
-  const type = cleanText(item.issueType ?? item.type ?? item.category).toLowerCase();
-  return (
-    severity.includes("critical") ||
-    severity.includes("urgent") ||
-    severity.includes("high") ||
-    type.includes("truck full") ||
-    type.includes("hazard") ||
-    type.includes("accident") ||
-    type.includes("overflow") ||
-    type.includes("illegal dumping") ||
-    type.includes("missed")
-  );
-}
 
 function priorityRank(value: Priority): number {
   return value === "Critical" ? 4 : value === "High" ? 3 : value === "Monitor" ? 2 : 1;
@@ -1227,6 +904,9 @@ export function MetroWastePlanningReport() {
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
 
   const [collectionReports, setCollectionReports] = useState<AnyItem[]>([]);
+  const [wasteCollectionReports, setWasteCollectionReports] = useState<AnyItem[]>([]);
+  const [pickupRecords, setPickupRecords] = useState<AnyItem[]>([]);
+  const [missedPickups, setMissedPickups] = useState<AnyItem[]>([]);
   const [pendingSummaries, setPendingSummaries] = useState<AnyItem[]>([]);
   const [truckFullAlerts, setTruckFullAlerts] = useState<AnyItem[]>([]);
   const [issues, setIssues] = useState<AnyItem[]>([]);
@@ -1271,6 +951,9 @@ export function MetroWastePlanningReport() {
 
     const unsubscribers = [
       listenArray("collection_reports", setCollectionReports),
+      listenArray("waste_collection_reports", setWasteCollectionReports),
+      listenArray("pickup_records", setPickupRecords),
+      listenArray("missed_pickups", setMissedPickups),
       onValue(ref(db, "pending_collection_summaries"), (snapshot) => {
         setPendingSummaries(flattenPendingSummaries(snapshot.val()));
         setLastUpdated(Date.now());
@@ -1360,250 +1043,25 @@ export function MetroWastePlanningReport() {
   const driverMap = useMemo(() => new Map(driverProfiles.map((item) => [item.id, item])), [driverProfiles]);
   const gpsTraces = useMemo(() => parseGpsHistory(gpsRaw), [gpsRaw]);
   const gpsBySession = useMemo(() => new Map(gpsTraces.map((trace) => [trace.sessionId, trace])), [gpsTraces]);
-  const routeSessionBySession = useMemo(() => new Map(routeSessions.map((item) => [cleanText(item.sessionId ?? item.id), item])), [routeSessions]);
 
-  const mergedCollectionSources = useMemo(() => {
-    const map = new Map<string, AnyItem>();
-
-    collectionReports.forEach((item) => {
-      const sessionId = cleanText(item.sessionId ?? item.reportId ?? item.id);
-      const key = sessionId || `report:${cleanText(item.id)}`;
-      map.set(key, { ...item, sessionId: sessionId || cleanText(item.id), _source: "collection_reports" });
-    });
-
-    routeSessions.forEach((session) => {
-      if (!isTerminalRouteSession(session)) return;
-      const sessionId = cleanText(session.sessionId ?? session.id);
-      if (!sessionId || map.has(sessionId)) return;
-
-      map.set(sessionId, {
-        ...session,
-        id: sessionId,
-        reportId: sessionId,
-        sessionId,
-        collectionStatus: session.routeStatus ?? session.status,
-        completedAt: session.completedAt ?? session.endTime ?? session.updatedAt ?? session.lastUpdateTime,
-        timestamp: session.completedAt ?? session.endTime ?? session.updatedAt ?? session.lastUpdateTime ?? session.startTime,
-        _source: "route_sessions_fallback",
-      });
-    });
-
-    return Array.from(map.values());
-  }, [collectionReports, routeSessions]);
-
-  const normalizedCollections = useMemo<CollectionRecord[]>(() => {
-    return mergedCollectionSources.map((item) => {
-      const id = cleanText(item.reportId ?? item.sessionId ?? item.id);
-      const sessionId = cleanText(item.sessionId ?? item.reportId ?? item.id);
-      const routeSession = routeSessionBySession.get(sessionId) || {};
-      const scheduleId = cleanText(item.scheduleId ?? routeSession.scheduleId);
-      const driverId = cleanText(item.driverId ?? item.uid ?? routeSession.driverId ?? routeSession.uid);
-      const timestamp = bestTimestamp({ ...routeSession, ...item });
-      const summary = nearestRecord(pendingSummaries, driverId, scheduleId, timestamp);
-      const summaryItem = summary || {};
-      const profile = driverMap.get(driverId);
-      const alert = nearestRecord(truckFullAlerts, driverId, scheduleId, timestamp);
-      const trace = gpsBySession.get(sessionId);
-
-      /*
-       * Final collection_reports are authoritative. The temporary
-       * pending_collection_summaries path is only a fallback while a finish
-       * request is still being finalized by the Driver app/API.
-       */
-      const assignedPuroks = normalizeTextArray(
-        item.assignedPuroks ??
-        item.puroks ??
-        routeSession.assignedPuroks ??
-        routeSession.puroks ??
-        summaryItem.assignedPuroks ??
-        summaryItem.puroks,
-      ).map(normalizePurok).filter(Boolean);
-
-      const claimedPuroks = normalizeTextArray(
-        item.claimedPuroks ??
-        item.visitedPuroks ??
-        routeSession.claimedPuroks ??
-        routeSession.visitedPuroks ??
-        summaryItem.claimedPuroks ??
-        summaryItem.visitedPuroks,
-      ).map(normalizePurok).filter(Boolean);
-
-      const unclaimedPuroks = normalizeTextArray(
-        item.unclaimedPuroks ??
-        routeSession.unclaimedPuroks ??
-        summaryItem.unclaimedPuroks ??
-        alert?.unclaimedPuroks,
-      ).map(normalizePurok).filter(Boolean);
-
-      const itemHasLoad =
-        finiteNumber(item.truckLoadPercent) !== null ||
-        Boolean(cleanText(item.truckLoadLabel ?? item.truckLoadFraction));
-      const routeSessionHasLoad =
-        finiteNumber(routeSession.truckLoadPercent) !== null ||
-        Boolean(cleanText(routeSession.truckLoadLabel ?? routeSession.truckLoadFraction));
-
-      const loadSource = itemHasLoad
-        ? item
-        : routeSessionHasLoad
-          ? routeSession
-          : Object.keys(summaryItem).length > 0
-            ? summaryItem
-            : alert || {};
-
-      const loadPercent = truckLoadPercent(loadSource);
-      const loadLabel = cleanText(
-        item.truckLoadLabel ??
-        item.truckLoadFraction ??
-        routeSession.truckLoadLabel ??
-        routeSession.truckLoadFraction ??
-        summaryItem.truckLoadLabel ??
-        summaryItem.truckLoadFraction ??
-        alert?.truckLoadLabel,
-        loadPercent === 100 ? "Full truck" : loadPercent === 75 ? "3/4 truck" : loadPercent === 50 ? "1/2 truck" : loadPercent === 25 ? "1/4 truck" : "Not recorded",
-      );
-
-      const completionReason = cleanText(
-        item.completionReason ??
-        routeSession.completionReason ??
-        summaryItem.completionReason ??
-        alert?.completionReason,
-      );
-
-      const collectionCondition = cleanText(
-        item.collectionCondition ??
-        routeSession.collectionCondition ??
-        summaryItem.collectionCondition ??
-        alert?.collectionCondition,
-      );
-
-      const rawStatus = normalizedStatus(
-        item.collectionStatus ??
-        item.routeStatus ??
-        item.status ??
-        routeSession.collectionStatus ??
-        routeSession.routeStatus ??
-        routeSession.status,
-      );
-
-      let status: CollectionRecord["status"] =
-        rawStatus === "missed" ? "missed" :
-        rawStatus === "partial" ? "partial" :
-        rawStatus === "completed" ? "completed" :
-        "pending";
-
-      if (
-        unclaimedPuroks.length > 0 ||
-        completionReason.toLowerCase().includes("partial") ||
-        (completionReason.toLowerCase().includes("truck_full") && unclaimedPuroks.length > 0)
-      ) {
-        status = "partial";
-      }
-
-      return {
-        id,
-        sessionId,
-        scheduleId,
-        routeId: cleanText(item.routeId ?? routeSession.routeId),
-        routeName: cleanText(item.routeName ?? item.scheduleName ?? routeSession.routeName ?? routeSession.scheduleName, "Collection route"),
-        driverId,
-        driverName: cleanText(item.driverName ?? routeSession.driverName ?? summaryItem.driverName ?? profile?.name, "Driver"),
-        truckId: cleanText(
-          item.truckId ??
-          item.truck ??
-          routeSession.truckId ??
-          routeSession.truck ??
-          summaryItem.truckId ??
-          summaryItem.truck ??
-          profile?.truck,
-          "Unassigned",
-        ),
-        barangay: barangayText({ ...summaryItem, ...routeSession, ...item }),
-        barangays: barangaysList({ ...summaryItem, ...routeSession, ...item }),
-        assignedPuroks: unique(assignedPuroks),
-        claimedPuroks: unique(claimedPuroks),
-        unclaimedPuroks: unique(unclaimedPuroks),
-        status,
-        timestamp,
-        startTime: normalizeTimestamp(item.startTime ?? routeSession.startTime),
-        completedAt: normalizeTimestamp(
-          item.completedAt ??
-          item.endTime ??
-          routeSession.completedAt ??
-          routeSession.endTime ??
-          item.timestamp ??
-          routeSession.timestamp,
-        ),
-        truckLoadPercent: loadPercent,
-        truckLoadLabel: loadLabel,
-        completionReason,
-        collectionCondition,
-        distanceMeters: nonNegativeNumber(
-          item.distanceTravelledMeters ??
-          item.distanceMeters ??
-          routeSession.distanceTravelledMeters ??
-          routeSession.distanceMeters,
-        ),
-        durationSeconds: nonNegativeNumber(
-          item.durationSeconds ??
-          routeSession.durationSeconds,
-        ),
-        hasGps: Boolean(trace && trace.points.length >= 2),
-        gpsPointCount: trace?.points.length || 0,
-      };
-    });
-  }, [
-    mergedCollectionSources,
-    routeSessionBySession,
+  const normalizedCollections = useMemo<CollectionRecord[]>(() => buildCollectionRecords({
+    collectionReports,
+    extraCollectionReports: wasteCollectionReports,
+    routeSessions,
     pendingSummaries,
     truckFullAlerts,
     driverMap,
     gpsBySession,
-  ]);
+    pickupRecords,
+    missedPickups,
+  }), [collectionReports, wasteCollectionReports, routeSessions, pendingSummaries, truckFullAlerts, driverMap, gpsBySession, pickupRecords, missedPickups]);
 
-  const normalizedIssues = useMemo<IssueRecord[]>(() => {
-    const build = (item: AnyItem, source: string): IssueRecord => {
-      const status = normalizedStatus(item.status ?? item.issueStatus ?? "open");
-      return {
-        id: `${source}:${cleanText(item.id)}`,
-        source,
-        driverId: cleanText(item.driverId ?? item.uid),
-        driverName: cleanText(item.driverName, ""),
-        barangay: barangayText(item),
-        barangays: barangaysList(item),
-        puroks: purokList(item),
-        type: cleanText(item.issueType ?? item.type ?? item.category, "General operational issue"),
-        severity: cleanText(item.severity ?? item.priority, "Normal"),
-        status,
-        details: cleanText(item.details ?? item.description ?? item.message ?? item.note, ""),
-        timestamp: bestTimestamp(item),
-        isOpen: !["resolved", "closed", "cancelled"].includes(status),
-        isHighImpact: issueImpact(item),
-      };
-    };
+  const normalizedIssues = useMemo<IssueRecord[]>(
+    () => buildIssueRecords({ issues, residentIssues, reportIssues, complaints }),
+    [issues, residentIssues, reportIssues, complaints],
+  );
 
-    return [
-      ...issues.map((item) => build(item, "Driver/Admin Issue")),
-      ...residentIssues.map((item) => build(item, "Resident Issue")),
-      ...reportIssues.map((item) => build(item, "Reported Issue")),
-      ...complaints.map((item) => build(item, "Complaint")),
-    ];
-  }, [issues, residentIssues, reportIssues, complaints]);
-
-  const normalizedSchedules = useMemo<ScheduleRecord[]>(() =>
-    schedules.map((item) => ({
-      id: cleanText(item.id),
-      title: cleanText(item.title ?? item.name ?? item.scheduleName, "Collection schedule"),
-      barangay: barangayText(item),
-      barangays: barangaysList(item),
-      puroks: purokList(item),
-      driverId: cleanText(item.driverId ?? item.assignedDriverId),
-      driverName: cleanText(item.driverName ?? item.assignedDriverName, "Unassigned"),
-      truckId: cleanText(item.truckId ?? item.truck ?? item.vehicle, "Unassigned"),
-      routeId: cleanText(item.routeId ?? item.assignedRouteId),
-      status: normalizedStatus(item.status ?? "active"),
-      lastRunStatus: normalizedStatus(item.lastRunStatus ?? item.routeStatus),
-      lastCompletedAt: normalizeTimestamp(item.lastCompletedAt ?? item.lastCompletedDate),
-    })), [schedules]);
+  const normalizedSchedules = useMemo<ScheduleRecord[]>(() => buildScheduleRecords(schedules), [schedules]);
 
   const bounds = useMemo(() => reportBounds(range, customFrom, customTo), [range, customFrom, customTo]);
 
@@ -1628,29 +1086,20 @@ export function MetroWastePlanningReport() {
     ...normalizedSchedules.map((item) => item.truckId),
   ].filter((item) => item && item !== "Unassigned")).sort(), [driverProfiles, normalizedCollections, normalizedSchedules]);
 
-  const filteredCollections = useMemo(() => normalizedCollections.filter((item) => {
-    if (!timestampInBounds(item.timestamp, bounds)) return false;
-    if (barangayFilter !== "all" && !item.barangays.includes(barangayFilter)) return false;
-    if (driverFilter !== "all" && item.driverId !== driverFilter) return false;
-    if (truckFilter !== "all" && item.truckId !== truckFilter) return false;
-    return true;
-  }), [normalizedCollections, bounds, barangayFilter, driverFilter, truckFilter]);
+  const filteredCollections = useMemo(
+    () => scopeCollections(normalizedCollections, bounds, { barangay: barangayFilter, driver: driverFilter, truck: truckFilter }),
+    [normalizedCollections, bounds, barangayFilter, driverFilter, truckFilter],
+  );
 
-  const filteredIssues = useMemo(() => normalizedIssues.filter((item) => {
-    const dateMatch = item.timestamp ? timestampInBounds(item.timestamp, bounds) : item.isOpen;
-    if (!dateMatch) return false;
-    if (barangayFilter !== "all" && !item.barangays.includes(barangayFilter)) return false;
-    if (driverFilter !== "all" && item.driverId && item.driverId !== driverFilter) return false;
-    return true;
-  }), [normalizedIssues, bounds, barangayFilter, driverFilter]);
+  const filteredIssues = useMemo(
+    () => scopeIssues(normalizedIssues, bounds, { barangay: barangayFilter, driver: driverFilter }),
+    [normalizedIssues, bounds, barangayFilter, driverFilter],
+  );
 
-  const filteredSchedules = useMemo(() => normalizedSchedules.filter((item) => {
-    if (["cancelled", "inactive", "deleted"].includes(item.status)) return false;
-    if (barangayFilter !== "all" && !item.barangays.includes(barangayFilter)) return false;
-    if (driverFilter !== "all" && item.driverId !== driverFilter) return false;
-    if (truckFilter !== "all" && item.truckId !== truckFilter) return false;
-    return true;
-  }), [normalizedSchedules, barangayFilter, driverFilter, truckFilter]);
+  const filteredSchedules = useMemo(
+    () => scopeSchedules(normalizedSchedules, { barangay: barangayFilter, driver: driverFilter, truck: truckFilter }),
+    [normalizedSchedules, barangayFilter, driverFilter, truckFilter],
+  );
 
   const residentById = useMemo(() => {
     const map = new Map<string, AnyItem>();
@@ -1787,7 +1236,7 @@ export function MetroWastePlanningReport() {
   }, [filteredAttendance, filteredViolations, filteredWastePoints, filteredRouteStatusUpdates, filteredActivityRequests, filteredActivityReports, notifications, bounds, barangayFilter]);
 
   const filteredComplaints = useMemo(() => {
-    const complaintSources = new Set(["Complaint", "Resident Issue", "Reported Issue"]);
+    const complaintSources = COMPLAINT_SOURCES;
     const uniqueRecords = new Map<string, IssueRecord>();
 
     filteredIssues
@@ -1840,6 +1289,73 @@ export function MetroWastePlanningReport() {
   }, [filteredComplaints]);
 
   const topComplaintHotspot = complaintHotspots[0] || null;
+
+  const complaintResponse = useMemo(() => {
+    const now = Date.now();
+    const HOUR = 3_600_000;
+    const groups = new Map<string, IssueRecord[]>();
+    filteredComplaints.forEach((item) => {
+      const barangay = cleanText(item.barangay, "Unspecified Barangay");
+      groups.set(barangay, [...(groups.get(barangay) || []), item]);
+    });
+
+    const overdue: OverdueComplaintRow[] = [];
+    const rows: ComplaintResponseRow[] = Array.from(groups.entries()).map(([barangay, list]) => {
+      const durations = list
+        .filter((r) => !r.isOpen && r.resolvedAt > 0 && r.timestamp > 0 && r.resolvedAt >= r.timestamp)
+        .map((r) => (r.resolvedAt - r.timestamp) / HOUR)
+        .sort((a, b) => a - b);
+      const openRows = list.filter((r) => r.isOpen && r.timestamp > 0);
+      let oldest = 0;
+      let overdueCount = 0;
+      openRows.forEach((r) => {
+        const age = (now - r.timestamp) / HOUR;
+        oldest = Math.max(oldest, age);
+        if (age > COMPLAINT_TARGET_HOURS) {
+          overdueCount += 1;
+          overdue.push({
+            id: r.id,
+            barangay,
+            puroks: r.puroks.join(", ") || "Not specified",
+            type: r.type,
+            severity: r.severity,
+            timestamp: r.timestamp,
+            ageHours: age,
+          });
+        }
+      });
+      const mid = Math.floor(durations.length / 2);
+      const median = durations.length === 0 ? null : durations.length % 2 ? durations[mid] : (durations[mid - 1] + durations[mid]) / 2;
+      const avg = durations.length === 0 ? null : durations.reduce((a, b) => a + b, 0) / durations.length;
+      return {
+        barangay,
+        total: list.length,
+        resolved: list.filter((r) => !r.isOpen).length,
+        open: list.filter((r) => r.isOpen).length,
+        overdueOpen: overdueCount,
+        withTimes: durations.length,
+        avgHours: avg,
+        medianHours: median,
+        within48Rate: durations.length === 0 ? null : (durations.filter((d) => d <= COMPLAINT_TARGET_HOURS).length / durations.length) * 100,
+        oldestOpenHours: oldest,
+      };
+    }).sort((a, b) => b.overdueOpen - a.overdueOpen || (b.avgHours ?? -1) - (a.avgHours ?? -1) || a.barangay.localeCompare(b.barangay));
+
+    overdue.sort((a, b) => b.ageHours - a.ageHours);
+    const allDurations = rows.flatMap((r) => (r.avgHours === null ? [] : [r]));
+    const totalWithTimes = rows.reduce((a, r) => a + r.withTimes, 0);
+    const overallAvg = totalWithTimes === 0 ? null : allDurations.reduce((a, r) => a + (r.avgHours as number) * r.withTimes, 0) / totalWithTimes;
+    const overallWithin = totalWithTimes === 0 ? null : allDurations.reduce((a, r) => a + ((r.within48Rate as number) / 100) * r.withTimes, 0) / totalWithTimes * 100;
+    return {
+      rows,
+      overdue,
+      overallAvg,
+      overallWithin,
+      totalWithTimes,
+      totalResolved: rows.reduce((a, r) => a + r.resolved, 0),
+      totalOpen: rows.reduce((a, r) => a + r.open, 0),
+    };
+  }, [filteredComplaints]);
 
   const residentCoverageRows = useMemo<ResidentCoverageRow[]>(() => {
     const keys = new Set<string>();
@@ -2115,7 +1631,7 @@ export function MetroWastePlanningReport() {
 
   const topProblemAreas = useMemo<ProblemAreaRow[]>(() => {
     const complaintByBarangay = new Map(complaintHotspots.map((row) => [row.barangay, row.total]));
-    const complaintSources = new Set(["Complaint", "Resident Issue", "Reported Issue"]);
+    const complaintSources = COMPLAINT_SOURCES;
     const operationalIssueByBarangay = new Map<string, number>();
 
     filteredIssues.forEach((item) => {
@@ -2159,7 +1675,7 @@ export function MetroWastePlanningReport() {
   const monthlyComparison = useMemo<MonthlyComparison>(() => {
     const currentWindow = manilaMonthBounds(0);
     const previousWindow = manilaMonthBounds(-1);
-    const complaintSources = new Set(["Complaint", "Resident Issue", "Reported Issue"]);
+    const complaintSources = COMPLAINT_SOURCES;
 
     const collectionDimensionMatch = (item: CollectionRecord) => {
       if (barangayFilter !== "all" && item.barangay !== barangayFilter) return false;
@@ -2492,6 +2008,7 @@ export function MetroWastePlanningReport() {
               systemSnapshot,
               complaintHotspots,
               complaintRows: filteredComplaints,
+              complaintResponse,
               fullSystemSummary,
               topProblemAreas,
               monthlyComparison,
@@ -2985,6 +2502,73 @@ export function MetroWastePlanningReport() {
                     <tbody>
                       {filteredComplaints.slice(0, 100).map((row) => <tr key={row.id}><td>{formatDateTime(row.timestamp)}</td><td><strong>{row.barangay}</strong></td><td>{row.puroks.join(", ") || "Not specified"}</td><td>{row.type}</td><td>{row.severity}</td><td><StatusBadge value={row.isOpen ? "Open" : "Resolved"} alert={row.isOpen} /></td><td className="recommendation">{row.details || "No description provided"}</td></tr>)}
                       {filteredComplaints.length === 0 && <tr><td colSpan={7} className="ops-no-data">No complaint records match the selected filters.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {(reportType === "complete" || reportType === "response") && (
+            <div className="ops-panel">
+              <div className="ops-section-row">
+                <SectionTitle
+                  eyebrow="COMPLAINT RESPONSE"
+                  title="Complaint Response Time"
+                  subtitle={`Time from complaint submitted to resolved. Target: ${COMPLAINT_TARGET_HOURS} hours. Open complaints older than the target are marked overdue.`}
+                />
+                <span className="ops-count-chip">{complaintResponse.overdue.length} overdue</span>
+              </div>
+
+              <div className="ops-hotspot-summary">
+                <div><span>Average time to resolve</span><strong>{formatHours(complaintResponse.overallAvg)}</strong></div>
+                <div><span>Resolved within {COMPLAINT_TARGET_HOURS} hrs</span><strong>{complaintResponse.overallWithin === null ? "—" : formatPercent(complaintResponse.overallWithin)}</strong></div>
+                <div><span>Still open</span><strong>{complaintResponse.totalOpen}</strong></div>
+                <div><span>Open and overdue</span><strong>{complaintResponse.overdue.length}</strong></div>
+              </div>
+              {complaintResponse.totalResolved > complaintResponse.totalWithTimes && (
+                <div className="ops-inline-empty">
+                  {complaintResponse.totalResolved - complaintResponse.totalWithTimes} resolved complaint(s) have no recorded resolved time, so they are not included in the averages.
+                </div>
+              )}
+
+              <div className="ops-table-wrap ops-gap-top">
+                <table className="ops-table">
+                  <thead><tr><th>Barangay</th><th>Complaints</th><th>Resolved</th><th>Open</th><th>Overdue</th><th>Avg Resolve Time</th><th>Median</th><th>Within {COMPLAINT_TARGET_HOURS} hrs</th><th>Oldest Open</th></tr></thead>
+                  <tbody>
+                    {complaintResponse.rows.map((row) => (
+                      <tr key={row.barangay}>
+                        <td><strong>{row.barangay}</strong></td>
+                        <td>{row.total}</td>
+                        <td>{row.resolved}</td>
+                        <td>{row.open}</td>
+                        <td className={row.overdueOpen > 0 ? "attention" : ""}>{row.overdueOpen}</td>
+                        <td>{formatHours(row.avgHours)}</td>
+                        <td>{formatHours(row.medianHours)}</td>
+                        <td>{row.within48Rate === null ? "—" : formatPercent(row.within48Rate)}</td>
+                        <td>{row.open > 0 ? formatHours(row.oldestOpenHours) : "—"}</td>
+                      </tr>
+                    ))}
+                    {complaintResponse.rows.length === 0 && <tr><td colSpan={9} className="ops-no-data">No complaint records match the selected filters.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+
+              {complaintResponse.overdue.length > 0 && (
+                <div className="ops-table-wrap ops-gap-top">
+                  <table className="ops-table">
+                    <thead><tr><th>Filed</th><th>Barangay</th><th>Purok</th><th>Complaint</th><th>Severity</th><th>Waiting</th></tr></thead>
+                    <tbody>
+                      {complaintResponse.overdue.slice(0, 50).map((row) => (
+                        <tr key={row.id}>
+                          <td>{formatDateTime(row.timestamp)}</td>
+                          <td><strong>{row.barangay}</strong></td>
+                          <td>{row.puroks}</td>
+                          <td>{row.type}</td>
+                          <td>{row.severity}</td>
+                          <td className="attention"><strong>{formatHours(row.ageHours)}</strong></td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
@@ -4885,6 +4469,9 @@ function ReportTypeIcon({ type }: { type: ReportType }) {
   if (type === "complaints") {
     return <svg {...common}><path d="M4 3h16a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm3 5v2h10V8H7Zm0 4v2h7v-2H7Z" /></svg>;
   }
+  if (type === "response") {
+    return <svg {...common}><path d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20Zm-1 5v6l4.5 2.7 1-1.7-3.5-2V7h-2Z" /></svg>;
+  }
   if (type === "schedules") {
     return <svg {...common}><path d="M7 2h2v3H7V2Zm8 0h2v3h-2V2ZM4 5h16a1 1 0 0 1 1 1v15H3V6a1 1 0 0 1 1-1Zm1 5v9h14v-9H5Zm2 2h3v3H7v-3Z" /></svg>;
   }
@@ -4998,6 +4585,13 @@ function printOperationsReport(input: {
   systemSnapshot: SystemSnapshot;
   complaintHotspots: ComplaintHotspotRow[];
   complaintRows: IssueRecord[];
+  complaintResponse: {
+    rows: ComplaintResponseRow[];
+    overdue: OverdueComplaintRow[];
+    overallAvg: number | null;
+    overallWithin: number | null;
+    totalOpen: number;
+  };
   fullSystemSummary: FullSystemSummary;
   topProblemAreas: ProblemAreaRow[];
   monthlyComparison: MonthlyComparison;
@@ -5073,6 +4667,23 @@ function printOperationsReport(input: {
     <td><strong>${escapeHtml(row.type)}</strong><span>${escapeHtml(row.severity)}</span></td>
     <td><span class="status ${row.isOpen ? "open" : "resolved"}">${escapeHtml(row.isOpen ? "Open" : "Resolved")}</span></td>
     <td>${escapeHtml(row.details || "No description provided")}</td>
+  </tr>`).join("");
+
+  const responseRowsHtml = input.complaintResponse.rows.map((row, index) => `<tr>
+    <td class="num">${index + 1}</td>
+    <td><strong>${escapeHtml(row.barangay)}</strong></td>
+    <td><strong>${row.total}</strong><span>${row.resolved} resolved • ${row.open} open</span></td>
+    <td><strong>${row.overdueOpen}</strong><span>oldest open: ${row.open > 0 ? escapeHtml(formatHours(row.oldestOpenHours)) : "—"}</span></td>
+    <td><strong>${escapeHtml(formatHours(row.avgHours))}</strong><span>median ${escapeHtml(formatHours(row.medianHours))}</span></td>
+    <td><strong>${row.within48Rate === null ? "—" : escapeHtml(formatPercent(row.within48Rate))}</strong></td>
+  </tr>`).join("");
+
+  const overdueRowsHtml = input.complaintResponse.overdue.slice(0, 50).map((row, index) => `<tr>
+    <td class="num">${index + 1}</td>
+    <td><strong>${escapeHtml(formatDateTime(row.timestamp))}</strong></td>
+    <td><strong>${escapeHtml(row.barangay)}</strong><span>${escapeHtml(row.puroks)}</span></td>
+    <td><strong>${escapeHtml(row.type)}</strong><span>${escapeHtml(row.severity)}</span></td>
+    <td><strong>${escapeHtml(formatHours(row.ageHours))}</strong></td>
   </tr>`).join("");
 
   const residentCoverageRowsHtml = input.residentCoverageRows.map((row, index) => `<tr>
@@ -5325,6 +4936,7 @@ function printOperationsReport(input: {
     ${include("drivers") ? `<section class="section"><div class="section-head"><h2>Driver Activity & Service Performance</h2><span>Operational view; not a disciplinary score</span></div><table class="driver-table"><thead><tr><th>#</th><th>Driver / Area</th><th>Current Assignment</th><th>Collection Performance</th><th>Field Evidence</th><th>Issues / Assessment</th></tr></thead><tbody>${driverRowsHtml || `<tr><td colspan="6">No driver data for the selected filters.</td></tr>`}</tbody></table></section>` : ""}
     ${include("capacity") ? `<section class="section"><div class="section-head"><h2>Truck Capacity Utilization</h2><span>Driver-estimated operational truck load</span></div><div class="capacity"><div><small>1/4 Truck</small><strong>${input.capacityDistribution.quarter}</strong></div><div><small>1/2 Truck</small><strong>${input.capacityDistribution.half}</strong></div><div><small>3/4 Truck</small><strong>${input.capacityDistribution.threeQuarter}</strong></div><div><small>Full Truck</small><strong>${input.capacityDistribution.full}</strong></div></div><table class="truck-table"><thead><tr><th>#</th><th>Truck</th><th>Activity</th><th>Capacity</th><th>Coverage</th><th>Assessment</th></tr></thead><tbody>${truckRowsHtml || `<tr><td colspan="6">No truck data for the selected filters.</td></tr>`}</tbody></table></section>` : ""}
     ${includeComplaintAnalysis ? `<section class="section"><div class="section-head"><h2>Barangay Complaint Hotspots</h2><span>Complaint concentration based on complaint and resident-report records</span></div><table class="complaint-table"><thead><tr><th>#</th><th>Barangay</th><th>Complaint Volume</th><th>Case Status</th><th>High Impact</th><th>Most Common Category</th><th>Latest Complaint</th></tr></thead><tbody>${complaintHotspotRowsHtml || `<tr><td colspan="7">No complaint records for the selected filters.</td></tr>`}</tbody></table>${input.reportType === "complaints" ? `<div class="subsection-title">Complaint Record Detail</div><table class="issue-table"><thead><tr><th>#</th><th>Date</th><th>Service Area</th><th>Complaint / Severity</th><th>Status</th><th>Details</th></tr></thead><tbody>${complaintDetailRowsHtml || `<tr><td colspan="6">No complaint records for the selected filters.</td></tr>`}</tbody></table>` : ""}</section>` : ""}
+    ${input.reportType === "complete" || input.reportType === "response" ? `<section class="section"><div class="section-head"><h2>Complaint Response Time</h2><span>Submitted to resolved • target ${COMPLAINT_TARGET_HOURS} hours</span></div><div class="capacity"><div><small>Avg Time to Resolve</small><strong>${escapeHtml(formatHours(input.complaintResponse.overallAvg))}</strong></div><div><small>Resolved within ${COMPLAINT_TARGET_HOURS} hrs</small><strong>${input.complaintResponse.overallWithin === null ? "—" : escapeHtml(formatPercent(input.complaintResponse.overallWithin))}</strong></div><div><small>Still Open</small><strong>${input.complaintResponse.totalOpen}</strong></div><div><small>Open and Overdue</small><strong>${input.complaintResponse.overdue.length}</strong></div></div><table class="complaint-table"><thead><tr><th>#</th><th>Barangay</th><th>Complaints</th><th>Overdue</th><th>Avg / Median Resolve</th><th>Within ${COMPLAINT_TARGET_HOURS} hrs</th></tr></thead><tbody>${responseRowsHtml || `<tr><td colspan="6">No complaint records for the selected filters.</td></tr>`}</tbody></table>${overdueRowsHtml ? `<div class="subsection-title">Overdue Open Complaints</div><table class="issue-table"><thead><tr><th>#</th><th>Filed</th><th>Service Area</th><th>Complaint / Severity</th><th>Waiting</th></tr></thead><tbody>${overdueRowsHtml}</tbody></table>` : ""}<div class="method-note"><strong>Method:</strong> Resolve time = resolved time minus submitted time. Complaints without a recorded resolved time are left out of averages. Overdue = still open after ${COMPLAINT_TARGET_HOURS} hours.</div></section>` : ""}
     ${include("issues") ? `<section class="section"><div class="section-head"><h2>Operational Issue Register</h2><span>Resident, driver, complaint, and report issue records</span></div><table class="issue-table"><thead><tr><th>#</th><th>Date / Source</th><th>Service Area</th><th>Issue / Severity</th><th>Status</th><th>Details</th></tr></thead><tbody>${issueRowsHtml || `<tr><td colspan="6">No issues for the selected filters.</td></tr>`}</tbody></table></section>` : ""}
     ${include("schedules") ? `<section class="section"><div class="section-head"><h2>Schedule Performance & Coverage</h2><span>Current schedules compared with collection activity</span></div><table class="schedule-table"><thead><tr><th>#</th><th>Schedule / Area</th><th>Assignment</th><th>Service Activity</th><th>Completion</th><th>Assessment</th></tr></thead><tbody>${scheduleRowsHtml || `<tr><td colspan="6">No schedules for the selected filters.</td></tr>`}</tbody></table></section>` : ""}
     ${input.reportType === "complete" ? `<section class="section"><div class="section-head"><h2>Full System Administrative Control Summary</h2><span>Attendance, resident compliance, public-service infrastructure, route status, notifications, and driver report workflow</span></div><div class="capacity"><div><small>Attendance Records</small><strong>${input.fullSystemSummary.attendance.total}</strong><span>${input.fullSystemSummary.attendance.late} late • ${input.fullSystemSummary.attendance.incomplete} incomplete</span></div><div><small>Compliance Cases</small><strong>${input.fullSystemSummary.compliance.total}</strong><span>${input.fullSystemSummary.compliance.open} unresolved</span></div><div><small>Active Waste Points</small><strong>${input.fullSystemSummary.wastePoints.active}</strong><span>${input.fullSystemSummary.wastePoints.inactive} inactive</span></div><div><small>Pending Driver Reports</small><strong>${input.fullSystemSummary.activityReports.pending}</strong><span>${input.fullSystemSummary.activityReports.generatedReports} generated reports</span></div></div><div class="capacity"><div><small>Route Status Updates</small><strong>${input.fullSystemSummary.routeUpdates.total}</strong><span>${input.fullSystemSummary.routeUpdates.problem} needs review</span></div><div><small>Notifications</small><strong>${input.fullSystemSummary.notifications.total}</strong><span>${input.fullSystemSummary.notifications.unread} unread</span></div><div><small>Resident Alerts</small><strong>${input.fullSystemSummary.notifications.resident}</strong><span>Recorded recipient activity</span></div><div><small>Driver Alerts</small><strong>${input.fullSystemSummary.notifications.driver}</strong><span>Recorded recipient activity</span></div></div></section>

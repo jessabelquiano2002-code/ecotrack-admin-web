@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { onValue, ref, remove } from "@/lib/offlineFirebaseDatabase";
 import { auth, db } from "../../lib/firebase";
@@ -11,6 +11,7 @@ import styles from "../schedules/schedules.module.css";
 
 type Driver = {
   id: string;
+  driverNumber?: number;
   name?: string;
   email?: string;
   phone?: string;
@@ -20,6 +21,7 @@ type Driver = {
   licenseNumber?: string;
   licenseExpirationDate?: string;
   licenseImageRef?: string;
+  licenseImageBackRef?: string;
   createdAt?: number;
   updatedAt?: number;
 };
@@ -43,6 +45,7 @@ type Resident = {
 
 type UserRow = {
   id: string;
+  displayId: string;
   type: "driver" | "resident";
   name: string;
   email: string;
@@ -85,6 +88,8 @@ const makePurokFilterKey = (resident?: Resident) =>
 type DriverApiResponse = {
   success?: boolean;
   uid?: string;
+  driverNumber?: number;
+  assigned?: number;
   error?: string;
 };
 
@@ -186,6 +191,40 @@ export default function UsersPage() {
     return () => unsubscribe();
   }, []);
 
+  /* ============ NUMBER DRIVERS CREATED BEFORE SEQUENTIAL IDS ============ */
+  const driverNumberSyncRequested = useRef(false);
+
+  useEffect(() => {
+    if (driverNumberSyncRequested.current) return;
+    if (!drivers.some((driver) => !driver.driverNumber)) return;
+
+    // Once per page load; the server call is idempotent.
+    driverNumberSyncRequested.current = true;
+
+    const syncDriverNumbers = async () => {
+      try {
+        const token = await getAdminToken();
+        const response = await fetch("/api/create-driver", {
+          method: "PUT",
+          headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          cache: "no-store",
+        });
+        const result = await readDriverApiResponse(response);
+
+        if (!response.ok) {
+          throw new Error(result.error || "Failed to assign driver numbers.");
+        }
+      } catch (error) {
+        console.error("Driver number sync error:", error);
+      }
+    };
+
+    void syncDriverNumbers();
+  }, [drivers]);
+
   /* ================= FETCH RESIDENTS ================= */
   useEffect(() => {
     const residentsRef = ref(db, "residents");
@@ -214,6 +253,7 @@ export default function UsersPage() {
   const allUsers = useMemo<UserRow[]>(() => {
     const driverRows: UserRow[] = drivers.map((driver) => ({
       id: driver.id,
+      displayId: formatDriverCode(driver.driverNumber),
       type: "driver",
       name: driver.name || "Unnamed Driver",
       email: driver.email || "-",
@@ -231,6 +271,7 @@ export default function UsersPage() {
 
       return {
         id: resident.id,
+        displayId: shortId(resident.id),
         type: "resident",
         name: resident.name || "Unnamed Resident",
         email: resident.email || "-",
@@ -244,7 +285,10 @@ export default function UsersPage() {
     });
 
     return [...driverRows, ...residentRows].sort((a, b) => {
-      return (b.createdAt || 0) - (a.createdAt || 0);
+      return (
+        (b.createdAt || 0) - (a.createdAt || 0) ||
+        (b.rawDriver?.driverNumber ?? 0) - (a.rawDriver?.driverNumber ?? 0)
+      );
     });
   }, [drivers, residents]);
 
@@ -378,6 +422,7 @@ export default function UsersPage() {
 
     return list.filter((user) => {
       const text = `
+        ${user.displayId}
         ${user.name}
         ${user.email}
         ${user.phone}
@@ -632,7 +677,7 @@ export default function UsersPage() {
     try {
       setIsSaving(true);
       const token = await getAdminToken();
-      const body = buildDriverFormData(form, licenseFile);
+      const body = buildDriverFormData(form, licenseFile, licenseBackFile);
       body.set("driverId", editDriverId);
       const response = await fetch("/api/create-driver", {
         method: "PATCH",
@@ -1089,7 +1134,7 @@ export default function UsersPage() {
 
                         <div>
                           <strong>{user.name}</strong>
-                          <span>ID: {shortId(user.id)}</span>
+                          <span>ID: {user.displayId}</span>
                         </div>
                       </div>
                     </td>
@@ -1621,12 +1666,21 @@ export default function UsersPage() {
               <div className="modal-header">
                 <div>
                   <h3>Update Driver Profile</h3>
-                  <p>Update contact, vehicle, licence details, password, or replace the stored licence image.</p>
+                  <p>Update contact, vehicle, licence details, password, or replace the front and back licence images.</p>
                 </div>
                 <button className="modal-close" onClick={() => { setEditDriverId(null); clearLicenseSelection(); }}>×</button>
               </div>
 
               {formError && <div className="form-error full-error" role="alert">{formError}</div>}
+              <div className="driver-id-readonly">
+                <div>
+                  <small>Driver ID</small>
+                  <strong>
+                    {formatDriverCode(drivers.find((driver) => driver.id === editDriverId)?.driverNumber)}
+                  </strong>
+                </div>
+                <span>Assigned automatically. It never changes when the profile is edited.</span>
+              </div>
               <DriverFields
                 form={form}
                 setForm={setForm}
@@ -1634,9 +1688,16 @@ export default function UsersPage() {
                 passwordLabel="New Password (Optional)"
               />
               <LicensePicker
+                side="front"
                 preview={licensePreview}
                 hasStoredImage={Boolean(drivers.find((driver) => driver.id === editDriverId)?.licenseImageRef)}
                 onChange={selectLicenseImage}
+              />
+              <LicensePicker
+                side="back"
+                preview={licenseBackPreview}
+                hasStoredImage={Boolean(drivers.find((driver) => driver.id === editDriverId)?.licenseImageBackRef)}
+                onChange={selectLicenseBackImage}
               />
 
               <div className="modal-actions">
@@ -1686,7 +1747,7 @@ export default function UsersPage() {
                   </p>
 
                   <div className="profile-meta-row">
-                    <span>ID: {profileDriver.id}</span>
+                    <span>ID: {formatDriverCode(profileDriver.driverNumber)}</span>
                     <span>Joined {formatDate(profileDriver.createdAt)}</span>
                   </div>
                 </div>
@@ -1766,7 +1827,7 @@ export default function UsersPage() {
                     <div className="driver-highlights-grid">
                       <div className="driver-highlight-card">
                         <small>Driver ID</small>
-                        <strong>{profileDriver.id}</strong>
+                        <strong>{formatDriverCode(profileDriver.driverNumber)}</strong>
                       </div>
 
                       <div className="driver-highlight-card">
@@ -1865,7 +1926,7 @@ export default function UsersPage() {
                           <div className="driver-info-icon" aria-hidden="true">#</div>
                           <div className="driver-info-copy">
                             <small>Driver ID</small>
-                            <strong>{profileDriver.id}</strong>
+                            <strong>{formatDriverCode(profileDriver.driverNumber)}</strong>
                           </div>
                         </div>
 
@@ -2942,6 +3003,44 @@ export default function UsersPage() {
 
         .full-error {
           margin-bottom: 14px;
+        }
+
+        .driver-id-readonly {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          margin-bottom: 14px;
+          padding: 12px 14px;
+          border: 1px solid #d9ebe2;
+          border-radius: 14px;
+          background: #f0fdf7;
+        }
+
+        .driver-id-readonly small {
+          display: block;
+          color: #64748b;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.05em;
+          text-transform: uppercase;
+        }
+
+        .driver-id-readonly strong {
+          display: block;
+          margin-top: 3px;
+          color: #065f46;
+          font-size: 16px;
+          font-weight: 900;
+          letter-spacing: 0.02em;
+        }
+
+        .driver-id-readonly > span {
+          max-width: 260px;
+          color: #64748b;
+          font-size: 11px;
+          line-height: 1.45;
+          text-align: right;
         }
 
         .license-picker {
@@ -4407,25 +4506,31 @@ function DriverFields({
 }
 
 function LicensePicker({
+  side,
   preview,
   hasStoredImage,
   onChange,
 }: {
+  side: "front" | "back";
   preview: string;
   hasStoredImage: boolean;
   onChange: (file: File | null) => void;
 }) {
+  const sideLabel = side === "front" ? "Front" : "Back";
+
   return (
     <div className="license-picker">
       <div className="license-preview">
-        {preview ? <img src={preview} alt="Driver licence preview" /> : <span>{hasStoredImage ? "A secure licence image is already stored." : "Licence image preview"}</span>}
+        {preview
+          ? <img src={preview} alt={`Driver licence ${side} preview`} />
+          : <span>{hasStoredImage ? `A secure ${side} licence image is already stored.` : `${sideLabel} licence image preview`}</span>}
       </div>
       <div className="license-copy">
-        <strong>Driver&apos;s Licence Image</strong>
-        <span>{hasStoredImage ? "Choose a new image only when replacing the current file." : "Upload the front of the driver’s licence."}</span>
+        <strong>{sideLabel} of Driver&apos;s Licence</strong>
+        <span>{hasStoredImage ? "Choose a new image only when replacing the current file." : `Upload the ${side} of the driver’s licence.`}</span>
         <small>Accepted: JPG, JPEG, PNG • Maximum: 5 MB</small>
         <label className="file-button">
-          {preview ? "Choose another image" : hasStoredImage ? "Replace image" : "Choose image"}
+          {preview ? "Choose another image" : hasStoredImage ? `Replace ${side} image` : `Choose ${side} image`}
           <input type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png" onChange={(event) => onChange(event.target.files?.[0] || null)} />
         </label>
       </div>
@@ -4573,6 +4678,15 @@ function getInitials(name: string) {
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
 
   return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+}
+
+/** DRV-0001 style ID shown to admins. Assigned once by the server and never changes. */
+function formatDriverCode(driverNumber?: number) {
+  if (!driverNumber || !Number.isInteger(driverNumber) || driverNumber < 1) {
+    return "Assigning…";
+  }
+
+  return `DRV-${String(driverNumber).padStart(4, "0")}`;
 }
 
 function shortId(id: string) {

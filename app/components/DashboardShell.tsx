@@ -243,8 +243,7 @@ const pageGuidance = [
   { path: "/content-management", title: "Publish resident information", detail: "Preview every announcement or education item before saving it for the mobile app." },
   { path: "/issues", title: "Resolve reports in order", detail: "Read the details, verify the affected area, update the status, then notify residents when needed." },
   { path: "/activity-requests", title: "Review driver report requests", detail: "Verify the requested date and GPS activity before generating and sending a report." },
-  { path: "/agency-report", title: "Prepare the planning report", detail: "Review the selected period and included records before printing or sharing the report." },
-  { path: "/analytics", title: "Review performance and unfinished work", detail: "Use the filters first, then compare collections, reports, schedules, and service areas." },
+  { path: "/analytics", title: "Review performance or prepare the report", detail: "Use Live Dashboard for real-time results. Open Generate Report to set the period and filters, then print or save the agency report as PDF." },
   { path: "/notifications", title: "Send a targeted resident update", detail: "Select the correct Barangay and Purok, use a clear message, then review before sending." },
   { path: "/driver-messages", title: "Coordinate directly with drivers", detail: "Use this private channel for operational instructions and driver replies. Formal incidents still belong in Complaints & Reports." },
   { path: "/profile", title: "Maintain the administrator profile", detail: "Keep the displayed name and contact information accurate for accountability." },
@@ -422,12 +421,6 @@ const IconAnalytics = () => (
   </svg>
 );
 
-const IconAgencyReport = () => (
-  <svg viewBox="0 0 24 24" className="admin-svg-icon">
-    <path d="M5 2h10l4 4v16H5V2Zm9 2v3h3l-3-3ZM8 10h8v2H8v-2Zm0 4h8v2H8v-2Zm0 4h5v2H8v-2Z" />
-  </svg>
-);
-
 const IconBell = () => (
   <svg viewBox="0 0 24 24" className="admin-svg-icon">
     <path d="M12 22a2.8 2.8 0 0 0 2.7-2h-5.4A2.8 2.8 0 0 0 12 22Zm7-6-1.5-1.8V10a5.5 5.5 0 0 0-4.3-5.4V3a1.2 1.2 0 0 0-2.4 0v1.6A5.5 5.5 0 0 0 6.5 10v4.2L5 16v1h14v-1Z" />
@@ -494,7 +487,7 @@ const links: SidebarLink[] = [
   },
   {
     href: "/live-map",
-    label: "Track Trucks Live",
+    label: "Live GPS Monitoring",
     help: "Monitor active drivers and truck locations.",
     group: "DAILY OPERATIONS",
     icon: <IconMap />,
@@ -556,16 +549,9 @@ const links: SidebarLink[] = [
     icon: <IconBook />,
   },
   {
-    href: "/agency-report",
-    label: "Planning Report",
-    help: "Prepare the whole-system agency report.",
-    group: "REPORTS & MESSAGES",
-    icon: <IconAgencyReport />,
-  },
-  {
     href: "/analytics",
     label: "Reports & Analytics",
-    help: "Review operational results and trends.",
+    help: "Live dashboard plus the printable agency report.",
     group: "REPORTS & MESSAGES",
     icon: <IconAnalytics />,
   },

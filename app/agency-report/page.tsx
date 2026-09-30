@@ -1,12 +1,16 @@
 "use client";
 
-import { DashboardShell } from "../components/DashboardShell";
-import { MetroWastePlanningReport } from "../components/MetroWastePlanningReport";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 
-export default function AgencyReportPage() {
-  return (
-    <DashboardShell title="" description="">
-      <MetroWastePlanningReport />
-    </DashboardShell>
-  );
+// The Agency Report now lives in Reports & Analytics → "Generate Report".
+// This route is kept so old bookmarks and links still work.
+export default function AgencyReportRedirectPage() {
+  const router = useRouter();
+
+  useEffect(() => {
+    router.replace("/analytics#report");
+  }, [router]);
+
+  return null;
 }
