@@ -1094,16 +1094,6 @@ export default function IssuesPage() {
                     Open a report to review evidence, update its status, and send the correct resident notice.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  className={styles.primaryButton}
-                  onClick={() => {
-                    setQuickResult("");
-                    setShowAdvisory(true);
-                  }}
-                >
-                  + New resident advisory
-                </button>
               </div>
 
               <div className={styles.toolbar}>
