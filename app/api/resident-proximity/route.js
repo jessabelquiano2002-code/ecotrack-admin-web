@@ -8,8 +8,10 @@ import {
   approachDistanceMeters,
   arrivalDistanceMeters,
   distanceMeters,
+  effectiveScheduleDriverId,
   extractCoverageAreas,
   formatDistance,
+  manilaDateKey,
   matchesCoverage,
   normalizeBarangay,
   normalizePurok,
@@ -253,6 +255,7 @@ async function buildCandidates({
   longitude,
   accuracy,
   driverName,
+  stats = {},
 }) {
   const candidates = [];
   const matching = devices.filter((device) => {
@@ -260,6 +263,7 @@ async function buildCandidates({
     if (!booleanValue(device.enabled, true)) return false;
     return matchesCoverage(device, coverageAreas);
   });
+  stats.matchedDevices = matching.length;
 
   // Start is also attempted on ordinary points. The RTDB transaction makes it
   // one-time and recovers automatically if the first driver request was lost.
@@ -526,42 +530,6 @@ async function sendClaimedCandidates({ database, claimed, context, coverageAreas
   };
 }
 
-function manilaDateKey(timestamp) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    timeZone: "Asia/Manila",
-  }).formatToParts(new Date(timestamp));
-
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
-function effectiveScheduleDriverId(schedule, timestamp) {
-  const dateKey = manilaDateKey(timestamp);
-  const overrides =
-    schedule && typeof schedule.driverOverrides === "object"
-      ? schedule.driverOverrides
-      : {};
-  const override =
-    overrides && typeof overrides[dateKey] === "object"
-      ? overrides[dateKey]
-      : null;
-
-  const status = String(override?.status || "active").toLowerCase();
-  const substitute =
-    status === "active"
-      ? stringValue(override?.substituteDriverId)
-      : "";
-
-  return substitute || stringValue(
-    schedule?.assignedDriverId,
-    schedule?.driverId,
-    schedule?.defaultDriverId,
-  );
-}
-
 export async function POST(request) {
   try {
     ensureFirebaseAdmin();
@@ -609,28 +577,37 @@ export async function POST(request) {
       return NextResponse.json({ error: "The assigned schedule was not found." }, { status: 404 });
     }
 
-    const assignedDriverId = effectiveScheduleDriverId(
-      schedule,
-      timestamp,
-    );
+    // Use the SERVER's Manila date (same as /api/gps), never the phone's GPS
+    // timestamp, so a substitute driver is authorised exactly as in /api/gps.
+    const todayKey = manilaDateKey(Date.now());
+    const assignedDriverId = effectiveScheduleDriverId(schedule, todayKey);
     if (!assignedDriverId || assignedDriverId !== driverId) {
-      return NextResponse.json({ error: "This schedule is not assigned to the signed-in driver." }, { status: 403 });
+      console.warn("resident-proximity: driver mismatch", {
+        scheduleId, todayKey, signedInDriver: driverId, expectedDriver: assignedDriverId || null,
+      });
+      return NextResponse.json({
+        error: "This schedule is not assigned to the signed-in driver.",
+        reason: "driver_not_assigned",
+        todayKey,
+      }, { status: 403 });
     }
     if (!routeMatchesSchedule(schedule, routeId)) {
       return NextResponse.json({ error: "The route does not match the assigned schedule." }, { status: 409 });
     }
 
-    const coverageAreas = extractCoverageAreas(schedule);
+    const route = routeSnapshot.val() || {};
+    const coverageAreas = extractCoverageAreas(schedule, route);
     if (!coverageAreas.length) {
+      console.warn("resident-proximity: no coverage", { scheduleId, routeId });
       return NextResponse.json({
         accepted: true,
         sent: 0,
         failed: 0,
-        reason: "The schedule has no Barangay/Purok coverage.",
+        reason: "no_coverage",
+        message: "Neither the schedule nor the route has Barangay/Purok coverage.",
       });
     }
 
-    const route = routeSnapshot.val() || {};
     const routeName = stringValue(route.routeName, route.name, schedule.title);
     const driverName = stringValue(driver.name, driver.fullName, decoded.name, "MetroWaste driver");
     const coverageBarangays = [...new Set(
@@ -673,6 +650,7 @@ export async function POST(request) {
     });
 
     const devices = [...byToken.values()];
+    const stats = { matchedDevices: 0 };
 
     const candidates = await buildCandidates({
       database,
@@ -683,6 +661,7 @@ export async function POST(request) {
       longitude,
       accuracy,
       driverName,
+      stats,
     });
 
     const context = { driverId, scheduleId, routeId, sessionId };
@@ -690,8 +669,26 @@ export async function POST(request) {
       candidates.map((candidate) => claimCandidate(database, candidate, context)),
     )).filter(Boolean);
 
+    const diagnostics = {
+      event,
+      todayKey,
+      coverage: coverageAreas.map((area) => `${area.barangayKey}|${area.purokKey || "*"}`),
+      evaluatedDevices: devices.length,
+      matchedDevices: stats.matchedDevices,
+      candidates: candidates.length,
+      claimed: claimed.length,
+    };
+
     if (!claimed.length) {
-      return NextResponse.json({ accepted: true, sent: 0, failed: 0, deduplicated: true });
+      console.info("resident-proximity: nothing to send", diagnostics);
+      return NextResponse.json({
+        accepted: true,
+        sent: 0,
+        failed: 0,
+        deduplicated: candidates.length > 0,
+        reason: stats.matchedDevices === 0 ? "no_matching_resident_devices" : undefined,
+        ...diagnostics,
+      });
     }
 
     const result = await sendClaimedCandidates({
@@ -702,11 +699,10 @@ export async function POST(request) {
       routeName,
     });
 
+    console.info("resident-proximity: dispatched", { ...diagnostics, ...result });
     return NextResponse.json({
       accepted: true,
-      event,
-      evaluatedDevices: devices.length,
-      claimed: claimed.length,
+      ...diagnostics,
       ...result,
     });
   } catch (error) {

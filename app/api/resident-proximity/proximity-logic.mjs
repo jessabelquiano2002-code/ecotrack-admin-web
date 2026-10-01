@@ -66,9 +66,19 @@ function stringsFrom(value) {
     .filter(Boolean);
 }
 
-/** Reads both the new explicit schedule.areas schema and older schedule fields. */
-export function extractCoverageAreas(schedule = {}) {
-  const explicit = objectValues(schedule.areas)
+/**
+ * Reads coverage the same way /api/gps does, so both endpoints agree on which
+ * Barangay/Purok a schedule serves:
+ *   1) schedule.areas (explicit)
+ *   2) route.areas   (explicit, stored on the route instead of the schedule)
+ *   3) legacy arrays: schedule.barangays/barangay/... x schedule.puroks/...
+ *      and finally route.barangays/barangay x route.puroks
+ */
+export function extractCoverageAreas(schedule = {}, route = {}) {
+  schedule = schedule && typeof schedule === "object" ? schedule : {};
+  route = route && typeof route === "object" ? route : {};
+
+  const explicitFrom = (source) => objectValues(source)
     .filter((item) => item && typeof item === "object")
     .map((item) => ({
       barangay: String(item.barangay ?? item.assignedBarangay ?? "").trim(),
@@ -76,7 +86,11 @@ export function extractCoverageAreas(schedule = {}) {
     }))
     .filter((item) => normalizeBarangay(item.barangay));
 
-  if (explicit.length) return dedupeAreas(explicit);
+  const scheduleExplicit = explicitFrom(schedule.areas);
+  if (scheduleExplicit.length) return dedupeAreas(scheduleExplicit);
+
+  const routeExplicit = explicitFrom(route.areas);
+  if (routeExplicit.length) return dedupeAreas(routeExplicit);
 
   const barangays = [
     ...stringsFrom(schedule.barangays),
@@ -84,17 +98,27 @@ export function extractCoverageAreas(schedule = {}) {
     ...stringsFrom(schedule.barangay),
     ...stringsFrom(schedule.assignedBarangay),
   ];
+  // /api/gps falls back to the route's barangays when the schedule has none.
+  if (!barangays.length) {
+    barangays.push(
+      ...stringsFrom(route.barangays),
+      ...stringsFrom(route.barangay),
+    );
+  }
+
   const puroks = [
     ...stringsFrom(schedule.assignedPuroks),
     ...stringsFrom(schedule.puroks),
     ...stringsFrom(schedule.purok),
     ...stringsFrom(schedule.targetPurok),
-  ].filter((value) => !/^all( puroks?)?$/i.test(value));
+  ];
+  if (!puroks.length) puroks.push(...stringsFrom(route.puroks));
+  const specificPuroks = puroks.filter((value) => !/^all( puroks?)?$/i.test(value));
 
   const result = [];
   for (const barangay of barangays) {
-    if (!puroks.length) result.push({ barangay, purok: "" });
-    else for (const purok of puroks) result.push({ barangay, purok });
+    if (!specificPuroks.length) result.push({ barangay, purok: "" });
+    else for (const purok of specificPuroks) result.push({ barangay, purok });
   }
   return dedupeAreas(result);
 }
@@ -170,3 +194,71 @@ export function safeKey(value) {
     .slice(0, 180);
 }
 
+
+export function manilaDateKey(timestamp) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Asia/Manila",
+  }).formatToParts(new Date(timestamp));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function overrideIsActive(override) {
+  const status = String(override?.status || "active").trim().toLowerCase();
+  return !["cancelled", "inactive", "removed"].includes(status);
+}
+
+function trimmed(value) {
+  return String(value ?? "").trim();
+}
+
+/**
+ * Resolves who is allowed to run this schedule on `dateKey` (Asia/Manila).
+ * MUST stay identical to effectiveScheduleDriverId() in /api/gps/route.ts and
+ * DriverAssignmentRepository.effectiveDriverId() in the driver app:
+ *   1) exact driverOverrides/{dateKey} with a substituteDriverId
+ *   2) any active override whose `date` or rangeStartDate..rangeEndDate matches
+ *   3) assignedDriverId / driverId / defaultDriverId
+ */
+export function effectiveScheduleDriverId(schedule, dateKey) {
+  const overrides =
+    schedule && typeof schedule.driverOverrides === "object" && schedule.driverOverrides
+      ? schedule.driverOverrides
+      : {};
+
+  const exact = overrides[dateKey];
+  if (exact && typeof exact === "object" && overrideIsActive(exact)) {
+    const exactDriver = trimmed(exact.substituteDriverId);
+    if (exactDriver) return exactDriver;
+  }
+
+  let bestDriver = "";
+  let bestCreatedAt = -1;
+  for (const raw of Object.values(overrides)) {
+    if (!raw || typeof raw !== "object" || !overrideIsActive(raw)) continue;
+    const substitute = trimmed(raw.substituteDriverId);
+    if (!substitute) continue;
+
+    const explicitDate = trimmed(raw.date);
+    const from = trimmed(raw.rangeStartDate);
+    const until = trimmed(raw.rangeEndDate);
+    const matches =
+      explicitDate === dateKey
+      || (from && until && dateKey >= from && dateKey <= until);
+    if (!matches) continue;
+
+    const createdAt = Number(raw.createdAt || 0);
+    if (!bestDriver || createdAt >= bestCreatedAt) {
+      bestDriver = substitute;
+      bestCreatedAt = createdAt;
+    }
+  }
+  if (bestDriver) return bestDriver;
+
+  return trimmed(schedule?.assignedDriverId)
+    || trimmed(schedule?.driverId)
+    || trimmed(schedule?.defaultDriverId);
+}
