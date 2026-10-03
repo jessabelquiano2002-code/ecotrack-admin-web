@@ -2922,7 +2922,7 @@ export default function UsersPage() {
         .credential-password-card {
           display: grid;
           grid-template-columns: minmax(0, 1fr) auto auto;
-          align-items: end;
+          align-items: flex-end;
           gap: 10px;
           margin-top: 14px;
           padding: 14px;

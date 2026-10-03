@@ -857,7 +857,7 @@ export function LiveAnalyticsDashboard() {
 
         .filter-card {
           display: flex;
-          align-items: end;
+          align-items: flex-end;
           gap: 12px;
           padding: 14px;
           background: #ffffff;
@@ -1095,7 +1095,7 @@ export function LiveAnalyticsDashboard() {
           display: grid;
           grid-template-columns: repeat(14, minmax(34px, 1fr));
           gap: 12px;
-          align-items: end;
+          align-items: flex-end;
           padding-top: 12px;
           border-top: 1px dashed #dbe3ef;
           overflow-x: auto;
@@ -1105,7 +1105,7 @@ export function LiveAnalyticsDashboard() {
           height: 226px;
           display: flex;
           flex-direction: column;
-          justify-content: end;
+          justify-content: flex-end;
           align-items: center;
           gap: 8px;
         }
@@ -1122,7 +1122,7 @@ export function LiveAnalyticsDashboard() {
         .bar-pair {
           height: 170px;
           display: flex;
-          align-items: end;
+          align-items: flex-end;
           justify-content: center;
           gap: 4px;
         }

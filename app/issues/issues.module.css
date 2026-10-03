@@ -200,7 +200,7 @@
 
 .toolbar {
   display: flex;
-  align-items: end;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 18px;
   padding: 14px 22px;

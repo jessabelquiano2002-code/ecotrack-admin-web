@@ -20,7 +20,7 @@
 .primaryButton { border-color: #176e43 !important; background: #176e43 !important; color: #fff !important; }
 .dangerButton { border-color: #b83b3b !important; background: #b83b3b !important; color: #fff !important; }
 .textDanger { color: #ae2f2f !important; }
-.versionSettings { display: grid; grid-template-columns: minmax(260px, 1.4fr) repeat(3, minmax(180px, 1fr)); gap: 14px; align-items: end; margin-top: 18px; padding-top: 16px; border-top: 1px solid #e5ece8; }
+.versionSettings { display: grid; grid-template-columns: minmax(260px, 1.4fr) repeat(3, minmax(180px, 1fr)); gap: 14px; align-items: flex-end; margin-top: 18px; padding-top: 16px; border-top: 1px solid #e5ece8; }
 .titleField, .field { display: grid; gap: 7px; font-size: 13px; font-weight: 750; color: #395046; }
 .titleField input, .field input, .field textarea, .field select { min-width: 0; border: 1px solid #bdccc4; border-radius: 9px; background: #fff; color: #14251c; font: inherit; padding: 10px 11px; }
 .field textarea { resize: vertical; }
@@ -75,7 +75,7 @@
 .field small { color: #6e7a74; font-weight: 500; }
 .checkGroup { display: grid; align-content: center; gap: 8px; }
 .checkGroup label { display: flex; gap: 8px; color: #405047; font-size: 13px; }
-.imageFields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, .7fr) auto; gap: 12px; align-items: end; }
+.imageFields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, .7fr) auto; gap: 12px; align-items: flex-end; }
 .filePicker { display: grid; gap: 6px; font-size: 12px; color: #67766e; }
 .filePicker input { max-width: 100%; }
 .filePicker strong { color: #236b48; }

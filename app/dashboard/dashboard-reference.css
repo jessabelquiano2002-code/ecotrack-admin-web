@@ -747,7 +747,7 @@
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 12px;
-  align-items: end;
+  align-items: flex-end;
 }
 
 .mw-bar-item {

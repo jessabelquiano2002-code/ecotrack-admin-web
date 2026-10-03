@@ -1410,7 +1410,7 @@ export default function AdvertisementsPage() {
         .imagePicker {
           display: grid;
           grid-template-columns: minmax(0, 1fr) auto;
-          align-items: end;
+          align-items: flex-end;
           gap: 12px;
           padding: 13px;
           border: 1px solid #dbe5df;
