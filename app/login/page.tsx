@@ -266,7 +266,7 @@ function LoginFormPage() {
                     autoComplete="username"
                     autoCapitalize="none"
                     spellCheck={false}
-                    placeholder="admin@metro.com"
+                    placeholder="Enter your email address"
                     value={email}
                     onChange={(event) => {
                       setEmail(event.target.value);
